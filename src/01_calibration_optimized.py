@@ -15,9 +15,8 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "Calibration_video")
 
 # Strategy: Include all available video pairs; rely on the algorithm to automatically clean bad data.
 VIDEO_PAIRS = [
-    # ("cap_0_left.avi", "cap_0_right.avi", "cap_0_left.txt", "cap_0_right.txt"),
-    ("cap_1_left.avi", "cap_1_right.avi", "cap_1_left.txt", "cap_1_right.txt")
-]
+    ("cap_0_left.avi", "cap_0_right.avi", "cap_0_left.txt", "cap_0_right.txt")]
+    # ("cap_1_left.avi", "cap_1_right.avi", "cap_1_left.txt", "cap_1_right.txt")
 
 # Core Parameters
 PATTERN_SIZE = (5, 9)       # Asymmetric Circle Grid

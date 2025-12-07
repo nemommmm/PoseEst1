@@ -35,7 +35,7 @@ def main():
 
     # 2. 初始化视频加载器
     loader = StereoDataLoader(LEFT_VIDEO, RIGHT_VIDEO, LEFT_TXT, RIGHT_TXT)
-    frame_l, frame_r, _ = loader.get_next_pair()
+    frame_l, frame_r, *_ = loader.get_next_pair()
     
     if frame_l is None:
         print("❌ 视频读取失败")
@@ -81,7 +81,7 @@ def main():
             break
         elif key == ord('n'):
             # 读取下一对
-            frame_l, frame_r, _ = loader.get_next_pair()
+            frame_l, frame_r, *_ = loader.get_next_pair()
 
     loader.release()
     cv2.destroyAllWindows()

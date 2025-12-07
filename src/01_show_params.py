@@ -50,11 +50,11 @@ def main():
     print(f"  - 左相机: {dist_l.ravel()[:5]}")
     print(f"  - 右相机: {dist_r.ravel()[:5]}")
     
-    print("\n" + "="*40)
-    print("💡 汇报提示：")
-    print(f"1. 告诉老师你的 RMS 误差是 1.33 px (可接受范围)。")
-    print(f"2. 重点展示 '基线距离' ({baseline:.2f} cm)，")
-    print("   如果这个值和实际测量值(比如尺子量一下)接近，说明标定非常准！")
+    # print("\n" + "="*40)
+    # print("💡 汇报提示：")
+    # print(f"1. 告诉老师你的 RMS 误差是 1.33 px (可接受范围)。")
+    # print(f"2. 重点展示 '基线距离' ({baseline:.2f} cm)，")
+    # print("   如果这个值和实际测量值(比如尺子量一下)接近，说明标定非常准！")
 
 if __name__ == "__main__":
     main()

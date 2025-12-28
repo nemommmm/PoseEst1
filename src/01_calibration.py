@@ -7,147 +7,207 @@ import sys
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils import StereoDataLoader
 
-# ================= 1. Paths & Configuration =================
+# ================= Configuration Area =================
 CURRENT_SCRIPT_PATH = os.path.abspath(__file__)
 SRC_DIR = os.path.dirname(CURRENT_SCRIPT_PATH)
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
 DATA_DIR = os.path.join(PROJECT_ROOT, "Calibration_video")
 
-# Define all video pairs to process
+# Strategy: Include all available video pairs; rely on the algorithm to automatically clean bad data.
 VIDEO_PAIRS = [
-    ("cap_0_left.avi", "cap_0_right.avi", "cap_0_left.txt", "cap_0_right.txt"),
-    ("cap_1_left.avi", "cap_1_right.avi", "cap_1_left.txt", "cap_1_right.txt")]
+    # ("cap_0_left.avi", "cap_0_right.avi", "cap_0_left.txt", "cap_0_right.txt")]
+     ("cap_1_left.avi", "cap_1_right.avi", "cap_1_left.txt", "cap_1_right.txt")]
 
-# Key Parameter Configuration: Asymmetric Circle Grid
-# Based on board: 5 columns, 9 rows
-PATTERN_SIZE = (5, 9)   
-SQUARE_SIZE = 15.0      # 15 cm (Physical distance between centers)
-# ===================================================
+# Core Parameters
+PATTERN_SIZE = (5, 9)       # Asymmetric Circle Grid
+SQUARE_SIZE = 15.0          # Center distance 15cm
+MAX_ERROR_THRESHOLD = 1.0   # [Core Optimization] Only keep frames with single-camera error < 1.0 px
+# ======================================================
+
+def calculate_reprojection_error(objpoints, imgpoints, rvecs, tvecs, mtx, dist):
+    """
+    Calculate single-camera reprojection error to filter out bad frames.
+    """
+    total_error = 0
+    errors_per_frame = []
+    
+    for i in range(len(objpoints)):
+        imgpoints2, _ = cv2.projectPoints(objpoints[i], rvecs[i], tvecs[i], mtx, dist)
+        error = cv2.norm(imgpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2)
+        errors_per_frame.append(error)
+        
+    return errors_per_frame
+
+def calculate_epipolar_error(imgpoints_l, imgpoints_r, mtx_l, dist_l, mtx_r, dist_r, F):
+    """
+    Calculate Epipolar Error.
+    This metric measures whether a point in the left image precisely falls onto the 
+    corresponding epipolar line in the right image.
+    """
+    total_error = 0
+    total_points = 0
+
+    # Iterate through each frame
+    for i in range(len(imgpoints_l)):
+        n_pts = len(imgpoints_l[i])
+        
+        # 1. Points must be undistorted first
+        p_l = cv2.undistortPoints(imgpoints_l[i], mtx_l, dist_l, P=mtx_l)
+        p_r = cv2.undistortPoints(imgpoints_r[i], mtx_r, dist_r, P=mtx_r)
+
+        # 2. Compute epilines
+        lines1 = cv2.computeCorrespondEpilines(p_l, 1, F)
+        lines1 = lines1.reshape(-1, 3)
+        lines2 = cv2.computeCorrespondEpilines(p_r, 2, F)
+        lines2 = lines2.reshape(-1, 3)
+
+        # 3. Calculate distance error from point to line
+        # Distance from points in right image to epilines from left image
+        for j in range(n_pts):
+            x, y = p_r[j][0]
+            a, b, c = lines1[j]
+            dist = abs(a*x + b*y + c) / np.sqrt(a**2 + b**2)
+            total_error += dist
+
+        # Distance from points in left image to epilines from right image
+        for j in range(n_pts):
+            x, y = p_l[j][0]
+            a, b, c = lines2[j]
+            dist = abs(a*x + b*y + c) / np.sqrt(a**2 + b**2)
+            total_error += dist
+            
+        total_points += (n_pts * 2) 
+
+    return total_error / total_points
 
 def main():
-    # ================= 2. Generate Real-World Coordinates =================
-    # Coordinate generation for Asymmetric Circle Grid
-    # This creates a flattened array storing (x, y, 0)
+    # 1. Prepare Object Points (Asymmetric Grid)
     objp = np.zeros((PATTERN_SIZE[0] * PATTERN_SIZE[1], 3), np.float32)
-    
-    # 填充坐标
-    for i in range(PATTERN_SIZE[1]): # Iterate rows (0 to 8)
-        for j in range(PATTERN_SIZE[0]): # Iterate columns (0 to 4)
-            # X-axis logic: Column index * Spacing + (Offset by 0.5 spacing if odd row)
+    for i in range(PATTERN_SIZE[1]): 
+        for j in range(PATTERN_SIZE[0]): 
             x = (j + ((i % 2) * 0.5)) * SQUARE_SIZE
-            
-            # Y-axis logic: Row index * (Half spacing)
             y = i * (SQUARE_SIZE / 2)
-            
-            # Calculate index in the flattened array
             index = i * PATTERN_SIZE[0] + j
-            objp[index] = [x, y, 0]            
-    # ================================================================
+            objp[index] = [x, y, 0]
 
-    # Global containers: store points found in all video frames
-    all_objpoints = []   
-    all_imgpoints_l = [] 
-    all_imgpoints_r = [] 
+    all_data = [] # Temporary storage for all raw data
     
-    total_valid_frames = 0
-    img_shape = None
-
-    print(f"🚀 Starting processing for {len(VIDEO_PAIRS)} video pairs...")
-
-    # --- Phase 1: Iterate through video pairs to collect data ---
-    for v_idx, (l_vid, r_vid, l_txt, r_txt) in enumerate(VIDEO_PAIRS):
-        l_path = os.path.join(DATA_DIR, l_vid)
-        r_path = os.path.join(DATA_DIR, r_vid)
-        l_txt_path = os.path.join(DATA_DIR, l_txt)
-        r_txt_path = os.path.join(DATA_DIR, r_txt)
-
-        if not os.path.exists(l_path):
-            print(f"⚠️ Skipping: File not found {l_vid}")
-            continue
-
-        print(f"\n📂 Reading pair {v_idx + 1}: {l_vid} & {r_vid}")
+    # --- Phase 1: Initial Scan (Collect all detectable frames) ---
+    print("🚀 Phase 1: Scanning all videos for initial collection...")
+    
+    for l_vid, r_vid, l_txt, r_txt in VIDEO_PAIRS:
+        l_path, r_path = os.path.join(DATA_DIR, l_vid), os.path.join(DATA_DIR, r_vid)
+        l_txt_path, r_txt_path = os.path.join(DATA_DIR, l_txt), os.path.join(DATA_DIR, r_txt)
+        
+        if not os.path.exists(l_path): continue
         loader = StereoDataLoader(l_path, r_path, l_txt_path, r_txt_path)
-
+        
+        img_shape = None
+        count = 0
+        
         while True:
-            frame_l, frame_r, frame_id, _ = loader.get_next_pair()
-            if frame_l is None:
-                break
-            
-            # Record image shape (only once)
-            if img_shape is None:
-                img_shape = frame_l.shape[:2][::-1]
+            frame_l, frame_r, fid, _ = loader.get_next_pair()
+            if frame_l is None: break
+            if img_shape is None: img_shape = frame_l.shape[:2][::-1]
 
             gray_l = cv2.cvtColor(frame_l, cv2.COLOR_BGR2GRAY)
             gray_r = cv2.cvtColor(frame_r, cv2.COLOR_BGR2GRAY)
             
-            # ⚠️ Must use the ASYMMETRIC flag
             flags = cv2.CALIB_CB_ASYMMETRIC_GRID
             found_l, corners_l = cv2.findCirclesGrid(gray_l, PATTERN_SIZE, flags=flags)
             found_r, corners_r = cv2.findCirclesGrid(gray_r, PATTERN_SIZE, flags=flags)
             
+            # If found in both, collect it first
             if found_l and found_r:
-                total_valid_frames += 1
-                all_objpoints.append(objp)
-                all_imgpoints_l.append(corners_l)
-                all_imgpoints_r.append(corners_r)
-                
-                # Visualization
-                cv2.drawChessboardCorners(frame_l, PATTERN_SIZE, corners_l, found_l)
-                status = f"Valid: {total_valid_frames} | Pair: {v_idx+1}"
-                cv2.putText(frame_l, status, (30, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
-                
-                # Resize for display (show left camera only)
-                display = cv2.resize(frame_l, (0, 0), fx=0.5, fy=0.5)
-                cv2.imshow('Collecting...', display) 
-                cv2.waitKey(1) # Fast forward
-            
+                all_data.append({
+                    'obj': objp,
+                    'img_l': corners_l,
+                    'img_r': corners_r,
+                    'video': l_vid,
+                    'fid': fid
+                })
+                count += 1
+                print(f"\r  -> {l_vid}: Collected {count} frames", end="")
+        
+        print("") # New line
         loader.release()
     
-    cv2.destroyAllWindows()
+    print(f"\n✅ Initial collection complete. Total raw frames: {len(all_data)}.")
+    if len(all_data) < 10: return
+
+    # --- Phase 2: Cleaning (Outlier Rejection) ---
+    print("\n🧹 Phase 2: Data Cleaning (Removing high-error frames)...")
     
-    if total_valid_frames < 10:
-        print(f"\n❌ Too few valid frames ({total_valid_frames}). Calibration impossible!")
-        return
-
-    print(f"\n🛑 Data collection complete! Total valid frames: {total_valid_frames}.")
-    print("------------------------------------------------")
+    temp_obj = [d['obj'] for d in all_data]
+    temp_img_l = [d['img_l'] for d in all_data]
+    temp_img_r = [d['img_r'] for d in all_data]
     
-    # --- Phase 2: Single Camera Calibration (Intrinsics) ---
-    print("Running Single Camera Calibration (1/3): Left Camera...")
-    ret_l, mtx_l, dist_l, _, _ = cv2.calibrateCamera(all_objpoints, all_imgpoints_l, img_shape, None, None)
-    print(f"   -> Left Camera Initial Error: {ret_l:.4f}")
+    # Pre-calibration to get errors for each frame
+    ret_l, mtx_l, dist_l, rvecs_l, tvecs_l = cv2.calibrateCamera(temp_obj, temp_img_l, img_shape, None, None)
+    ret_r, mtx_r, dist_r, rvecs_r, tvecs_r = cv2.calibrateCamera(temp_obj, temp_img_r, img_shape, None, None)
+    
+    err_l = calculate_reprojection_error(temp_obj, temp_img_l, rvecs_l, tvecs_l, mtx_l, dist_l)
+    err_r = calculate_reprojection_error(temp_obj, temp_img_r, rvecs_r, tvecs_r, mtx_r, dist_r)
+    
+    # Filter elite frames
+    clean_obj = []
+    clean_img_l = []
+    clean_img_r = []
+    
+    kept_count = 0
+    for i in range(len(all_data)):
+        e_l = err_l[i]
+        e_r = err_r[i]
+        
+        # Only keep frames with error below threshold
+        if e_l < MAX_ERROR_THRESHOLD and e_r < MAX_ERROR_THRESHOLD:
+            clean_obj.append(all_data[i]['obj'])
+            clean_img_l.append(all_data[i]['img_l'])
+            clean_img_r.append(all_data[i]['img_r'])
+            kept_count += 1
+        else:
+            # Print rejected frame info for debugging (optional)
+            pass 
+            # print(f"❌ Rejecting bad frame {all_data[i]['fid']}: L={e_l:.2f}, R={e_r:.2f}")
 
-    print("Running Single Camera Calibration (2/3): Right Camera...")
-    ret_r, mtx_r, dist_r, _, _ = cv2.calibrateCamera(all_objpoints, all_imgpoints_r, img_shape, None, None)
-    print(f"   -> Right Camera Initial Error: {ret_r:.4f}")
+    print(f"✅ Cleaning complete! Kept {kept_count}/{len(all_data)} high-quality frames (Threshold: {MAX_ERROR_THRESHOLD} px)")
 
-    # --- Phase 3: Stereo Calibration (Extrinsics) ---
-    print("Running Stereo Calibration (3/3): Joint Optimization...")
-    # Use single camera results as initial values and fix intrinsics for stability
+    # --- Phase 3: Final High-Precision Calibration ---
+    print("\n🏆 Phase 3: Final Stereo Calibration...")
+    
+    # Strict termination criteria: 100 iterations or epsilon 1e-6
+    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6)
+    
+    # Re-calculate single camera intrinsics using clean data
+    ret_l, mtx_l, dist_l, _, _ = cv2.calibrateCamera(clean_obj, clean_img_l, img_shape, None, None, criteria=criteria)
+    ret_r, mtx_r, dist_r, _, _ = cv2.calibrateCamera(clean_obj, clean_img_r, img_shape, None, None, criteria=criteria)
+
+    # Fix intrinsics to ensure stability
     flags = cv2.CALIB_FIX_INTRINSIC
     
     ret, M1, d1, M2, d2, R, T, E, F = cv2.stereoCalibrate(
-        all_objpoints, all_imgpoints_l, all_imgpoints_r,
+        clean_obj, clean_img_l, clean_img_r,
         mtx_l, dist_l,
         mtx_r, dist_r,
         img_shape,
+        criteria=criteria,
         flags=flags
     )
     
-    print("------------------------------------------------")
-    print(f"✅ Final Stereo Calibration RMS: {ret:.4f}")
-    
-    if ret < 0.5:
-        print("🏆 Perfect! High calibration accuracy.")
-    elif ret < 1.0:
-        print("🎉 Acceptable! Ready for the next step.")
-    else:
-        print("⚠️ Warning: RMS is high. Please check if circle detection had misalignments.")
+    # --- Phase 4: Calculate Epipolar Error ---
+    epi_error = calculate_epipolar_error(clean_img_l, clean_img_r, M1, d1, M2, d2, F)
 
-    # Save results
+    print("="*50)
+    print(f"📊 Final Report (Based on {kept_count} optimized frames):")
+    print(f"✅ Reprojection Error (RMS): {ret:.4f} pixels")
+    print(f"✅ Epipolar Error:           {epi_error:.4f} pixels")
+    print(f"📏 Calculated Baseline:      {np.linalg.norm(T):.2f} cm")
+    print("="*50)
+
+    # Save optimized parameters
     save_path = os.path.join(SRC_DIR, "camera_params.npz")
     np.savez(save_path, mtx_l=M1, dist_l=d1, mtx_r=M2, dist_r=d2, R=R, T=T)
-    print(f"💾 Parameters saved to: {save_path}")
+    print(f"💾 Optimized parameters saved to: {save_path}")
 
 if __name__ == "__main__":
     main()

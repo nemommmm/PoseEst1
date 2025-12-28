@@ -15,10 +15,10 @@ DATA_DIR = os.path.join(PROJECT_ROOT, "Calibration_video")
 PARAM_PATH = os.path.join(SRC_DIR, "camera_params.npz")
 
 # 随便选一个视频来验证
-LEFT_VIDEO = os.path.join(DATA_DIR, "cap_0_left.avi")
-RIGHT_VIDEO = os.path.join(DATA_DIR, "cap_0_right.avi")
-LEFT_TXT = os.path.join(DATA_DIR, "cap_0_left.txt")
-RIGHT_TXT = os.path.join(DATA_DIR, "cap_0_right.txt")
+LEFT_VIDEO = os.path.join(DATA_DIR, "cap_1_left.avi")
+RIGHT_VIDEO = os.path.join(DATA_DIR, "cap_1_right.avi")
+LEFT_TXT = os.path.join(DATA_DIR, "cap_1_left.txt")
+RIGHT_TXT = os.path.join(DATA_DIR, "cap_1_right.txt")
 # ==========================================
 
 def main():
@@ -46,7 +46,7 @@ def main():
     # 3. 计算立体校正映射 (Rectification Maps)
     # 这一步是把两个相机“强行掰正”，让它们的成像平面平行
     R1, R2, P1, P2, Q, roi1, roi2 = cv2.stereoRectify(
-        mtx_l, dist_l, mtx_r, dist_r, (w, h), R, T
+        mtx_l, dist_l, mtx_r, dist_r, (w, h), R, T, alpha=0
     )
 
     # 生成查找表 (Mapping Table)

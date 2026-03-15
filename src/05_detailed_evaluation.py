@@ -9,52 +9,52 @@ from scipy.interpolate import interp1d
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils_mvnx import MvnxParser
 
-# ================= 🔧 配置区域 =================
+# ================= Configuration =================
+# Best temporal offset derived from the automated grid search optimizer
 BEST_OFFSET = 17.20
-GT_LIMB_LENGTHS = [38.6, 39.8, 40.3, 39.5]
-TOP_K = 150
+GT_LIMB_LENGTHS = [38.6, 39.8, 40.3, 39.5] # Reference limb lengths (cm)
+TOP_K = 150 # Number of elite frames
 
-# 🕒 详细的时间分段 (基于你的人工标注)
-# 格式: "Label": [start_time, end_time]
+# 🕒 Detailed Time Segmentation (Manual Annotation)
+# Format: "Label": [start_time, end_time] in seconds
 ACTIVITY_SEGMENTS = {
-    # --- 基准组 (Baseline) ---
+    # --- Baseline Group ---
     "Walking (Normal)": [17, 32],
-    "Walking (Late)": [220, 240], # 后面比较正常的走路
+    "Walking (Late)": [220, 240], # Stable walking phase at the end
 
-    # --- 遮挡组 (Occlusion) ---
-    "Sitting (Lower Occluded)": [32, 62],     # 坐着，下半身遮挡
-    "Walking (Upper Occluded)": [87, 97],     # 上半身遮挡
-    "Walking (Lower Occluded 1)": [130, 140], # 下半身遮挡
-    "Walking (Lower Occluded 2)": [164, 170], # 下半身遮挡
+    # --- Occlusion Group ---
+    "Sitting (Lower Occluded)": [32, 62],     # Lower body heavily occluded by desk
+    "Walking (Upper Occluded)": [87, 97],     # Upper body partially occluded
+    "Walking (Lower Occluded 1)": [130, 140], # Lower body occluded by obstacles
+    "Walking (Lower Occluded 2)": [164, 170], # Lower body occluded by obstacles
 
-    # --- 黑色椅子/复杂交互组 (Black Chair / Complex Env) ---
-    "Chair Interaction (Complex)": [140, 160], # 在黑色椅子附近做动作
-    "Lifting Box (Near Chair)": [214, 218],    # 抬箱子，也在椅子附近
+    # --- Environmental Interference (Black Chair) ---
+    "Chair Interaction (Complex)": [140, 160], # Complex interaction near a black chair
+    "Lifting Box (Near Chair)": [214, 218],    # Lifting action near the chair
     
-    # --- 特殊动作 ---
+    # --- Dynamic/Special Actions ---
     "Squatting": [66, 69],
     "Squatting (Check)": [156, 160]
 }
 
-# 🏷️ 场景分类映射 (用于生成高级统计表)
-# 将上面的详细动作归类为三大挑战场景
+# 🏷️ High-Level Scenario Mapping (For aggregated statistical tables)
 SCENARIO_MAPPING = {
-    "Walking (Normal)": "Baseline (Normal)",
-    "Walking (Late)": "Baseline (Normal)",
+    "Walking (Normal)": "Baseline",
+    "Walking (Late)": "Baseline",
     
     "Sitting (Lower Occluded)": "Occlusion",
     "Walking (Upper Occluded)": "Occlusion",
     "Walking (Lower Occluded 1)": "Occlusion",
     "Walking (Lower Occluded 2)": "Occlusion",
     
-    "Chair Interaction (Complex)": "Black Chair Area",
-    "Lifting Box (Near Chair)": "Black Chair Area",
+    "Chair Interaction (Complex)": "Environmental Interference",
+    "Lifting Box (Near Chair)": "Environmental Interference",
     
     "Squatting": "Dynamic Action",
     "Squatting (Check)": "Dynamic Action"
 }
 
-# 💀 部位定义
+# 💀 Kinematic Body Part Grouping
 BODY_PARTS = {
     "Head": [0, 1, 2, 3, 4],
     "Torso": [5, 6, 11, 12],
@@ -104,9 +104,9 @@ def kabsch_transform(P, Q):
     return rot, t
 
 def main():
-    print("📊 启动详细评估 (含场景与遮挡分析)...")
+    print("[Info] Initializing detailed evaluation and scenario analysis...")
     
-    # --- 1. 数据加载 ---
+    # --- 1. Data Loading ---
     yolo_data = np.load(YOLO_DATA_PATH)
     y_kpts = yolo_data['keypoints']
     y_ts = yolo_data['timestamps']
@@ -130,8 +130,8 @@ def main():
         data = mvnx.get_segment_data(seg)[xidx]
         xsens_interp[seg] = interp1d(xsens_ts, data, axis=0, kind='linear', bounds_error=False, fill_value=np.nan)
 
-    # --- 2. 全局对齐 ---
-    print("📐 执行全局对齐...")
+    # --- 2. Global Alignment ---
+    print("[Info] Executing global spatial alignment...")
     y_pelvis = (y_kpts[:, 11] + y_kpts[:, 12]) / 2.0
     errors = calculate_limb_error(y_kpts, GT_LIMB_LENGTHS)
     valid_err_idx = np.where(np.isfinite(errors))[0]
@@ -146,14 +146,14 @@ def main():
     y_aligned_flat = (R @ y_kpts_flat.T).T + t
     y_kpts_aligned = y_aligned_flat.reshape(N, J, 3)
 
-    # --- 3. 计算误差矩阵 ---
-    print("🧮 正在计算逐个场景的误差...")
+    # --- 3. Compute Error Matrix ---
+    print("[Info] Calculating segment-wise Euclidean distance errors...")
     records = []
     
     for i, curr_t in enumerate(y_ts):
         target_t = curr_t - BEST_OFFSET
         
-        # 确定 Activity 和 Scenario
+        # Determine Activity and Scenario Labels
         activity_label = "Unclassified"
         scenario_label = "Unclassified"
         for label, (start, end) in ACTIVITY_SEGMENTS.items():
@@ -162,7 +162,7 @@ def main():
                 scenario_label = SCENARIO_MAPPING.get(label, "Other")
                 break
         
-        # 1. 根节点误差
+        # 1. Root Error (Pelvis)
         x_pelvis_pos = xsens_interp['Pelvis'](target_t)
         if not np.isnan(x_pelvis_pos).any():
             y_root = (y_kpts_aligned[i, 11] + y_kpts_aligned[i, 12]) / 2.0
@@ -172,7 +172,7 @@ def main():
                 'Type': 'Root', 'Error': root_err
             })
         
-        # 2. 关节误差
+        # 2. Joint Errors
         for y_idx, x_name in JOINT_MAPPING.items():
             x_pos = xsens_interp[x_name](target_t)
             y_pos = y_kpts_aligned[i, y_idx]
@@ -191,54 +191,53 @@ def main():
     df = pd.DataFrame(records)
     df_joints = df[df['Type'] == 'Joint']
 
-    # --- 4. 生成高级统计表 ---
+    # --- 4. Generate Advanced Statistical Tables ---
     
-    # [Table 1] 按具体活动 (Activity)
-    print("\n🏆 [Table 1] Detailed Activity Performance (cm)")
+    # [Table 1] Detailed Activity Performance
+    print("\n[Result] Table 1: Detailed Activity Performance (cm)")
     print("-" * 60)
     print(df_joints.groupby('Activity')['Error'].mean().sort_values().to_string())
 
-    # [Table 2] 按场景分类 (Scenario) - 这是重点！
-    print("\n🏆 [Table 2] Performance by Challenge Scenario (cm)")
+    # [Table 2] Performance by Challenge Scenario
+    print("\n[Result] Table 2: Performance by Challenge Scenario (cm)")
     print("-" * 60)
     scenario_stats = df_joints.groupby('Scenario')['Error'].agg(['mean', 'std', 'count']).sort_values('mean')
     print(scenario_stats)
     
-    # [Table 3] 黑色椅子区域的具体部位分析
-    # 我们想看看在椅子附近，是不是腿部误差特别大
-    print("\n🏆 [Table 3] Body Part Error in 'Black Chair Area'")
+    # [Table 3] Body Part Error in Complex Interference Environments
+    print("\n[Result] Table 3: Body Part Error in 'Environmental Interference' Region")
     print("-" * 60)
-    chair_df = df_joints[df_joints['Scenario'] == 'Black Chair Area']
+    chair_df = df_joints[df_joints['Scenario'] == 'Environmental Interference']
     if not chair_df.empty:
         print(chair_df.groupby('Part')['Error'].mean().sort_values())
     else:
-        print("No data captured in Black Chair Area.")
+        print("No data captured in Environmental Interference region.")
 
-    # --- 5. 绘图 ---
+    # --- 5. Visualization generation ---
+    print("\n[Info] Generating output plots...")
     sns.set_theme(style="whitegrid")
     
-    # Figure 1: 场景对比箱线图
+    # Figure 1: Boxplot of Scenario Impact
     plt.figure(figsize=(10, 6))
-    order = ['Baseline (Normal)', 'Dynamic Action', 'Occlusion', 'Black Chair Area']
-    # 过滤掉 Unclassified 绘图
+    order = ['Baseline', 'Dynamic Action', 'Occlusion', 'Environmental Interference']
     plot_df = df_joints[df_joints['Scenario'].isin(order)]
-    # sns.boxplot(x='Scenario', y='Error', data=plot_df, order=order, palette="Set2", showfliers=False)
     sns.boxplot(x='Scenario', y='Error', hue='Scenario', data=plot_df, order=order, palette="Set2", showfliers=False, legend=False)
-    plt.title('Impact of Environmental Challenges on Error')
-    plt.ylabel('Position Error (cm)')
-    plt.savefig("eval_scenario_impact.png")
+    plt.title('Impact of Environmental Challenges on Pose Estimation Error', fontsize=14)
+    plt.ylabel('Absolute Position Error (cm)', fontsize=12)
+    plt.xlabel('Evaluation Scenario', fontsize=12)
+    plt.savefig("eval_scenario_impact.png", dpi=300, bbox_inches='tight')
     
-    # Figure 2: 详细活动误差条形图
+    # Figure 2: Barplot of Mean Error by Detailed Activity
     plt.figure(figsize=(12, 8))
-    # 按误差大小排序
     order = df_joints.groupby('Activity')['Error'].mean().sort_values().index
-    sns.barplot(x='Error', y='Activity', data=df_joints, order=order, palette="viridis", ci=None)
-    plt.title('Mean Error by Activity Segment')
-    plt.xlabel('Mean Error (cm)')
+    sns.barplot(x='Error', y='Activity', hue='Activity', data=df_joints, order=order, palette="viridis", errorbar=None, legend=False)
+    plt.title('Mean Error by Activity Segment', fontsize=14)
+    plt.xlabel('Mean Position Error (cm)', fontsize=12)
+    plt.ylabel('Activity Segment', fontsize=12)
     plt.tight_layout()
-    plt.savefig("eval_activity_bar.png")
+    plt.savefig("eval_activity_bar.png", dpi=300, bbox_inches='tight')
 
-    print("\n✅ 评估完成！重点关注 Table 2 和 eval_scenario_impact.png")
+    print("[Info] Evaluation complete. Output files 'eval_scenario_impact.png' and 'eval_activity_bar.png' generated.")
     plt.show()
 
 if __name__ == "__main__":

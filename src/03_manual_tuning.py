@@ -23,8 +23,17 @@ TOP_K = 150 # Number of elite frames used to compute the optimal rigid body tran
 # ===============================================================
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-YOLO_DATA_PATH = os.path.join(PROJECT_ROOT, "results", "yolo_3d_raw.npz")
 MVNX_PATH = os.path.join(PROJECT_ROOT, "..", "Xsens_ground_truth", "Aitor-001.mvnx")
+
+def resolve_yolo_data_path():
+    candidates = [
+        os.path.join(PROJECT_ROOT, "results", "yolo_3d_optimized.npz"),
+        os.path.join(PROJECT_ROOT, "results", "yolo_3d_raw.npz"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[-1]
 
 def calculate_limb_error(kpts, gt_lengths):
     """
@@ -69,9 +78,11 @@ def kabsch_transform(P, Q):
 
 def main():
     print(f"[Info] Starting manual temporal tuning mode (Time Shift: {TIME_SHIFT_SECONDS} s)...")
+    yolo_data_path = resolve_yolo_data_path()
+    print(f"[Info] Loading pose data from: {os.path.basename(yolo_data_path)}")
 
     # 1. Load Data
-    yolo_data = np.load(YOLO_DATA_PATH)
+    yolo_data = np.load(yolo_data_path)
     y_kpts = yolo_data['keypoints']
     y_ts = yolo_data['timestamps']
     y_center = (y_kpts[:, 11] + y_kpts[:, 12]) / 2.0

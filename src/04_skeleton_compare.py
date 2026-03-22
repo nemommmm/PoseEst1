@@ -3,7 +3,7 @@ import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import os
 import sys
-import pandas as pd
+import json
 from scipy.interpolate import interp1d
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
@@ -11,7 +11,7 @@ from utils_mvnx import MvnxParser
 
 # ================= Optimized Parameters =================
 # Best temporal offset obtained from the automated optimizer
-BEST_OFFSET = 17.20   
+BEST_OFFSET = 17.25   
 GT_LIMB_LENGTHS = [38.6, 39.8, 40.3, 39.5] # Reference limb lengths (cm)
 TOP_K = 150 # Number of elite frames for rigid body transformation
 
@@ -50,8 +50,28 @@ XSENS_LINKS = [
 # ========================================================
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-YOLO_DATA_PATH = os.path.join(PROJECT_ROOT, "results", "yolo_3d_raw.npz")
 MVNX_PATH = os.path.join(PROJECT_ROOT,"..", "Xsens_ground_truth", "Aitor-001.mvnx")
+ALIGNMENT_SUMMARY_PATH = os.path.join(PROJECT_ROOT, "results", "alignment_summary.json")
+
+def resolve_yolo_data_path():
+    override = os.environ.get("POSE_RESULT_PATH")
+    if override:
+        return override if os.path.isabs(override) else os.path.join(PROJECT_ROOT, override)
+    candidates = [
+        os.path.join(PROJECT_ROOT, "results", "yolo_3d_optimized.npz"),
+        os.path.join(PROJECT_ROOT, "results", "yolo_3d_raw.npz"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[-1]
+
+def resolve_best_offset():
+    if os.path.exists(ALIGNMENT_SUMMARY_PATH):
+        with open(ALIGNMENT_SUMMARY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return float(data.get("best_offset_seconds", BEST_OFFSET))
+    return BEST_OFFSET
 
 def calculate_limb_error(kpts, gt_lengths):
     """
@@ -90,9 +110,13 @@ def kabsch_transform(P, Q):
 
 def main():
     print("[Info] Starting full skeleton comparative visualization and snapshot generation...")
+    yolo_data_path = resolve_yolo_data_path()
+    best_offset = resolve_best_offset()
+    print(f"[Info] Loading pose data from: {os.path.basename(yolo_data_path)}")
+    print(f"[Info] Using temporal offset: {best_offset:.2f} s")
 
     # 1. Load Estimated Pose Data
-    yolo_data = np.load(YOLO_DATA_PATH)
+    yolo_data = np.load(yolo_data_path)
     y_kpts = yolo_data['keypoints']
     y_ts = yolo_data['timestamps']
     
@@ -137,7 +161,7 @@ def main():
     elite_indices = valid_err_idx[sorted_idx[:TOP_K]]
     
     p_elite = y_pelvis_center[elite_indices]
-    t_elite_shifted = y_ts[elite_indices] - BEST_OFFSET
+    t_elite_shifted = y_ts[elite_indices] - best_offset
     q_elite = f_x_pelvis(t_elite_shifted)
     
     print("[Info] Computing optimal rigid body transformation matrix via Kabsch algorithm...")
@@ -156,8 +180,8 @@ def main():
     ax = fig.add_subplot(111, projection='3d')
     plt.ion()
 
-    start_time = max(0, BEST_OFFSET)
-    end_time = min(y_ts[-1], xsens_ts[-1] + BEST_OFFSET)
+    start_time = max(0, best_offset)
+    end_time = min(y_ts[-1], xsens_ts[-1] + best_offset)
     step = 5
     
     snapshots_taken = 0
@@ -167,7 +191,7 @@ def main():
         curr_time = y_ts[i]
         if curr_time < start_time or curr_time > end_time: continue
         
-        target_x_time = curr_time - BEST_OFFSET
+        target_x_time = curr_time - best_offset
         y_pose = y_kpts_final[i]
         
         # Retrieve all Xsens joint positions for the current interpolated timestamp

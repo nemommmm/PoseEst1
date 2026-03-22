@@ -219,6 +219,13 @@ __marimo__/
 2025_Ergonomics_Data/
 Calibration_video/
 
+# macOS / generated artifacts
+.DS_Store
+
+# Generated experiment outputs
+results/
+src/*.png
+
 # Ignore local output folders (generated parameters/results)
 output/
 results/

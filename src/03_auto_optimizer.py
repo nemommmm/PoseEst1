@@ -2,8 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 import os
 import sys
-import pandas as pd
-from scipy.spatial.transform import Rotation as R
+import json
 from scipy.signal import medfilt
 from scipy.interpolate import interp1d
 
@@ -22,8 +21,22 @@ TOP_K = 150 # Number of elite frames to compute the rigid body transformation
 # ============================================================
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-YOLO_DATA_PATH = os.path.join(PROJECT_ROOT, "results", "yolo_3d_raw.npz")
 MVNX_PATH = os.path.join(PROJECT_ROOT, "..", "Xsens_ground_truth", "Aitor-001.mvnx")
+RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+def resolve_yolo_data_path():
+    override = os.environ.get("POSE_RESULT_PATH")
+    if override:
+        return override if os.path.isabs(override) else os.path.join(PROJECT_ROOT, override)
+    candidates = [
+        os.path.join(PROJECT_ROOT, "results", "yolo_3d_optimized.npz"),
+        os.path.join(PROJECT_ROOT, "results", "yolo_3d_raw.npz"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            return path
+    return candidates[-1]
 
 def calculate_limb_error(kpts, gt_lengths):
     """
@@ -92,9 +105,11 @@ def evaluate_shift(shift, y_ts, y_center, f_x, elite_indices, p_elite):
 
 def main():
     print(f"[Info] Starting automated temporal-spatial optimization (Search Range: {SEARCH_START}s ~ {SEARCH_END}s)...")
+    yolo_data_path = resolve_yolo_data_path()
+    print(f"[Info] Loading pose data from: {os.path.basename(yolo_data_path)}")
 
     # --- 1. Data Preparation ---
-    yolo_data = np.load(YOLO_DATA_PATH)
+    yolo_data = np.load(yolo_data_path)
     y_kpts = yolo_data['keypoints']
     y_ts = yolo_data['timestamps']
     y_center = (y_kpts[:, 11] + y_kpts[:, 12]) / 2.0
@@ -148,6 +163,18 @@ def main():
     print(f"[Result] Minimum Mean Error:  {min_error:.2f} cm")
     print("="*50)
 
+    alignment_summary_path = os.path.join(RESULTS_DIR, "alignment_summary.json")
+    with open(alignment_summary_path, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "best_offset_seconds": float(best_shift),
+                "minimum_mean_error_cm": float(min_error),
+            },
+            f,
+            indent=2,
+        )
+    print(f"[Info] Alignment summary saved to {alignment_summary_path}")
+
     # --- 4. Visualization with Optimal Parameters ---
     _, R_best, t_best = evaluate_shift(best_shift, y_ts, y_center, f_x, elite_indices, p_elite)
     
@@ -185,8 +212,9 @@ def main():
     plt.grid(True, alpha=0.3)
 
     plt.tight_layout()
-    plt.savefig("auto_optimizer_result.png")
-    print("\n[Info] Optimization complete. Results saved to auto_optimizer_result.png")
+    plot_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "auto_optimizer_result.png")
+    plt.savefig(plot_path)
+    print(f"\n[Info] Optimization complete. Results saved to {plot_path}")
     plt.show()
 
 if __name__ == "__main__":

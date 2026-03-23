@@ -9,7 +9,7 @@ This module computes anatomically-correct angles directly from 3D geometry
 rather than using the IK interior angles (which map differently to RULA).
 
 Input:
-  - results/yolo_3d_ik_refined.npz  (IK-refined 3D keypoints)
+  - results/yolo_3d_optimized.npz   (preferred canonical pose output)
   - Xsens_ground_truth/Aitor-001.mvnx
 """
 import math
@@ -27,6 +27,12 @@ from utils_mvnx import MvnxParser
 from pose_postprocess import (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_ELBOW,
     RIGHT_ELBOW, LEFT_HIP, RIGHT_HIP, LEFT_KNEE, RIGHT_KNEE, LEFT_ANKLE,
     RIGHT_ANKLE)
+from pose_angle_utils import (
+    build_gt_angle_interpolators,
+    compute_aligned_trunk_flexion,
+    compute_semantic_joint_angles,
+    reduce_max_finite,
+)
 
 # ================= Configuration =================
 BEST_OFFSET = 17.20
@@ -75,6 +81,20 @@ def resolve_best_offset():
     return BEST_OFFSET
 
 
+def resolve_pose_input_path():
+    preferred = os.environ.get("POSE_INPUT_FILENAME", "yolo_3d_optimized.npz")
+    candidates = [preferred, "yolo_3d_raw.npz"]
+    seen = set()
+    for name in candidates:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        path = name if os.path.isabs(name) else os.path.join(RESULTS_DIR, name)
+        if os.path.exists(path):
+            return path
+    return None
+
+
 def kabsch_transform(P, Q):
     mask = np.isfinite(P).all(axis=1) & np.isfinite(Q).all(axis=1)
     P, Q = P[mask], Q[mask]
@@ -118,59 +138,16 @@ def compute_rula_angles_from_pose(pose):
     Returns dict with: shoulder_elev, elbow_flex, trunk_flex, knee_flex.
     All angles in degrees.
     """
-    result = {}
-    hip_mid = 0.5 * (pose[LEFT_HIP] + pose[RIGHT_HIP])
-    shoulder_mid = 0.5 * (pose[LEFT_SHOULDER] + pose[RIGHT_SHOULDER])
-
-    # --- Trunk flexion ---
-    # Angle of torso vector vs vertical (Z-axis in aligned frame).
-    # 0° = upright; larger = more bent forward.
-    torso_vec = shoulder_mid - hip_mid
-    if np.isfinite(torso_vec).all() and np.linalg.norm(torso_vec) > 1e-3:
-        vertical = np.array([0.0, 0.0, 1.0])
-        result["trunk_flex"] = _safe_angle_deg(torso_vec, vertical)
-    else:
-        result["trunk_flex"] = np.nan
-
-    # --- Shoulder elevation (Upper Arm Score) ---
-    # Angle of upper arm vector (shoulder→elbow) relative to the torso downward vector.
-    # This measures how much the arm is raised from hanging by the side.
-    torso_down = hip_mid - shoulder_mid  # Down along torso
-    for side, sh_idx, el_idx in [("left", LEFT_SHOULDER, LEFT_ELBOW),
-                                  ("right", RIGHT_SHOULDER, RIGHT_ELBOW)]:
-        upper_arm = pose[el_idx] - pose[sh_idx]
-        if np.isfinite(upper_arm).all() and np.isfinite(torso_down).all():
-            result[f"{side}_shoulder_elev"] = _safe_angle_deg(upper_arm, torso_down)
-        else:
-            result[f"{side}_shoulder_elev"] = np.nan
-
-    # --- Elbow flexion ---
-    # Interior angle at elbow: Shoulder-Elbow-Wrist → flexion = 180° - interior
-    for side, sh_idx, el_idx, wr_idx in [
-        ("left", LEFT_SHOULDER, LEFT_ELBOW, 9),
-        ("right", RIGHT_SHOULDER, RIGHT_ELBOW, 10),
-    ]:
-        v1 = pose[sh_idx] - pose[el_idx]
-        v2 = pose[wr_idx] - pose[el_idx]
-        if np.isfinite(v1).all() and np.isfinite(v2).all():
-            interior = _safe_angle_deg(v1, v2)
-            result[f"{side}_elbow_flex"] = 180.0 - interior if np.isfinite(interior) else np.nan
-        else:
-            result[f"{side}_elbow_flex"] = np.nan
-
-    # --- Knee flexion ---
-    for side, hi_idx, kn_idx, an_idx in [
-        ("left", LEFT_HIP, LEFT_KNEE, LEFT_ANKLE),
-        ("right", RIGHT_HIP, RIGHT_KNEE, RIGHT_ANKLE),
-    ]:
-        v1 = pose[hi_idx] - pose[kn_idx]
-        v2 = pose[an_idx] - pose[kn_idx]
-        if np.isfinite(v1).all() and np.isfinite(v2).all():
-            interior = _safe_angle_deg(v1, v2)
-            result[f"{side}_knee_flex"] = 180.0 - interior if np.isfinite(interior) else np.nan
-        else:
-            result[f"{side}_knee_flex"] = np.nan
-
+    joint_angles = compute_semantic_joint_angles(pose)
+    result = {
+        "trunk_flex": compute_aligned_trunk_flexion(pose),
+        "left_shoulder_elev": joint_angles["LeftShoulder"],
+        "right_shoulder_elev": joint_angles["RightShoulder"],
+        "left_elbow_flex": joint_angles["LeftElbow"],
+        "right_elbow_flex": joint_angles["RightElbow"],
+        "left_knee_flex": joint_angles["LeftKnee"],
+        "right_knee_flex": joint_angles["RightKnee"],
+    }
     return result
 
 
@@ -271,14 +248,15 @@ def main():
     best_offset = resolve_best_offset()
     print(f"[Info] Temporal offset: {best_offset:.2f} s")
 
-    # --- 1. Load IK-refined 3D keypoints ---
-    ik_path = os.path.join(RESULTS_DIR, "yolo_3d_ik_refined.npz")
-    if not os.path.exists(ik_path):
-        print("[Error] IK-refined data not found. Run 02b_ik_refinement.py first.")
+    # --- 1. Load canonical 3D keypoints ---
+    pose_path = resolve_pose_input_path()
+    if pose_path is None:
+        print("[Error] No pose result file found. Run 02_batch_inference.py first.")
         return
-    ik_data = np.load(ik_path)
-    est_kpts = ik_data['keypoints']
-    est_ts = ik_data['timestamps']
+    print(f"[Info] Pose input: {os.path.basename(pose_path)}")
+    pose_data = np.load(pose_path)
+    est_kpts = pose_data['keypoints']
+    est_ts = pose_data['timestamps']
 
     # Filter valid frames
     est_center = (est_kpts[:, 11] + est_kpts[:, 12]) / 2.0
@@ -298,15 +276,7 @@ def main():
     xsens_ts -= xsens_ts[0]
 
     # GT joint angle interpolators (for RULA sub-scores)
-    gt_interp = {}
-    for label in ["jLeftShoulder", "jRightShoulder", "jLeftElbow", "jRightElbow",
-                   "jLeftKnee", "jRightKnee"]:
-        raw = mvnx.get_joint_angle_data(label)
-        if raw is not None:
-            gt_interp[label] = interp1d(
-                xsens_ts, raw[xidx, 1], kind='linear',
-                bounds_error=False, fill_value=np.nan
-            )
+    gt_interp = build_gt_angle_interpolators(mvnx, xsens_ts, xidx)
 
     # GT trunk from ergo angles
     trunk_ergo = mvnx.get_ergo_angle_data("Pelvis_T8")
@@ -349,40 +319,34 @@ def main():
 
         # --- Estimated RULA (from aligned keypoints) ---
         angles = compute_rula_angles_from_pose(est_kpts_aligned[i])
-        est_shoulder = max(
+        est_shoulder = reduce_max_finite([
             angles.get("left_shoulder_elev", np.nan),
             angles.get("right_shoulder_elev", np.nan),
-        ) if np.isfinite(angles.get("left_shoulder_elev", np.nan)) and \
-             np.isfinite(angles.get("right_shoulder_elev", np.nan)) else np.nan
-        est_elbow = max(
+        ])
+        est_elbow = reduce_max_finite([
             abs(angles.get("left_elbow_flex", np.nan)),
             abs(angles.get("right_elbow_flex", np.nan)),
-        ) if np.isfinite(angles.get("left_elbow_flex", np.nan)) and \
-             np.isfinite(angles.get("right_elbow_flex", np.nan)) else np.nan
+        ])
         est_trunk = angles.get("trunk_flex", np.nan)
-        est_knee = max(
+        est_knee = reduce_max_finite([
             abs(angles.get("left_knee_flex", np.nan)),
             abs(angles.get("right_knee_flex", np.nan)),
-        ) if np.isfinite(angles.get("left_knee_flex", np.nan)) and \
-             np.isfinite(angles.get("right_knee_flex", np.nan)) else np.nan
+        ])
 
         est_rula = compute_rula_score(est_shoulder, est_elbow, est_trunk, est_knee)
 
         # --- GT RULA (from Xsens joint angles) ---
-        gt_l_shoulder = gt_interp.get("jLeftShoulder", lambda t: np.nan)(target_t)
-        gt_r_shoulder = gt_interp.get("jRightShoulder", lambda t: np.nan)(target_t)
-        gt_l_elbow = gt_interp.get("jLeftElbow", lambda t: np.nan)(target_t)
-        gt_r_elbow = gt_interp.get("jRightElbow", lambda t: np.nan)(target_t)
-        gt_l_knee = gt_interp.get("jLeftKnee", lambda t: np.nan)(target_t)
-        gt_r_knee = gt_interp.get("jRightKnee", lambda t: np.nan)(target_t)
+        gt_l_shoulder = gt_interp.get("LeftShoulder", lambda t: np.nan)(target_t)
+        gt_r_shoulder = gt_interp.get("RightShoulder", lambda t: np.nan)(target_t)
+        gt_l_elbow = gt_interp.get("LeftElbow", lambda t: np.nan)(target_t)
+        gt_r_elbow = gt_interp.get("RightElbow", lambda t: np.nan)(target_t)
+        gt_l_knee = gt_interp.get("LeftKnee", lambda t: np.nan)(target_t)
+        gt_r_knee = gt_interp.get("RightKnee", lambda t: np.nan)(target_t)
         gt_trunk_val = gt_trunk_interp(target_t) if gt_trunk_interp is not None else np.nan
 
-        gt_shoulder = max(abs(gt_l_shoulder), abs(gt_r_shoulder)) \
-            if np.isfinite(gt_l_shoulder) and np.isfinite(gt_r_shoulder) else np.nan
-        gt_elbow = max(abs(gt_l_elbow), abs(gt_r_elbow)) \
-            if np.isfinite(gt_l_elbow) and np.isfinite(gt_r_elbow) else np.nan
-        gt_knee = max(abs(gt_l_knee), abs(gt_r_knee)) \
-            if np.isfinite(gt_l_knee) and np.isfinite(gt_r_knee) else np.nan
+        gt_shoulder = reduce_max_finite([abs(gt_l_shoulder), abs(gt_r_shoulder)])
+        gt_elbow = reduce_max_finite([abs(gt_l_elbow), abs(gt_r_elbow)])
+        gt_knee = reduce_max_finite([abs(gt_l_knee), abs(gt_r_knee)])
 
         gt_rula = compute_rula_score(gt_shoulder, gt_elbow, abs(gt_trunk_val), gt_knee)
 

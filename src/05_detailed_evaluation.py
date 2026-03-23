@@ -8,7 +8,7 @@ Primary metric: Joint Angle MAE (°) — directly relevant for ergonomic assessm
 Supporting metric: MPJPE (cm) — spatial accuracy diagnostic only.
 
 Input:
-  - results/yolo_3d_ik_refined.npz   (from 02b_ik_refinement.py)
+  - results/yolo_3d_optimized.npz    (preferred canonical pose output)
   - Xsens_ground_truth/Aitor-001.mvnx
 """
 import numpy as np
@@ -22,6 +22,14 @@ from scipy.interpolate import interp1d
 
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils_mvnx import MvnxParser
+from pose_angle_utils import (
+    DEFAULT_ANGLE_SMOOTH_RADIUS,
+    SEMANTIC_ANGLE_VERSION,
+    build_gt_angle_interpolators,
+    compute_aligned_trunk_flexion,
+    compute_semantic_angle_sequence,
+    median_filter_angle_sequence,
+)
 
 # ================= Configuration =================
 BEST_OFFSET = 17.20  # Temporal offset (seconds); overridden by alignment_summary.json
@@ -55,20 +63,6 @@ SCENARIO_MAPPING = {
     "Squatting (Check)":           "Dynamic Action",
 }
 
-# Mapping: estimated joint angle name → Xsens jointAngle label + axis index
-# Xsens jointAngle format is (3 values per joint): flexion/extension, 
-# abduction/adduction, rotation. Index 1 (Y-axis) = flexion for most joints.
-ANGLE_GT_MAPPING = {
-    "LeftElbow":     ("jLeftElbow",     1),  # Y = flexion
-    "RightElbow":    ("jRightElbow",    1),
-    "LeftKnee":      ("jLeftKnee",      1),
-    "RightKnee":     ("jRightKnee",     1),
-    "LeftShoulder":  ("jLeftShoulder",  1),
-    "RightShoulder": ("jRightShoulder", 1),
-    "LeftHip":       ("jLeftHip",       1),
-    "RightHip":      ("jRightHip",      1),
-}
-
 # RULA-relevant angle thresholds for classification accuracy
 RULA_THRESHOLDS = {
     "UpperArm": [20, 45, 90],   # Shoulder elevation thresholds
@@ -92,6 +86,20 @@ def resolve_best_offset():
             data = json.load(f)
         return float(data.get("best_offset_seconds", BEST_OFFSET))
     return BEST_OFFSET
+
+
+def resolve_pose_input_path():
+    preferred = os.environ.get("POSE_INPUT_FILENAME", "yolo_3d_optimized.npz")
+    candidates = [preferred, "yolo_3d_raw.npz"]
+    seen = set()
+    for name in candidates:
+        if not name or name in seen:
+            continue
+        seen.add(name)
+        path = name if os.path.isabs(name) else os.path.join(RESULTS_DIR, name)
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def kabsch_transform(P, Q):
@@ -144,18 +152,33 @@ def main():
     best_offset = resolve_best_offset()
     print(f"[Info] Temporal offset: {best_offset:.2f} s")
 
-    # --- 1. Load IK-refined pose data ---
-    ik_path = os.path.join(RESULTS_DIR, "yolo_3d_ik_refined.npz")
-    if not os.path.exists(ik_path):
-        print("[Error] IK-refined data not found. Run 02b_ik_refinement.py first.")
+    # --- 1. Load canonical pose data ---
+    pose_path = resolve_pose_input_path()
+    if pose_path is None:
+        print("[Error] No pose result file found. Run 02_batch_inference.py first.")
         return
-    ik_data = np.load(ik_path)
-    est_kpts = ik_data['keypoints']          # (N, 17, 3)
-    est_ts = ik_data['timestamps']           # (N,)
-    est_angle_names = list(ik_data['angle_names'])
-    est_angle_values = ik_data['angle_values']  # (N, 8)
-    est_trunk_flexion = ik_data['trunk_flexion']  # (N,)
-    print(f"[Info] Loaded IK data: {len(est_ts)} frames, {len(est_angle_names)} angles")
+    print(f"[Info] Pose input: {os.path.basename(pose_path)}")
+    pose_data = np.load(pose_path)
+    est_kpts = pose_data['keypoints']          # (N, 17, 3)
+    est_ts = pose_data['timestamps']           # (N,)
+    saved_angle_definition = ""
+    if "angle_value_definition" in pose_data.files:
+        saved_angle_definition = str(pose_data["angle_value_definition"])
+    if {
+        "angle_names",
+        "angle_values",
+    }.issubset(pose_data.files) and saved_angle_definition == SEMANTIC_ANGLE_VERSION:
+        est_angle_names = [str(x) for x in pose_data["angle_names"]]
+        est_angle_values = pose_data["angle_values"]
+        print(f"[Info] Loaded semantic angle data: {len(est_angle_names)} angles")
+    else:
+        est_angle_names, est_angle_values = compute_semantic_angle_sequence(est_kpts)
+        est_angle_values = median_filter_angle_sequence(
+            est_angle_values,
+            radius=DEFAULT_ANGLE_SMOOTH_RADIUS,
+        )
+        print("[Info] Recomputed semantic angle data from 3D keypoints")
+    print(f"[Info] Loaded pose data: {len(est_ts)} frames, {len(est_angle_names)} angles")
 
     # --- 2. Load Xsens GT ---
     mvnx = MvnxParser(MVNX_PATH)
@@ -165,16 +188,7 @@ def main():
     xsens_ts -= xsens_ts[0]
 
     # Build interpolators for GT joint angles
-    gt_angle_interp = {}
-    for est_name, (xsens_label, axis_idx) in ANGLE_GT_MAPPING.items():
-        raw_data = mvnx.get_joint_angle_data(xsens_label)
-        if raw_data is not None:
-            flexion = raw_data[xidx, axis_idx]
-            gt_angle_interp[est_name] = interp1d(
-                xsens_ts, flexion, kind='linear', bounds_error=False, fill_value=np.nan
-            )
-        else:
-            print(f"[Warning] Xsens joint '{xsens_label}' not found for {est_name}")
+    gt_angle_interp = build_gt_angle_interpolators(mvnx, xsens_ts, xidx)
 
     # GT trunk flexion from ergonomic angles (Pelvis_T8 or Vertical_T8)
     trunk_ergo = mvnx.get_ergo_angle_data("Pelvis_T8")
@@ -209,13 +223,10 @@ def main():
     est_kpts_v = est_kpts[valid_mask]
     est_ts_v = est_ts[valid_mask]
     est_angle_vals_v = est_angle_values[valid_mask]
-    est_trunk_v = est_trunk_flexion[valid_mask]
-
     # Deduplicate timestamps
     est_ts_v, uidx = np.unique(est_ts_v, return_index=True)
     est_kpts_v = est_kpts_v[uidx]
     est_angle_vals_v = est_angle_vals_v[uidx]
-    est_trunk_v = est_trunk_v[uidx]
     est_ts_v -= est_ts_v[0]
 
     # Kabsch alignment for MPJPE
@@ -251,42 +262,27 @@ def main():
             if not np.isfinite(gt_val):
                 continue
 
-            # Our IK reports interior angles (0°=fully folded, 180°=straight).
-            # Xsens reports flexion (0°=neutral). We compare using abs values
-            # and compute the error as the min angular distance.
-            est_flexion = 180.0 - est_val  # Convert interior → flexion
-
-            angle_error = abs(est_flexion - gt_val)
+            angle_error = abs(est_val - gt_val)
             angle_records.append({
                 "Time": curr_t, "Activity": activity, "Scenario": scenario,
                 "AngleName": angle_name,
-                "Estimated_deg": est_flexion, "GroundTruth_deg": gt_val,
+                "Estimated_deg": est_val, "GroundTruth_deg": gt_val,
                 "Error": angle_error,
             })
 
         # 4b. Trunk flexion (computed from aligned keypoints)
         # Derive trunk angle from aligned pose: angle between torso vector
         # and the vertical direction (estimated from GT upright pose).
-        hip_mid = 0.5 * (est_kpts_aligned[i, 11] + est_kpts_aligned[i, 12])
-        shoulder_mid = 0.5 * (est_kpts_aligned[i, 5] + est_kpts_aligned[i, 6])
-        if np.isfinite(hip_mid).all() and np.isfinite(shoulder_mid).all():
-            torso_vec = shoulder_mid - hip_mid
-            torso_len = np.linalg.norm(torso_vec)
-            if torso_len > 1e-3:
-                # Use Z-axis of the Kabsch-aligned frame as vertical
-                # (after alignment, Xsens Z ≈ true vertical)
-                cos_angle = np.clip(torso_vec[2] / torso_len, -1.0, 1.0)
-                est_trunk_aligned = np.degrees(np.arccos(cos_angle))
-
-                if gt_trunk_interp is not None:
-                    gt_trunk_val = gt_trunk_interp(target_t)
-                    if np.isfinite(gt_trunk_val):
-                        trunk_records.append({
-                            "Time": curr_t, "Activity": activity, "Scenario": scenario,
-                            "Estimated_deg": est_trunk_aligned,
-                            "GroundTruth_deg": abs(gt_trunk_val),
-                            "Error": abs(est_trunk_aligned - abs(gt_trunk_val)),
-                        })
+        est_trunk_aligned = compute_aligned_trunk_flexion(est_kpts_aligned[i])
+        if np.isfinite(est_trunk_aligned) and gt_trunk_interp is not None:
+            gt_trunk_val = gt_trunk_interp(target_t)
+            if np.isfinite(gt_trunk_val):
+                trunk_records.append({
+                    "Time": curr_t, "Activity": activity, "Scenario": scenario,
+                    "Estimated_deg": est_trunk_aligned,
+                    "GroundTruth_deg": abs(gt_trunk_val),
+                    "Error": abs(est_trunk_aligned - abs(gt_trunk_val)),
+                })
 
         # 4c. MPJPE (SUPPORTING metric)
         for y_idx, x_name in JOINT_POSITION_MAPPING.items():

@@ -23,14 +23,16 @@ MODEL_NAME = os.environ.get("POSE_MODEL_NAME", "yolov8m-pose.pt")
 MODEL_PATH = os.path.join(SRC_DIR, MODEL_NAME)
 MODEL_SLUG = os.path.splitext(MODEL_NAME)[0].replace("-", "_")
 
-MIN_KEYPOINT_CONF = 0.35
+MIN_KEYPOINT_CONF = float(os.environ.get("POSE_MIN_KEYPOINT_CONF", "0.35"))
 # Empirically, this dataset's rectified reprojection error distribution is much
-# broader than the original 12 px guess. A looser threshold still rejects
-# catastrophic mismatches without wiping out most valid joints.
-REPROJECTION_ERROR_THRESHOLD = 80.0  # pixels, averaged across left/right rectified views
+# broader than the original 12 px guess. Keep the default loose enough to
+# preserve coverage, but make it configurable for stricter reruns.
+REPROJECTION_ERROR_THRESHOLD = float(
+    os.environ.get("POSE_REPROJECTION_ERROR_THRESHOLD", "80.0")
+)  # pixels, averaged across left/right rectified views
 ENABLE_BONE_CONSTRAINT = os.environ.get("POSE_ENABLE_BONE_CONSTRAINT", "1") != "0"
-# Quality-aware blending needs the saved 2D confidence arrays to be useful. Keep
-# it opt-in until the next full rerun populates those diagnostics.
+# Quality-aware blending remains opt-in. On the current benchmark it increased
+# semantic joint-angle MAE relative to the simpler rigid-chain + One Euro path.
 ENABLE_QUALITY_AWARE_BLEND = os.environ.get("POSE_ENABLE_QUALITY_AWARE_BLEND", "0") == "1"
 # Pure rigid constraints suppress bone-length explosions, but work best when
 # paired with light temporal smoothing rather than used alone.

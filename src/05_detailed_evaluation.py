@@ -1,3 +1,16 @@
+"""
+05_detailed_evaluation.py  (Restructured)
+
+Core evaluation script: compares estimated joint angles from the vision
+pipeline against Xsens ground-truth joint angles.
+
+Primary metric: Joint Angle MAE (°) — directly relevant for ergonomic assessment.
+Supporting metric: MPJPE (cm) — spatial accuracy diagnostic only.
+
+Input:
+  - results/yolo_3d_ik_refined.npz   (from 02b_ik_refinement.py)
+  - Xsens_ground_truth/Aitor-001.mvnx
+"""
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
@@ -11,719 +24,426 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from utils_mvnx import MvnxParser
 
 # ================= Configuration =================
-# Best temporal offset derived from the automated grid search optimizer
-BEST_OFFSET = 17.20
-GT_LIMB_LENGTHS = [38.6, 39.8, 40.3, 39.5] # Reference limb lengths (cm)
-TOP_K = 150 # Number of elite frames
+BEST_OFFSET = 17.20  # Temporal offset (seconds); overridden by alignment_summary.json
+GT_LIMB_LENGTHS = [38.6, 39.8, 40.3, 39.5]
+TOP_K = 150
 
-# 🕒 Detailed Time Segmentation (Manual Annotation)
-# Format: "Label": [start_time, end_time] in seconds
+# Activity segments (seconds) — manual annotation
 ACTIVITY_SEGMENTS = {
-    # --- Baseline Group ---
-    "Walking (Normal)": [17, 32],
-    "Walking (Late)": [220, 240], # Stable walking phase at the end
-
-    # --- Occlusion Group ---
-    "Sitting (Lower Occluded)": [32, 62],     # Lower body heavily occluded by desk
-    "Walking (Upper Occluded)": [87, 97],     # Upper body partially occluded
-    "Walking (Lower Occluded 1)": [130, 140], # Lower body occluded by obstacles
-    "Walking (Lower Occluded 2)": [164, 170], # Lower body occluded by obstacles
-
-    # --- Environmental Interference (Black Chair) ---
-    "Chair Interaction (Complex)": [140, 160], # Complex interaction near a black chair
-    "Lifting Box (Near Chair)": [214, 218],    # Lifting action near the chair
-    
-    # --- Dynamic/Special Actions ---
-    "Squatting": [66, 69],
-    "Squatting (Check)": [156, 160]
+    "Walking (Normal)":          [17, 32],
+    "Walking (Late)":            [220, 240],
+    "Sitting (Lower Occluded)":  [32, 62],
+    "Walking (Upper Occluded)":  [87, 97],
+    "Walking (Lower Occluded 1)":[130, 140],
+    "Walking (Lower Occluded 2)":[164, 170],
+    "Chair Interaction (Complex)":[140, 160],
+    "Lifting Box (Near Chair)":  [214, 218],
+    "Squatting":                 [66, 69],
+    "Squatting (Check)":         [156, 160],
 }
 
-# 🏷️ High-Level Scenario Mapping (For aggregated statistical tables)
 SCENARIO_MAPPING = {
-    "Walking (Normal)": "Baseline",
-    "Walking (Late)": "Baseline",
-    
-    "Sitting (Lower Occluded)": "Occlusion",
-    "Walking (Upper Occluded)": "Occlusion",
-    "Walking (Lower Occluded 1)": "Occlusion",
-    "Walking (Lower Occluded 2)": "Occlusion",
-    
+    "Walking (Normal)":            "Baseline",
+    "Walking (Late)":              "Baseline",
+    "Sitting (Lower Occluded)":    "Occlusion",
+    "Walking (Upper Occluded)":    "Occlusion",
+    "Walking (Lower Occluded 1)":  "Occlusion",
+    "Walking (Lower Occluded 2)":  "Occlusion",
     "Chair Interaction (Complex)": "Environmental Interference",
-    "Lifting Box (Near Chair)": "Environmental Interference",
-    
-    "Squatting": "Dynamic Action",
-    "Squatting (Check)": "Dynamic Action"
+    "Lifting Box (Near Chair)":    "Environmental Interference",
+    "Squatting":                   "Dynamic Action",
+    "Squatting (Check)":           "Dynamic Action",
 }
 
-# 💀 Kinematic Body Part Grouping
-BODY_PARTS = {
-    "Head": [0, 1, 2, 3, 4],
-    "Torso": [5, 6, 11, 12],
-    "Arms": [7, 8, 9, 10],
-    "Legs": [13, 14, 15, 16]
+# Mapping: estimated joint angle name → Xsens jointAngle label + axis index
+# Xsens jointAngle format is (3 values per joint): flexion/extension, 
+# abduction/adduction, rotation. Index 1 (Y-axis) = flexion for most joints.
+ANGLE_GT_MAPPING = {
+    "LeftElbow":     ("jLeftElbow",     1),  # Y = flexion
+    "RightElbow":    ("jRightElbow",    1),
+    "LeftKnee":      ("jLeftKnee",      1),
+    "RightKnee":     ("jRightKnee",     1),
+    "LeftShoulder":  ("jLeftShoulder",  1),
+    "RightShoulder": ("jRightShoulder", 1),
+    "LeftHip":       ("jLeftHip",       1),
+    "RightHip":      ("jRightHip",      1),
 }
 
-JOINT_MAPPING = {
-    0: 'Head', 11: 'Pelvis', 12: 'Pelvis',
-    5: 'LeftShoulder', 6: 'RightShoulder',
-    7: 'LeftUpperArm', 8: 'RightUpperArm',
-    9: 'LeftForeArm', 10: 'RightForeArm',
-    13: 'LeftUpperLeg', 14: 'RightUpperLeg',
-    15: 'LeftLowerLeg', 16: 'RightLowerLeg'
+# RULA-relevant angle thresholds for classification accuracy
+RULA_THRESHOLDS = {
+    "UpperArm": [20, 45, 90],   # Shoulder elevation thresholds
+    "LowerArm": [60, 100],      # Elbow flexion thresholds
+    "Trunk":    [10, 20, 60],   # Trunk flexion thresholds
 }
 
-ANGLE_DEFINITIONS = {
-    "LeftElbow": {
-        "est_triplet": (5, 7, 9),
-        "gt_triplet": ("LeftShoulder", "LeftUpperArm", "LeftForeArm"),
-    },
-    "RightElbow": {
-        "est_triplet": (6, 8, 10),
-        "gt_triplet": ("RightShoulder", "RightUpperArm", "RightForeArm"),
-    },
-    "LeftKnee": {
-        "est_triplet": (11, 13, 15),
-        "gt_triplet": ("Pelvis", "LeftUpperLeg", "LeftLowerLeg"),
-    },
-    "RightKnee": {
-        "est_triplet": (12, 14, 16),
-        "gt_triplet": ("Pelvis", "RightUpperLeg", "RightLowerLeg"),
-    },
-    "LeftShoulder": {
-        "est_triplet": (11, 5, 7),
-        "gt_triplet": ("Pelvis", "LeftShoulder", "LeftUpperArm"),
-    },
-    "RightShoulder": {
-        "est_triplet": (12, 6, 8),
-        "gt_triplet": ("Pelvis", "RightShoulder", "RightUpperArm"),
-    },
-    "LeftHip": {
-        "est_triplet": (5, 11, 13),
-        "gt_triplet": ("LeftShoulder", "Pelvis", "LeftUpperLeg"),
-    },
-    "RightHip": {
-        "est_triplet": (6, 12, 14),
-        "gt_triplet": ("RightShoulder", "Pelvis", "RightUpperLeg"),
-    },
-}
-# ===============================================
+# ================================================
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 MVNX_PATH = os.path.join(PROJECT_ROOT, "..", "Xsens_ground_truth", "Aitor-001.mvnx")
-SUMMARY_OUTPUT_DIR = os.path.join(PROJECT_ROOT, "results")
-ALIGNMENT_SUMMARY_PATH = os.path.join(SUMMARY_OUTPUT_DIR, "alignment_summary.json")
-os.makedirs(SUMMARY_OUTPUT_DIR, exist_ok=True)
+RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
+ALIGNMENT_SUMMARY_PATH = os.path.join(RESULTS_DIR, "alignment_summary.json")
+os.makedirs(RESULTS_DIR, exist_ok=True)
 
-def resolve_yolo_data_path():
-    override = os.environ.get("POSE_RESULT_PATH")
-    if override:
-        return override if os.path.isabs(override) else os.path.join(PROJECT_ROOT, override)
-    candidates = [
-        os.path.join(PROJECT_ROOT, "results", "yolo_3d_optimized.npz"),
-        os.path.join(PROJECT_ROOT, "results", "yolo_3d_raw.npz"),
-    ]
-    for path in candidates:
-        if os.path.exists(path):
-            return path
-    return candidates[-1]
 
 def resolve_best_offset():
     if os.path.exists(ALIGNMENT_SUMMARY_PATH):
-        with open(ALIGNMENT_SUMMARY_PATH, "r", encoding="utf-8") as f:
+        with open(ALIGNMENT_SUMMARY_PATH, "r") as f:
             data = json.load(f)
         return float(data.get("best_offset_seconds", BEST_OFFSET))
     return BEST_OFFSET
 
-def calculate_limb_error(kpts, gt_lengths):
-    lengths = np.vstack([
-        np.linalg.norm(kpts[:, 11] - kpts[:, 13], axis=1), 
-        np.linalg.norm(kpts[:, 12] - kpts[:, 14], axis=1),
-        np.linalg.norm(kpts[:, 13] - kpts[:, 15], axis=1), 
-        np.linalg.norm(kpts[:, 14] - kpts[:, 16], axis=1) 
-    ]).T
-    return np.sum(np.abs(lengths - gt_lengths), axis=1)
 
 def kabsch_transform(P, Q):
+    """Optimal rotation+translation to align P onto Q."""
     mask = np.isfinite(P).all(axis=1) & np.isfinite(Q).all(axis=1)
-    P = P[mask]
-    Q = Q[mask]
-    if len(P) < 10: return np.eye(3), np.zeros(3)
-    centroid_P = np.mean(P, axis=0)
-    centroid_Q = np.mean(Q, axis=0)
-    AA = P - centroid_P
-    BB = Q - centroid_Q
-    H = AA.T @ BB
+    P, Q = P[mask], Q[mask]
+    if len(P) < 10:
+        return np.eye(3), np.zeros(3)
+    cP, cQ = np.mean(P, axis=0), np.mean(Q, axis=0)
+    H = (P - cP).T @ (Q - cQ)
     U, S, Vt = np.linalg.svd(H)
     rot = Vt.T @ U.T
     if np.linalg.det(rot) < 0:
         Vt[2, :] *= -1
         rot = Vt.T @ U.T
-    t = centroid_Q - rot @ centroid_P
+    t = cQ - rot @ cP
     return rot, t
 
-def summarize_metric(df, group_col, mean_col, median_col, std_col):
-    return (
-        df.groupby(group_col)["Error"]
-        .agg(**{mean_col: "mean", median_col: "median", std_col: "std", "Samples": "count"})
-        .sort_values(mean_col)
-    )
 
-def compute_angle_deg(p1, p2, p3):
-    if np.isnan(p1).any() or np.isnan(p2).any() or np.isnan(p3).any():
-        return np.nan
-    v1 = p1 - p2
-    v2 = p3 - p2
-    n1 = np.linalg.norm(v1)
-    n2 = np.linalg.norm(v2)
-    if n1 < 1e-8 or n2 < 1e-8:
-        return np.nan
-    cos_angle = np.dot(v1, v2) / (n1 * n2)
-    cos_angle = np.clip(cos_angle, -1.0, 1.0)
-    return np.degrees(np.arccos(cos_angle))
+def calculate_limb_error(kpts, gt_lengths):
+    lengths = np.vstack([
+        np.linalg.norm(kpts[:, 11] - kpts[:, 13], axis=1),
+        np.linalg.norm(kpts[:, 12] - kpts[:, 14], axis=1),
+        np.linalg.norm(kpts[:, 13] - kpts[:, 15], axis=1),
+        np.linalg.norm(kpts[:, 14] - kpts[:, 16], axis=1),
+    ]).T
+    return np.sum(np.abs(lengths - gt_lengths), axis=1)
 
-def compute_velocity(traj, timestamps):
-    vel = np.full_like(traj, np.nan, dtype=np.float64)
-    valid_mask = np.isfinite(traj).all(axis=1)
-    if valid_mask.sum() < 5:
-        return vel
 
-    valid_traj = traj[valid_mask]
-    valid_ts = timestamps[valid_mask]
-    vel_valid = np.gradient(valid_traj, valid_ts, axis=0, edge_order=1)
-    vel[valid_mask] = vel_valid
-    return vel
+def classify_angle_by_thresholds(angle, thresholds):
+    """Classify an angle into a RULA-like category based on thresholds."""
+    for i, thresh in enumerate(thresholds):
+        if angle < thresh:
+            return i
+    return len(thresholds)
 
-def compute_acceleration(traj, timestamps):
-    acc = np.full_like(traj, np.nan, dtype=np.float64)
-    vel = compute_velocity(traj, timestamps)
-    valid_mask = np.isfinite(vel).all(axis=1)
-    if valid_mask.sum() < 5:
-        return acc
 
-    valid_traj = vel[valid_mask]
-    valid_ts = timestamps[valid_mask]
-    acc_valid = np.gradient(valid_traj, valid_ts, axis=0, edge_order=1)
-    acc[valid_mask] = acc_valid
-    return acc
+def get_activity_and_scenario(t):
+    for label, (start, end) in ACTIVITY_SEGMENTS.items():
+        if start <= t <= end:
+            return label, SCENARIO_MAPPING.get(label, "Other")
+    return "Unclassified", "Unclassified"
 
-def scalarize_npz_value(value):
-    arr = np.asarray(value)
-    if arr.ndim == 0:
-        item = arr.item()
-    elif arr.size == 1:
-        item = arr.reshape(()).item()
-    else:
-        return arr.tolist()
-    return item.decode("utf-8") if isinstance(item, bytes) else item
-
-def build_metric_overview(core_metrics):
-    metric_specs = [
-        ("Visual", "MPJPE_cm", "cm", "Mean joint position error after one global rigid alignment."),
-        ("Visual", "Root_Mean_Error_cm", "cm", "Mean pelvis/root trajectory error."),
-        ("Visual", "Median_Joint_Error_cm", "cm", "Median joint position error across all valid samples."),
-        ("Visual", "P90_Joint_Error_cm", "cm", "90th percentile joint position error."),
-        ("Visual", "P95_Joint_Error_cm", "cm", "95th percentile joint position error."),
-        ("Kinematic", "Mean_Joint_Angle_Error_deg", "deg", "Mean absolute joint-angle error from pose triplets."),
-        ("Dynamic", "Pelvis_Velocity_Error_cm_s", "cm/s", "Mean pelvis velocity vector error."),
-        ("Dynamic", "Mean_Joint_Velocity_Error_cm_s", "cm/s", "Mean joint velocity vector error."),
-        ("Dynamic", "Pelvis_Acceleration_Error_cm_s2", "cm/s^2", "Mean pelvis acceleration error."),
-        ("Dynamic", "Mean_Joint_Acceleration_Error_cm_s2", "cm/s^2", "Mean joint acceleration error."),
-        ("Coverage", "Valid_Joint_Samples", "samples", "Valid aligned joint samples used for MPJPE."),
-        ("Coverage", "Valid_Root_Samples", "samples", "Valid pelvis samples used for root error."),
-        ("Coverage", "Valid_Angle_Samples", "samples", "Valid joint-angle samples."),
-        ("Coverage", "Valid_Velocity_Samples", "samples", "Valid joint-velocity samples."),
-        ("Coverage", "Valid_Acceleration_Samples", "samples", "Valid joint-acceleration samples."),
-    ]
-    rows = []
-    for category, metric, unit, definition in metric_specs:
-        rows.append(
-            {
-                "Category": category,
-                "Metric": metric,
-                "Value": core_metrics.get(metric, np.nan),
-                "Unit": unit,
-                "Definition": definition,
-            }
-        )
-    return pd.DataFrame(rows)
-
-def build_ergonomic_overview(core_metrics):
-    metric_specs = [
-        ("Primary", "Posture", "Mean_Joint_Angle_Error_deg", "deg", "Most relevant ergonomic posture signal."),
-        ("Secondary", "Dynamics", "Mean_Joint_Velocity_Error_cm_s", "cm/s", "Temporal motion consistency for moving joints."),
-        ("Secondary", "Dynamics", "Mean_Joint_Acceleration_Error_cm_s2", "cm/s^2", "Jitter and motion smoothness proxy."),
-        ("Secondary", "Dynamics", "Pelvis_Velocity_Error_cm_s", "cm/s", "Whole-body/root motion consistency."),
-        ("Secondary", "Dynamics", "Pelvis_Acceleration_Error_cm_s2", "cm/s^2", "Whole-body/root jitter proxy."),
-        ("Supporting", "Visual", "MPJPE_cm", "cm", "Useful diagnostic, but less reliable than angle-based evaluation for Xsens."),
-        ("Supporting", "Visual", "Root_Mean_Error_cm", "cm", "Useful diagnostic for global alignment only."),
-        ("Coverage", "Coverage", "Valid_Angle_Samples", "samples", "Valid posture samples supporting the angle metrics."),
-        ("Coverage", "Coverage", "Valid_Velocity_Samples", "samples", "Valid dynamic samples supporting the velocity metrics."),
-        ("Coverage", "Coverage", "Valid_Acceleration_Samples", "samples", "Valid dynamic samples supporting the acceleration metrics."),
-    ]
-    rows = []
-    for priority, dimension, metric, unit, interpretation in metric_specs:
-        rows.append(
-            {
-                "Priority": priority,
-                "Dimension": dimension,
-                "Metric": metric,
-                "Value": core_metrics.get(metric, np.nan),
-                "Unit": unit,
-                "Interpretation": interpretation,
-            }
-        )
-    return pd.DataFrame(rows)
 
 def main():
-    print("[Info] Initializing detailed evaluation and scenario analysis...")
-    yolo_data_path = resolve_yolo_data_path()
-    best_offset = resolve_best_offset()
-    print(f"[Info] Loading pose data from: {os.path.basename(yolo_data_path)}")
-    print(f"[Info] Using temporal offset: {best_offset:.2f} s")
-    
-    # --- 1. Data Loading ---
-    yolo_data = np.load(yolo_data_path)
-    y_kpts = yolo_data['keypoints']
-    y_ts = yolo_data['timestamps']
-    pose_model_name = scalarize_npz_value(yolo_data["model_name"]) if "model_name" in yolo_data else "unknown"
-    postprocess_variant = scalarize_npz_value(yolo_data["postprocess_variant"]) if "postprocess_variant" in yolo_data else "unknown"
-    reprojection_threshold = scalarize_npz_value(yolo_data["reprojection_threshold_px"]) if "reprojection_threshold_px" in yolo_data else np.nan
-    print(f"[Info] Pose model: {pose_model_name}")
-    print(f"[Info] Postprocess variant: {postprocess_variant}")
-    if np.isfinite(reprojection_threshold):
-        print(f"[Info] Reprojection threshold: {float(reprojection_threshold):.1f} px")
-    y_center = (y_kpts[:, 11] + y_kpts[:, 12]) / 2.0
-    valid_mask = (y_center[:, 2] > 10) & (y_center[:, 2] < 1000) & np.isfinite(y_center).all(axis=1)
-    y_kpts = y_kpts[valid_mask]
-    y_ts = y_ts[valid_mask]
-    y_ts, uidx = np.unique(y_ts, return_index=True)
-    y_kpts = y_kpts[uidx]
-    y_ts -= y_ts[0]
+    print("=" * 60)
+    print("[Evaluation] Joint Angle-based Ergonomic Evaluation")
+    print("=" * 60)
 
+    best_offset = resolve_best_offset()
+    print(f"[Info] Temporal offset: {best_offset:.2f} s")
+
+    # --- 1. Load IK-refined pose data ---
+    ik_path = os.path.join(RESULTS_DIR, "yolo_3d_ik_refined.npz")
+    if not os.path.exists(ik_path):
+        print("[Error] IK-refined data not found. Run 02b_ik_refinement.py first.")
+        return
+    ik_data = np.load(ik_path)
+    est_kpts = ik_data['keypoints']          # (N, 17, 3)
+    est_ts = ik_data['timestamps']           # (N,)
+    est_angle_names = list(ik_data['angle_names'])
+    est_angle_values = ik_data['angle_values']  # (N, 8)
+    est_trunk_flexion = ik_data['trunk_flexion']  # (N,)
+    print(f"[Info] Loaded IK data: {len(est_ts)} frames, {len(est_angle_names)} angles")
+
+    # --- 2. Load Xsens GT ---
     mvnx = MvnxParser(MVNX_PATH)
     mvnx.parse()
-    xsens_ts = mvnx.timestamps
+    xsens_ts = mvnx.timestamps.copy()
     xsens_ts, xidx = np.unique(xsens_ts, return_index=True)
     xsens_ts -= xsens_ts[0]
-    
-    xsens_interp = {}
-    all_segments = set(JOINT_MAPPING.values())
-    for seg in all_segments:
-        data = mvnx.get_segment_data(seg)[xidx]
-        xsens_interp[seg] = interp1d(xsens_ts, data, axis=0, kind='linear', bounds_error=False, fill_value=np.nan)
 
-    # --- 2. Global Alignment ---
-    print("[Info] Executing global spatial alignment...")
-    y_pelvis = (y_kpts[:, 11] + y_kpts[:, 12]) / 2.0
-    errors = calculate_limb_error(y_kpts, GT_LIMB_LENGTHS)
+    # Build interpolators for GT joint angles
+    gt_angle_interp = {}
+    for est_name, (xsens_label, axis_idx) in ANGLE_GT_MAPPING.items():
+        raw_data = mvnx.get_joint_angle_data(xsens_label)
+        if raw_data is not None:
+            flexion = raw_data[xidx, axis_idx]
+            gt_angle_interp[est_name] = interp1d(
+                xsens_ts, flexion, kind='linear', bounds_error=False, fill_value=np.nan
+            )
+        else:
+            print(f"[Warning] Xsens joint '{xsens_label}' not found for {est_name}")
+
+    # GT trunk flexion from ergonomic angles (Pelvis_T8 or Vertical_T8)
+    trunk_ergo = mvnx.get_ergo_angle_data("Pelvis_T8")
+    gt_trunk_interp = None
+    if trunk_ergo is not None:
+        trunk_flexion_gt = trunk_ergo[xidx, 0]  # X-axis = flexion/extension
+        gt_trunk_interp = interp1d(
+            xsens_ts, trunk_flexion_gt, kind='linear', bounds_error=False, fill_value=np.nan
+        )
+
+    # Also set up position interpolator for MPJPE (supporting metric)
+    xsens_pos_interp = {}
+    JOINT_POSITION_MAPPING = {
+        0: 'Head', 5: 'LeftShoulder', 6: 'RightShoulder',
+        7: 'LeftUpperArm', 8: 'RightUpperArm',
+        9: 'LeftForeArm', 10: 'RightForeArm',
+        11: 'Pelvis', 12: 'Pelvis',
+        13: 'LeftUpperLeg', 14: 'RightUpperLeg',
+        15: 'LeftLowerLeg', 16: 'RightLowerLeg',
+    }
+    for seg_name in set(JOINT_POSITION_MAPPING.values()):
+        seg_data = mvnx.get_segment_data(seg_name)
+        if seg_data is not None:
+            xsens_pos_interp[seg_name] = interp1d(
+                xsens_ts, seg_data[xidx], axis=0, kind='linear',
+                bounds_error=False, fill_value=np.nan
+            )
+
+    # --- 3. Prepare alignment for MPJPE ---
+    est_center = (est_kpts[:, 11] + est_kpts[:, 12]) / 2.0
+    valid_mask = (est_center[:, 2] > 10) & (est_center[:, 2] < 1000) & np.isfinite(est_center).all(axis=1)
+    est_kpts_v = est_kpts[valid_mask]
+    est_ts_v = est_ts[valid_mask]
+    est_angle_vals_v = est_angle_values[valid_mask]
+    est_trunk_v = est_trunk_flexion[valid_mask]
+
+    # Deduplicate timestamps
+    est_ts_v, uidx = np.unique(est_ts_v, return_index=True)
+    est_kpts_v = est_kpts_v[uidx]
+    est_angle_vals_v = est_angle_vals_v[uidx]
+    est_trunk_v = est_trunk_v[uidx]
+    est_ts_v -= est_ts_v[0]
+
+    # Kabsch alignment for MPJPE
+    y_pelvis = (est_kpts_v[:, 11] + est_kpts_v[:, 12]) / 2.0
+    errors = calculate_limb_error(est_kpts_v, GT_LIMB_LENGTHS)
     valid_err_idx = np.where(np.isfinite(errors))[0]
     elite_indices = valid_err_idx[np.argsort(errors[valid_err_idx])[:TOP_K]]
-    
     p_elite = y_pelvis[elite_indices]
-    q_elite = xsens_interp['Pelvis'](y_ts[elite_indices] - best_offset)
-    R, t = kabsch_transform(p_elite, q_elite)
-    
-    N, J, _ = y_kpts.shape
-    y_kpts_flat = y_kpts.reshape(-1, 3)
-    y_aligned_flat = (R @ y_kpts_flat.T).T + t
-    y_kpts_aligned = y_aligned_flat.reshape(N, J, 3)
+    q_elite = xsens_pos_interp['Pelvis'](est_ts_v[elite_indices] - best_offset)
+    R, t_vec = kabsch_transform(p_elite, q_elite)
 
-    # --- 3. Compute Error Matrix ---
-    print("[Info] Calculating segment-wise Euclidean distance errors...")
-    records = []
+    N_frames = len(est_ts_v)
+    est_kpts_aligned = (R @ est_kpts_v.reshape(-1, 3).T).T.reshape(N_frames, -1, 3) + t_vec
+
+    # --- 4. Core evaluation ---
+    print("\n[Info] Computing evaluation metrics...")
     angle_records = []
-    velocity_records = []
-    accel_records = []
-    gt_tracks = {
-        joint_name: np.full((len(y_ts), 3), np.nan, dtype=np.float64)
-        for joint_name in set(JOINT_MAPPING.values())
-    }
-    activity_labels = []
-    scenario_labels = []
-    
-    for i, curr_t in enumerate(y_ts):
+    mpjpe_records = []
+    trunk_records = []
+
+    for i, curr_t in enumerate(est_ts_v):
         target_t = curr_t - best_offset
-        
-        # Determine Activity and Scenario Labels
-        activity_label = "Unclassified"
-        scenario_label = "Unclassified"
-        for label, (start, end) in ACTIVITY_SEGMENTS.items():
-            if start <= curr_t <= end:
-                activity_label = label
-                scenario_label = SCENARIO_MAPPING.get(label, "Other")
-                break
-        activity_labels.append(activity_label)
-        scenario_labels.append(scenario_label)
-        
-        # 1. Root Error (Pelvis)
-        x_pelvis_pos = xsens_interp['Pelvis'](target_t)
-        gt_tracks['Pelvis'][i] = x_pelvis_pos
-        if not np.isnan(x_pelvis_pos).any():
-            y_root = (y_kpts_aligned[i, 11] + y_kpts_aligned[i, 12]) / 2.0
-            root_err = np.linalg.norm(y_root - x_pelvis_pos)
-            records.append({
-                'Time': curr_t, 'Activity': activity_label, 'Scenario': scenario_label,
-                'Type': 'Root', 'Error': root_err
+        activity, scenario = get_activity_and_scenario(curr_t)
+
+        # 4a. Joint angle errors (PRIMARY metric)
+        for angle_idx, angle_name in enumerate(est_angle_names):
+            est_val = est_angle_vals_v[i, angle_idx]
+            if not np.isfinite(est_val):
+                continue
+            if angle_name not in gt_angle_interp:
+                continue
+            gt_val = gt_angle_interp[angle_name](target_t)
+            if not np.isfinite(gt_val):
+                continue
+
+            # Our IK reports interior angles (0°=fully folded, 180°=straight).
+            # Xsens reports flexion (0°=neutral). We compare using abs values
+            # and compute the error as the min angular distance.
+            est_flexion = 180.0 - est_val  # Convert interior → flexion
+
+            angle_error = abs(est_flexion - gt_val)
+            angle_records.append({
+                "Time": curr_t, "Activity": activity, "Scenario": scenario,
+                "AngleName": angle_name,
+                "Estimated_deg": est_flexion, "GroundTruth_deg": gt_val,
+                "Error": angle_error,
             })
-        
-        # 2. Joint Errors
-        for y_idx, x_name in JOINT_MAPPING.items():
-            x_pos = xsens_interp[x_name](target_t)
-            gt_tracks[x_name][i] = x_pos
-            y_pos = y_kpts_aligned[i, y_idx]
-            if np.isnan(x_pos).any() or np.isnan(y_pos).any(): continue
-            
+
+        # 4b. Trunk flexion (computed from aligned keypoints)
+        # Derive trunk angle from aligned pose: angle between torso vector
+        # and the vertical direction (estimated from GT upright pose).
+        hip_mid = 0.5 * (est_kpts_aligned[i, 11] + est_kpts_aligned[i, 12])
+        shoulder_mid = 0.5 * (est_kpts_aligned[i, 5] + est_kpts_aligned[i, 6])
+        if np.isfinite(hip_mid).all() and np.isfinite(shoulder_mid).all():
+            torso_vec = shoulder_mid - hip_mid
+            torso_len = np.linalg.norm(torso_vec)
+            if torso_len > 1e-3:
+                # Use Z-axis of the Kabsch-aligned frame as vertical
+                # (after alignment, Xsens Z ≈ true vertical)
+                cos_angle = np.clip(torso_vec[2] / torso_len, -1.0, 1.0)
+                est_trunk_aligned = np.degrees(np.arccos(cos_angle))
+
+                if gt_trunk_interp is not None:
+                    gt_trunk_val = gt_trunk_interp(target_t)
+                    if np.isfinite(gt_trunk_val):
+                        trunk_records.append({
+                            "Time": curr_t, "Activity": activity, "Scenario": scenario,
+                            "Estimated_deg": est_trunk_aligned,
+                            "GroundTruth_deg": abs(gt_trunk_val),
+                            "Error": abs(est_trunk_aligned - abs(gt_trunk_val)),
+                        })
+
+        # 4c. MPJPE (SUPPORTING metric)
+        for y_idx, x_name in JOINT_POSITION_MAPPING.items():
+            if x_name not in xsens_pos_interp:
+                continue
+            x_pos = xsens_pos_interp[x_name](target_t)
+            y_pos = est_kpts_aligned[i, y_idx]
+            if np.isnan(x_pos).any() or np.isnan(y_pos).any():
+                continue
             dist = np.linalg.norm(y_pos - x_pos)
-            part_group = "Other"
-            for p_name, p_idxs in BODY_PARTS.items():
-                if y_idx in p_idxs: part_group = p_name; break
-            
-            records.append({
-                'Time': curr_t, 'Activity': activity_label, 'Scenario': scenario_label,
-                'Type': 'Joint', 'Part': part_group, 'JointName': x_name, 'Error': dist
+            mpjpe_records.append({
+                "Time": curr_t, "Activity": activity, "Scenario": scenario,
+                "JointName": x_name, "Error": dist,
             })
 
-        # 3. Joint Angle Errors
-        for angle_name, angle_def in ANGLE_DEFINITIONS.items():
-            est_idx_a, est_idx_b, est_idx_c = angle_def["est_triplet"]
-            gt_name_a, gt_name_b, gt_name_c = angle_def["gt_triplet"]
-            est_angle = compute_angle_deg(
-                y_kpts_aligned[i, est_idx_a],
-                y_kpts_aligned[i, est_idx_b],
-                y_kpts_aligned[i, est_idx_c],
-            )
-            gt_angle = compute_angle_deg(
-                gt_tracks[gt_name_a][i],
-                gt_tracks[gt_name_b][i],
-                gt_tracks[gt_name_c][i],
-            )
-            if np.isnan(est_angle) or np.isnan(gt_angle):
-                continue
-            angle_records.append(
-                {
-                    "Time": curr_t,
-                    "Activity": activity_label,
-                    "Scenario": scenario_label,
-                    "AngleName": angle_name,
-                    "Estimated_deg": est_angle,
-                    "GroundTruth_deg": gt_angle,
-                    "Error": abs(est_angle - gt_angle),
-                }
-            )
-
-    df = pd.DataFrame(records)
-    df_joints = df[df['Type'] == 'Joint']
-    df_root = df[df['Type'] == 'Root']
     df_angles = pd.DataFrame(angle_records)
+    df_trunk = pd.DataFrame(trunk_records)
+    df_mpjpe = pd.DataFrame(mpjpe_records)
 
-    activity_labels = np.array(activity_labels)
-    scenario_labels = np.array(scenario_labels)
+    # --- 5. Print results ---
+    print("\n" + "=" * 60)
+    print("📐 PRIMARY: Joint Angle Error (degrees)")
+    print("=" * 60)
 
-    # --- 3b. Velocity / Acceleration Proxies ---
-    for y_idx, x_name in JOINT_MAPPING.items():
-        est_vel = compute_velocity(y_kpts_aligned[:, y_idx], y_ts)
-        gt_vel = compute_velocity(gt_tracks[x_name], y_ts)
-        vel_err = np.linalg.norm(est_vel - gt_vel, axis=1)
-        for i, curr_t in enumerate(y_ts):
-            if not np.isfinite(vel_err[i]):
-                continue
-            velocity_records.append(
-                {
-                    "Time": curr_t,
-                    "Activity": activity_labels[i],
-                    "Scenario": scenario_labels[i],
-                    "JointName": x_name,
-                    "Error": vel_err[i],
-                }
-            )
-    df_velocity = pd.DataFrame(velocity_records)
+    if not df_angles.empty:
+        # Per-joint angle error
+        angle_by_joint = df_angles.groupby("AngleName")["Error"].agg(
+            MAE="mean", Median="median", Std="std", Samples="count"
+        ).sort_values("MAE")
+        print("\n[Result] Per-Joint Angle MAE (°)")
+        print("-" * 50)
+        print(angle_by_joint.to_string())
 
-    for y_idx, x_name in JOINT_MAPPING.items():
-        est_acc = compute_acceleration(y_kpts_aligned[:, y_idx], y_ts)
-        gt_acc = compute_acceleration(gt_tracks[x_name], y_ts)
-        acc_err = np.linalg.norm(est_acc - gt_acc, axis=1)
-        for i, curr_t in enumerate(y_ts):
-            if not np.isfinite(acc_err[i]):
-                continue
-            accel_records.append(
-                {
-                    "Time": curr_t,
-                    "Activity": activity_labels[i],
-                    "Scenario": scenario_labels[i],
-                    "JointName": x_name,
-                    "Error": acc_err[i],
-                }
-            )
-    df_accel = pd.DataFrame(accel_records)
+        # Per-scenario angle error
+        angle_by_scenario = df_angles.groupby("Scenario")["Error"].agg(
+            MAE="mean", Median="median", Std="std", Samples="count"
+        ).sort_values("MAE")
+        print("\n[Result] Angle MAE by Scenario (°)")
+        print("-" * 50)
+        print(angle_by_scenario.to_string())
 
-    # --- 4. Core Metrics and Statistical Tables ---
-    core_metrics = pd.Series(
-        {
-            "MPJPE_cm": df_joints["Error"].mean(),
-            "Root_Mean_Error_cm": df_root["Error"].mean(),
-            "Median_Joint_Error_cm": df_joints["Error"].median(),
-            "P90_Joint_Error_cm": df_joints["Error"].quantile(0.90),
-            "P95_Joint_Error_cm": df_joints["Error"].quantile(0.95),
-            "Mean_Joint_Angle_Error_deg": df_angles["Error"].mean() if not df_angles.empty else np.nan,
-            "Pelvis_Velocity_Error_cm_s": df_velocity[df_velocity["JointName"] == "Pelvis"]["Error"].mean() if not df_velocity.empty else np.nan,
-            "Mean_Joint_Velocity_Error_cm_s": df_velocity["Error"].mean() if not df_velocity.empty else np.nan,
-            "Pelvis_Acceleration_Error_cm_s2": df_accel[df_accel["JointName"] == "Pelvis"]["Error"].mean() if not df_accel.empty else np.nan,
-            "Mean_Joint_Acceleration_Error_cm_s2": df_accel["Error"].mean() if not df_accel.empty else np.nan,
-            "Valid_Joint_Samples": int(len(df_joints)),
-            "Valid_Root_Samples": int(len(df_root)),
-            "Valid_Angle_Samples": int(len(df_angles)),
-            "Valid_Velocity_Samples": int(len(df_velocity)),
-            "Valid_Acceleration_Samples": int(len(df_accel)),
-        }
-    )
-    activity_stats = summarize_metric(df_joints, "Activity", "MPJPE_cm", "Median_cm", "Std_cm")
-    scenario_stats = summarize_metric(df_joints, "Scenario", "MPJPE_cm", "Median_cm", "Std_cm")
-    joint_stats = summarize_metric(df_joints, "JointName", "MPJPE_cm", "Median_cm", "Std_cm")
-    part_stats = summarize_metric(df_joints, "Part", "MPJPE_cm", "Median_cm", "Std_cm")
-    angle_stats = summarize_metric(df_angles, "AngleName", "AngleError_deg", "Median_deg", "Std_deg") if not df_angles.empty else pd.DataFrame()
-    velocity_stats = summarize_metric(df_velocity, "JointName", "VelocityError_cm_s", "Median_cm_s", "Std_cm_s") if not df_velocity.empty else pd.DataFrame()
-    accel_stats = summarize_metric(df_accel, "JointName", "AccelError_cm_s2", "Median_cm_s2", "Std_cm_s2") if not df_accel.empty else pd.DataFrame()
-    angle_scenario_stats = summarize_metric(df_angles, "Scenario", "AngleError_deg", "Median_deg", "Std_deg") if not df_angles.empty else pd.DataFrame()
-    velocity_scenario_stats = summarize_metric(df_velocity, "Scenario", "VelocityError_cm_s", "Median_cm_s", "Std_cm_s") if not df_velocity.empty else pd.DataFrame()
-    accel_scenario_stats = summarize_metric(df_accel, "Scenario", "AccelError_cm_s2", "Median_cm_s2", "Std_cm_s2") if not df_accel.empty else pd.DataFrame()
-    metric_overview = build_metric_overview(core_metrics)
-    ergonomic_overview = build_ergonomic_overview(core_metrics)
+        # Overall
+        overall_angle_mae = df_angles["Error"].mean()
+        overall_angle_med = df_angles["Error"].median()
+        print(f"\n[Result] Overall Joint Angle MAE:    {overall_angle_mae:.2f}°")
+        print(f"[Result] Overall Joint Angle Median: {overall_angle_med:.2f}°")
+        print(f"[Result] Total valid angle samples:  {len(df_angles)}")
 
-    print("\n[Result] Ergonomic Overview")
-    print("-" * 72)
-    print(ergonomic_overview[["Priority", "Dimension", "Metric", "Value", "Unit"]].to_string(index=False))
-
-    print("\n[Result] Metric Overview")
-    print("-" * 72)
-    for category in ["Visual", "Kinematic", "Dynamic", "Coverage"]:
-        section = metric_overview[metric_overview["Category"] == category][["Metric", "Value", "Unit"]]
-        print(f"\n[{category}]")
-        print(section.to_string(index=False))
-
-    print("\n[Result] MPJPE by Activity (cm)")
-    print("-" * 60)
-    print(activity_stats.to_string())
-
-    print("\n[Result] MPJPE by Scenario (cm)")
-    print("-" * 60)
-    print(scenario_stats)
-    
-    print("\n[Result] MPJPE by Joint (cm)")
-    print("-" * 60)
-    print(joint_stats.to_string())
-
-    print("\n[Result] MPJPE by Body Part (cm)")
-    print("-" * 60)
-    print(part_stats.to_string())
-
-    print("\n[Result] Body Part MPJPE in 'Environmental Interference' (cm)")
-    print("-" * 60)
-    chair_df = df_joints[df_joints['Scenario'] == 'Environmental Interference']
-    if not chair_df.empty:
-        print(summarize_metric(chair_df, 'Part', 'MPJPE_cm', 'Median_cm', 'Std_cm').to_string())
+        # RULA threshold classification accuracy for elbow (flexion)
+        elbow_df = df_angles[df_angles["AngleName"].str.contains("Elbow")]
+        if not elbow_df.empty:
+            thresholds = RULA_THRESHOLDS["LowerArm"]
+            est_classes = elbow_df["Estimated_deg"].apply(
+                lambda x: classify_angle_by_thresholds(abs(x), thresholds))
+            gt_classes = elbow_df["GroundTruth_deg"].apply(
+                lambda x: classify_angle_by_thresholds(abs(x), thresholds))
+            accuracy = (est_classes == gt_classes).mean()
+            print(f"\n[Result] Elbow RULA-category accuracy: {accuracy:.2%}")
     else:
-        print("No data captured in Environmental Interference region.")
+        print("[Warning] No valid angle samples computed.")
 
-    print("\n[Result] Joint Angle Error (deg)")
-    print("-" * 60)
-    if not angle_stats.empty:
-        print(angle_stats.to_string())
-    else:
-        print("No valid angle samples.")
+    if not df_trunk.empty:
+        print(f"\n[Result] Trunk Flexion MAE:    {df_trunk['Error'].mean():.2f}°")
+        print(f"[Result] Trunk Flexion Median: {df_trunk['Error'].median():.2f}°")
+        print(f"[Result] Trunk valid samples:  {len(df_trunk)}")
 
-    print("\n[Result] Joint Velocity Error (cm/s)")
-    print("-" * 60)
-    if not velocity_stats.empty:
-        print(velocity_stats.to_string())
-    else:
-        print("No valid velocity samples.")
+    print("\n" + "=" * 60)
+    print("📏 SUPPORTING: MPJPE (cm) — Spatial Reference Only")
+    print("=" * 60)
 
-    print("\n[Result] Joint Acceleration Error (cm/s^2)")
-    print("-" * 60)
-    if not accel_stats.empty:
-        print(accel_stats.to_string())
-    else:
-        print("No valid acceleration samples.")
+    if not df_mpjpe.empty:
+        overall_mpjpe = df_mpjpe["Error"].mean()
+        mpjpe_median = df_mpjpe["Error"].median()
+        print(f"\n[Result] Overall MPJPE:    {overall_mpjpe:.2f} cm")
+        print(f"[Result] Overall Median:   {mpjpe_median:.2f} cm")
 
-    print("\n[Result] Angle Error by Scenario (deg)")
-    print("-" * 60)
-    if not angle_scenario_stats.empty:
-        print(angle_scenario_stats.to_string())
-    else:
-        print("No valid angle samples.")
+        mpjpe_by_scenario = df_mpjpe.groupby("Scenario")["Error"].agg(
+            MPJPE="mean", Median="median", Samples="count"
+        ).sort_values("MPJPE")
+        print("\n[Result] MPJPE by Scenario (cm)")
+        print("-" * 50)
+        print(mpjpe_by_scenario.to_string())
 
-    print("\n[Result] Velocity Error by Scenario (cm/s)")
-    print("-" * 60)
-    if not velocity_scenario_stats.empty:
-        print(velocity_scenario_stats.to_string())
-    else:
-        print("No valid velocity samples.")
+    # --- 6. Save CSV results ---
+    core_metrics = {
+        "Joint_Angle_MAE_deg": df_angles["Error"].mean() if not df_angles.empty else np.nan,
+        "Joint_Angle_Median_deg": df_angles["Error"].median() if not df_angles.empty else np.nan,
+        "Trunk_Flexion_MAE_deg": df_trunk["Error"].mean() if not df_trunk.empty else np.nan,
+        "MPJPE_cm": df_mpjpe["Error"].mean() if not df_mpjpe.empty else np.nan,
+        "Valid_Angle_Samples": len(df_angles),
+        "Valid_Trunk_Samples": len(df_trunk),
+        "Valid_MPJPE_Samples": len(df_mpjpe),
+    }
+    pd.Series(core_metrics).to_frame("Value").to_csv(
+        os.path.join(RESULTS_DIR, "eval_core_metrics.csv"))
 
-    print("\n[Result] Acceleration Error by Scenario (cm/s^2)")
-    print("-" * 60)
-    if not accel_scenario_stats.empty:
-        print(accel_scenario_stats.to_string())
-    else:
-        print("No valid acceleration samples.")
+    if not df_angles.empty:
+        angle_by_joint.to_csv(os.path.join(RESULTS_DIR, "eval_angle_by_joint.csv"))
+        angle_by_scenario.to_csv(os.path.join(RESULTS_DIR, "eval_angle_by_scenario.csv"))
+    if not df_trunk.empty:
+        df_trunk.to_csv(os.path.join(RESULTS_DIR, "eval_trunk_flexion.csv"), index=False)
 
-    core_metrics_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_core_metrics.csv")
-    ergonomic_overview_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_ergonomic_overview.csv")
-    metric_overview_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_metric_overview.csv")
-    activity_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_mpjpe_by_activity.csv")
-    scenario_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_mpjpe_by_scenario.csv")
-    joint_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_mpjpe_by_joint.csv")
-    part_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_mpjpe_by_part.csv")
-    angle_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_angle_error_by_joint.csv")
-    velocity_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_velocity_error_by_joint.csv")
-    accel_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_acceleration_error_by_joint.csv")
-    angle_scenario_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_angle_error_by_scenario.csv")
-    velocity_scenario_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_velocity_error_by_scenario.csv")
-    accel_scenario_stats_path = os.path.join(SUMMARY_OUTPUT_DIR, "eval_acceleration_error_by_scenario.csv")
-
-    core_metrics.to_frame(name="Value").to_csv(core_metrics_path)
-    ergonomic_overview.to_csv(ergonomic_overview_path, index=False)
-    metric_overview.to_csv(metric_overview_path, index=False)
-    activity_stats.to_csv(activity_stats_path)
-    scenario_stats.to_csv(scenario_stats_path)
-    joint_stats.to_csv(joint_stats_path)
-    part_stats.to_csv(part_stats_path)
-    if not angle_stats.empty:
-        angle_stats.to_csv(angle_stats_path)
-    if not velocity_stats.empty:
-        velocity_stats.to_csv(velocity_stats_path)
-    if not accel_stats.empty:
-        accel_stats.to_csv(accel_stats_path)
-    if not angle_scenario_stats.empty:
-        angle_scenario_stats.to_csv(angle_scenario_stats_path)
-    if not velocity_scenario_stats.empty:
-        velocity_scenario_stats.to_csv(velocity_scenario_stats_path)
-    if not accel_scenario_stats.empty:
-        accel_scenario_stats.to_csv(accel_scenario_stats_path)
-
-    # --- 5. Visualization generation ---
-    print("\n[Info] Generating output plots...")
+    # --- 7. Visualization ---
+    print("\n[Info] Generating plots...")
     sns.set_theme(style="whitegrid")
-    
-    # Figure 1: Boxplot of Scenario Impact
-    plt.figure(figsize=(10, 6))
-    order = ['Baseline', 'Dynamic Action', 'Occlusion', 'Environmental Interference']
-    plot_df = df_joints[df_joints['Scenario'].isin(order)]
-    sns.boxplot(x='Scenario', y='Error', hue='Scenario', data=plot_df, order=order, palette="Set2", showfliers=False, legend=False)
-    plt.title('Scenario-wise Joint Error Distribution (MPJPE Samples)', fontsize=14)
-    plt.ylabel('Joint Position Error (cm)', fontsize=12)
-    plt.xlabel('Evaluation Scenario', fontsize=12)
-    scenario_plot_path = os.path.join(SRC_DIR, "eval_scenario_impact.png")
-    plt.savefig(scenario_plot_path, dpi=300, bbox_inches='tight')
-    
-    # Figure 2: Barplot of Mean Error by Detailed Activity
-    plt.figure(figsize=(12, 8))
-    order = activity_stats.index
-    sns.barplot(x='Error', y='Activity', hue='Activity', data=df_joints, order=order, palette="viridis", errorbar=None, legend=False)
-    plt.title('MPJPE by Activity Segment', fontsize=14)
-    plt.xlabel('Mean Joint Position Error (cm)', fontsize=12)
-    plt.ylabel('Activity Segment', fontsize=12)
-    plt.tight_layout()
-    activity_plot_path = os.path.join(SRC_DIR, "eval_activity_bar.png")
-    plt.savefig(activity_plot_path, dpi=300, bbox_inches='tight')
 
-    # Figure 3: Per-joint MPJPE ranking
-    plt.figure(figsize=(10, 6))
-    sns.barplot(
-        x=joint_stats["MPJPE_cm"].values,
-        y=joint_stats.index,
-        hue=joint_stats.index,
-        palette="mako",
-        legend=False,
-    )
-    plt.title('Per-joint MPJPE Ranking', fontsize=14)
-    plt.xlabel('MPJPE (cm)', fontsize=12)
-    plt.ylabel('Joint / Segment Proxy', fontsize=12)
-    plt.tight_layout()
-    joint_plot_path = os.path.join(SRC_DIR, "eval_joint_mpjpe_bar.png")
-    plt.savefig(joint_plot_path, dpi=300, bbox_inches='tight')
-
-    angle_plot_path = None
-    if not angle_stats.empty:
+    # Figure 1: Per-joint angle error bar chart
+    if not df_angles.empty:
         plt.figure(figsize=(10, 6))
         sns.barplot(
-            x=angle_stats["AngleError_deg"].values,
-            y=angle_stats.index,
-            hue=angle_stats.index,
-            palette="crest",
-            legend=False,
+            x=angle_by_joint["MAE"].values, y=angle_by_joint.index,
+            hue=angle_by_joint.index, palette="crest", legend=False,
         )
-        plt.title('Per-joint Angle Error Ranking', fontsize=14)
-        plt.xlabel('Mean Absolute Angle Error (deg)', fontsize=12)
-        plt.ylabel('Joint Angle', fontsize=12)
+        plt.title("Per-Joint Angle MAE (°)", fontsize=14)
+        plt.xlabel("Mean Absolute Error (degrees)", fontsize=12)
+        plt.ylabel("Joint", fontsize=12)
         plt.tight_layout()
-        angle_plot_path = os.path.join(SRC_DIR, "eval_joint_angle_error_bar.png")
-        plt.savefig(angle_plot_path, dpi=300, bbox_inches='tight')
+        path = os.path.join(SRC_DIR, "eval_angle_by_joint.png")
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+        print(f"[Info] Saved: {path}")
 
-    velocity_plot_path = None
-    if not velocity_stats.empty:
+    # Figure 2: Angle error by scenario
+    if not df_angles.empty:
         plt.figure(figsize=(10, 6))
-        sns.barplot(
-            x=velocity_stats["VelocityError_cm_s"].values,
-            y=velocity_stats.index,
-            hue=velocity_stats.index,
-            palette="flare",
-            legend=False,
-        )
-        plt.title('Per-joint Velocity Error Ranking', fontsize=14)
-        plt.xlabel('Mean Velocity Error (cm/s)', fontsize=12)
-        plt.ylabel('Joint / Segment Proxy', fontsize=12)
-        plt.tight_layout()
-        velocity_plot_path = os.path.join(SRC_DIR, "eval_joint_velocity_error_bar.png")
-        plt.savefig(velocity_plot_path, dpi=300, bbox_inches='tight')
+        order = ['Baseline', 'Dynamic Action', 'Occlusion', 'Environmental Interference']
+        plot_df = df_angles[df_angles['Scenario'].isin(order)]
+        if not plot_df.empty:
+            sns.boxplot(
+                x='Scenario', y='Error', hue='Scenario', data=plot_df,
+                order=order, palette="Set2", showfliers=False, legend=False,
+            )
+            plt.title("Joint Angle Error Distribution by Scenario", fontsize=14)
+            plt.ylabel("Absolute Angle Error (°)", fontsize=12)
+            plt.xlabel("Scenario", fontsize=12)
+            plt.tight_layout()
+            path = os.path.join(SRC_DIR, "eval_angle_by_scenario.png")
+            plt.savefig(path, dpi=300, bbox_inches='tight')
+            print(f"[Info] Saved: {path}")
 
-    accel_plot_path = None
-    if not accel_stats.empty:
-        plt.figure(figsize=(10, 6))
-        sns.barplot(
-            x=accel_stats["AccelError_cm_s2"].values,
-            y=accel_stats.index,
-            hue=accel_stats.index,
-            palette="rocket",
-            legend=False,
-        )
-        plt.title('Per-joint Acceleration Error Ranking', fontsize=14)
-        plt.xlabel('Mean Acceleration Error (cm/s^2)', fontsize=12)
-        plt.ylabel('Joint / Segment Proxy', fontsize=12)
+    # Figure 3: Trunk flexion comparison (time-series)
+    if not df_trunk.empty:
+        plt.figure(figsize=(14, 5))
+        plt.plot(df_trunk["Time"], df_trunk["GroundTruth_deg"],
+                 'k-', alpha=0.6, linewidth=1, label="Xsens GT (Pelvis_T8)")
+        plt.plot(df_trunk["Time"], df_trunk["Estimated_deg"],
+                 'r-', alpha=0.7, linewidth=1, label="Estimated (Stereo Vision)")
+        plt.title("Trunk Flexion: Ground Truth vs. Estimated", fontsize=14)
+        plt.xlabel("Time (s)", fontsize=12)
+        plt.ylabel("Trunk Flexion Angle (°)", fontsize=12)
+        plt.legend(fontsize=11)
         plt.tight_layout()
-        accel_plot_path = os.path.join(SRC_DIR, "eval_joint_accel_error_bar.png")
-        plt.savefig(accel_plot_path, dpi=300, bbox_inches='tight')
+        path = os.path.join(SRC_DIR, "eval_trunk_flexion_compare.png")
+        plt.savefig(path, dpi=300, bbox_inches='tight')
+        print(f"[Info] Saved: {path}")
 
-    print("[Info] Evaluation complete.")
-    print(f"[Info] Core metrics saved to: {core_metrics_path}")
-    print(f"[Info] Ergonomic overview saved to: {ergonomic_overview_path}")
-    print(f"[Info] Metric overview saved to: {metric_overview_path}")
-    print(f"[Info] Activity MPJPE table saved to: {activity_stats_path}")
-    print(f"[Info] Scenario MPJPE table saved to: {scenario_stats_path}")
-    print(f"[Info] Joint MPJPE table saved to: {joint_stats_path}")
-    print(f"[Info] Body-part MPJPE table saved to: {part_stats_path}")
-    if not angle_stats.empty:
-        print(f"[Info] Joint angle error table saved to: {angle_stats_path}")
-    if not velocity_stats.empty:
-        print(f"[Info] Velocity error table saved to: {velocity_stats_path}")
-    if not accel_stats.empty:
-        print(f"[Info] Acceleration error table saved to: {accel_stats_path}")
-    if not angle_scenario_stats.empty:
-        print(f"[Info] Scenario angle error table saved to: {angle_scenario_stats_path}")
-    if not velocity_scenario_stats.empty:
-        print(f"[Info] Scenario velocity error table saved to: {velocity_scenario_stats_path}")
-    if not accel_scenario_stats.empty:
-        print(f"[Info] Scenario acceleration error table saved to: {accel_scenario_stats_path}")
-    print(f"[Info] Plot generated: {scenario_plot_path}")
-    print(f"[Info] Plot generated: {activity_plot_path}")
-    print(f"[Info] Plot generated: {joint_plot_path}")
-    if angle_plot_path is not None:
-        print(f"[Info] Plot generated: {angle_plot_path}")
-    if velocity_plot_path is not None:
-        print(f"[Info] Plot generated: {velocity_plot_path}")
-    if accel_plot_path is not None:
-        print(f"[Info] Plot generated: {accel_plot_path}")
-    plt.show()
+    print("\n[Info] Evaluation complete.")
+
 
 if __name__ == "__main__":
     main()

@@ -75,9 +75,33 @@ RULA_THRESHOLDS = {
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 MVNX_PATH = os.path.join(PROJECT_ROOT, "..", "Xsens_ground_truth", "Aitor-001.mvnx")
-RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
-ALIGNMENT_SUMMARY_PATH = os.path.join(RESULTS_DIR, "alignment_summary.json")
+RESULTS_DIR = os.environ.get("POSE_RESULTS_DIR", os.path.join(PROJECT_ROOT, "results"))
+if not os.path.isabs(RESULTS_DIR):
+    RESULTS_DIR = os.path.join(PROJECT_ROOT, RESULTS_DIR)
+OUTPUT_TAG = os.environ.get("POSE_OUTPUT_TAG", "").strip()
+ALIGNMENT_SUMMARY_PATH = os.environ.get(
+    "POSE_ALIGNMENT_SUMMARY_NAME",
+    os.path.join(RESULTS_DIR, "alignment_summary.json"),
+)
+if not os.path.isabs(ALIGNMENT_SUMMARY_PATH):
+    ALIGNMENT_SUMMARY_PATH = os.path.join(RESULTS_DIR, ALIGNMENT_SUMMARY_PATH)
+SAVE_PLOTS = os.environ.get("POSE_SAVE_PLOTS", "1").lower() not in {"0", "false", "no"}
 os.makedirs(RESULTS_DIR, exist_ok=True)
+
+
+def tagged_name(filename):
+    if not OUTPUT_TAG:
+        return filename
+    stem, ext = os.path.splitext(filename)
+    return f"{stem}_{OUTPUT_TAG}{ext}"
+
+
+def resolve_results_path(filename):
+    return os.path.join(RESULTS_DIR, tagged_name(filename))
+
+
+def resolve_src_plot_path(filename):
+    return os.path.join(SRC_DIR, tagged_name(filename))
 
 
 def resolve_best_offset():
@@ -377,15 +401,20 @@ def main():
         "Valid_MPJPE_Samples": len(df_mpjpe),
     }
     pd.Series(core_metrics).to_frame("Value").to_csv(
-        os.path.join(RESULTS_DIR, "eval_core_metrics.csv"))
+        resolve_results_path("eval_core_metrics.csv"))
 
     if not df_angles.empty:
-        angle_by_joint.to_csv(os.path.join(RESULTS_DIR, "eval_angle_by_joint.csv"))
-        angle_by_scenario.to_csv(os.path.join(RESULTS_DIR, "eval_angle_by_scenario.csv"))
+        angle_by_joint.to_csv(resolve_results_path("eval_angle_by_joint.csv"))
+        angle_by_scenario.to_csv(resolve_results_path("eval_angle_by_scenario.csv"))
     if not df_trunk.empty:
-        df_trunk.to_csv(os.path.join(RESULTS_DIR, "eval_trunk_flexion.csv"), index=False)
+        df_trunk.to_csv(resolve_results_path("eval_trunk_flexion.csv"), index=False)
 
     # --- 7. Visualization ---
+    if not SAVE_PLOTS:
+        print("\n[Info] Plot generation disabled by POSE_SAVE_PLOTS=0")
+        print("\n✅ Evaluation complete!")
+        return
+
     print("\n[Info] Generating plots...")
     sns.set_theme(style="whitegrid")
 
@@ -400,7 +429,7 @@ def main():
         plt.xlabel("Mean Absolute Error (degrees)", fontsize=12)
         plt.ylabel("Joint", fontsize=12)
         plt.tight_layout()
-        path = os.path.join(SRC_DIR, "eval_angle_by_joint.png")
+        path = resolve_src_plot_path("eval_angle_by_joint.png")
         plt.savefig(path, dpi=300, bbox_inches='tight')
         print(f"[Info] Saved: {path}")
 
@@ -418,7 +447,7 @@ def main():
             plt.ylabel("Absolute Angle Error (°)", fontsize=12)
             plt.xlabel("Scenario", fontsize=12)
             plt.tight_layout()
-            path = os.path.join(SRC_DIR, "eval_angle_by_scenario.png")
+            path = resolve_src_plot_path("eval_angle_by_scenario.png")
             plt.savefig(path, dpi=300, bbox_inches='tight')
             print(f"[Info] Saved: {path}")
 
@@ -434,7 +463,7 @@ def main():
         plt.ylabel("Trunk Flexion Angle (°)", fontsize=12)
         plt.legend(fontsize=11)
         plt.tight_layout()
-        path = os.path.join(SRC_DIR, "eval_trunk_flexion_compare.png")
+        path = resolve_src_plot_path("eval_trunk_flexion_compare.png")
         plt.savefig(path, dpi=300, bbox_inches='tight')
         print(f"[Info] Saved: {path}")
 

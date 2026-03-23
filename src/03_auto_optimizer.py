@@ -221,7 +221,10 @@ def main():
         print(f"[Result] Mean Angle Corr.:   {best_angle_corr:.3f}")
     print("="*50)
 
-    alignment_summary_path = os.path.join(RESULTS_DIR, "alignment_summary.json")
+    alignment_summary_name = os.getenv("POSE_ALIGNMENT_SUMMARY_NAME", "alignment_summary.json")
+    alignment_summary_path = alignment_summary_name
+    if not os.path.isabs(alignment_summary_path):
+        alignment_summary_path = os.path.join(RESULTS_DIR, alignment_summary_path)
     with open(alignment_summary_path, "w", encoding="utf-8") as f:
         json.dump(
             {

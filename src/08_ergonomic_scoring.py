@@ -69,8 +69,33 @@ SCENARIO_MAPPING = {
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 MVNX_PATH = os.path.join(PROJECT_ROOT, "..", "Xsens_ground_truth", "Aitor-001.mvnx")
-RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
-ALIGNMENT_SUMMARY_PATH = os.path.join(RESULTS_DIR, "alignment_summary.json")
+RESULTS_DIR = os.environ.get("POSE_RESULTS_DIR", os.path.join(PROJECT_ROOT, "results"))
+if not os.path.isabs(RESULTS_DIR):
+    RESULTS_DIR = os.path.join(PROJECT_ROOT, RESULTS_DIR)
+OUTPUT_TAG = os.environ.get("POSE_OUTPUT_TAG", "").strip()
+ALIGNMENT_SUMMARY_PATH = os.environ.get(
+    "POSE_ALIGNMENT_SUMMARY_NAME",
+    os.path.join(RESULTS_DIR, "alignment_summary.json"),
+)
+if not os.path.isabs(ALIGNMENT_SUMMARY_PATH):
+    ALIGNMENT_SUMMARY_PATH = os.path.join(RESULTS_DIR, ALIGNMENT_SUMMARY_PATH)
+SAVE_PLOTS = os.environ.get("POSE_SAVE_PLOTS", "1").lower() not in {"0", "false", "no"}
+os.makedirs(RESULTS_DIR, exist_ok=True)
+
+
+def tagged_name(filename):
+    if not OUTPUT_TAG:
+        return filename
+    stem, ext = os.path.splitext(filename)
+    return f"{stem}_{OUTPUT_TAG}{ext}"
+
+
+def resolve_results_path(filename):
+    return os.path.join(RESULTS_DIR, tagged_name(filename))
+
+
+def resolve_src_plot_path(filename):
+    return os.path.join(SRC_DIR, tagged_name(filename))
 
 
 def resolve_best_offset():
@@ -440,8 +465,8 @@ def main():
     print(f"\n[Result] Risk Level Agreement: {risk_match:.1%}")
 
     # --- 6. Save ---
-    df.to_csv(os.path.join(RESULTS_DIR, "eval_rula_comparison.csv"), index=False)
-    scenario_agg.to_csv(os.path.join(RESULTS_DIR, "eval_rula_by_scenario.csv"))
+    df.to_csv(resolve_results_path("eval_rula_comparison.csv"), index=False)
+    scenario_agg.to_csv(resolve_results_path("eval_rula_by_scenario.csv"))
 
     summary = {
         "grand_score_exact_match": float(exact_match),
@@ -451,10 +476,15 @@ def main():
         "score_b_match": float(score_b_match),
         "total_valid_frames": int(len(df)),
     }
-    with open(os.path.join(RESULTS_DIR, "eval_rula_summary.json"), "w") as f:
+    with open(resolve_results_path("eval_rula_summary.json"), "w") as f:
         json.dump(summary, f, indent=2)
 
     # --- 7. Visualization ---
+    if not SAVE_PLOTS:
+        print("\n[Info] Plot generation disabled by POSE_SAVE_PLOTS=0")
+        print("\n✅ RULA evaluation complete!")
+        return
+
     print("\n[Info] Generating plots...")
     sns.set_theme(style="whitegrid")
 
@@ -473,7 +503,7 @@ def main():
     sns.heatmap(cm_risk, annot=True, fmt="d", cmap="Oranges", ax=axes[1], cbar=False)
     axes[1].set_title("RULA Risk Level: Confusion Matrix", fontsize=13)
     plt.tight_layout()
-    plt.savefig(os.path.join(SRC_DIR, "eval_rula_confusion.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(resolve_src_plot_path("eval_rula_confusion.png"), dpi=300, bbox_inches='tight')
 
     plt.figure(figsize=(14, 4))
     plt.plot(df["Time"], df["GT_Grand"], 'k-', alpha=0.5, linewidth=0.8, label="GT (Xsens)")
@@ -482,7 +512,7 @@ def main():
     plt.xlabel("Time (s)"); plt.ylabel("Grand Score (1–7)")
     plt.yticks(range(1, 8)); plt.legend()
     plt.tight_layout()
-    plt.savefig(os.path.join(SRC_DIR, "eval_rula_timeline.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(resolve_src_plot_path("eval_rula_timeline.png"), dpi=300, bbox_inches='tight')
 
     plt.figure(figsize=(10, 5))
     scenarios = scenario_agg.index.tolist()
@@ -492,7 +522,7 @@ def main():
     plt.xticks(x, scenarios, rotation=15, ha='right')
     plt.ylabel("Agreement (%)"); plt.title("RULA Grand Score Agreement by Scenario")
     plt.legend(); plt.tight_layout()
-    plt.savefig(os.path.join(SRC_DIR, "eval_rula_by_scenario.png"), dpi=300, bbox_inches='tight')
+    plt.savefig(resolve_src_plot_path("eval_rula_by_scenario.png"), dpi=300, bbox_inches='tight')
 
     print("[Info] RULA evaluation complete.")
 

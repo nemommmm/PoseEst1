@@ -25,10 +25,14 @@ from utils_mvnx import MvnxParser
 from pose_angle_utils import (
     DEFAULT_ANGLE_SMOOTH_RADIUS,
     SEMANTIC_ANGLE_VERSION,
+    apply_piecewise_calibration,
     build_gt_angle_interpolators,
     compute_aligned_trunk_flexion,
     compute_semantic_angle_sequence,
+    fit_piecewise_calibration,
+    load_calibration,
     median_filter_angle_sequence,
+    save_calibration,
 )
 
 # ================= Configuration =================
@@ -253,6 +257,38 @@ def main():
     est_angle_vals_v = est_angle_vals_v[uidx]
     est_ts_v -= est_ts_v[0]
 
+    # --- 3b. Optional piecewise angle calibration ---
+    ENABLE_CALIBRATION = os.environ.get("POSE_ANGLE_CALIBRATION", "0").lower() in {"1", "true", "yes"}
+    CALIBRATION_BINS = int(os.environ.get("POSE_CALIBRATION_BINS", "10"))
+    CALIBRATION_SAVE = os.environ.get("POSE_CALIBRATION_SAVE", "").strip()
+    CALIBRATION_LOAD = os.environ.get("POSE_CALIBRATION_LOAD", "").strip()
+    if ENABLE_CALIBRATION:
+        if CALIBRATION_LOAD and os.path.exists(CALIBRATION_LOAD):
+            print(f"[Info] Loading calibration from {CALIBRATION_LOAD}...")
+            calibrations = load_calibration(CALIBRATION_LOAD, est_angle_names)
+        else:
+            print(f"[Info] Fitting piecewise angle calibration ({CALIBRATION_BINS} bins)...")
+            calibrations = {}
+            for angle_idx, angle_name in enumerate(est_angle_names):
+                if angle_name not in gt_angle_interp:
+                    calibrations[angle_name] = None
+                    continue
+                est_col = est_angle_vals_v[:, angle_idx]
+                gt_col = gt_angle_interp[angle_name](est_ts_v - best_offset)
+                calibrations[angle_name] = fit_piecewise_calibration(est_col, gt_col, n_bins=CALIBRATION_BINS)
+            if CALIBRATION_SAVE:
+                save_calibration(CALIBRATION_SAVE, calibrations)
+                print(f"[Info] Calibration saved to {CALIBRATION_SAVE}")
+        for angle_idx, angle_name in enumerate(est_angle_names):
+            cal = calibrations.get(angle_name)
+            if cal is not None:
+                est_angle_vals_v[:, angle_idx] = apply_piecewise_calibration(
+                    est_angle_vals_v[:, angle_idx], cal
+                )
+                centers, corrections = cal
+                print(f"  {angle_name}: correction range [{corrections.min():+.1f}, {corrections.max():+.1f}]°")
+        print("[Info] Calibration applied.")
+
     # Kabsch alignment for MPJPE
     y_pelvis = (est_kpts_v[:, 11] + est_kpts_v[:, 12]) / 2.0
     errors = calculate_limb_error(est_kpts_v, GT_LIMB_LENGTHS)
@@ -331,6 +367,7 @@ def main():
     print("📐 PRIMARY: Joint Angle Error (degrees)")
     print("=" * 60)
 
+    elbow_rula_accuracy = np.nan
     if not df_angles.empty:
         # Per-joint angle error
         angle_by_joint = df_angles.groupby("AngleName")["Error"].agg(
@@ -363,8 +400,8 @@ def main():
                 lambda x: classify_angle_by_thresholds(abs(x), thresholds))
             gt_classes = elbow_df["GroundTruth_deg"].apply(
                 lambda x: classify_angle_by_thresholds(abs(x), thresholds))
-            accuracy = (est_classes == gt_classes).mean()
-            print(f"\n[Result] Elbow RULA-category accuracy: {accuracy:.2%}")
+            elbow_rula_accuracy = (est_classes == gt_classes).mean()
+            print(f"\n[Result] Elbow RULA-category accuracy: {elbow_rula_accuracy:.2%}")
     else:
         print("[Warning] No valid angle samples computed.")
 
@@ -394,6 +431,7 @@ def main():
     core_metrics = {
         "Joint_Angle_MAE_deg": df_angles["Error"].mean() if not df_angles.empty else np.nan,
         "Joint_Angle_Median_deg": df_angles["Error"].median() if not df_angles.empty else np.nan,
+        "Elbow_RULA_Accuracy": elbow_rula_accuracy,
         "Trunk_Flexion_MAE_deg": df_trunk["Error"].mean() if not df_trunk.empty else np.nan,
         "MPJPE_cm": df_mpjpe["Error"].mean() if not df_mpjpe.empty else np.nan,
         "Valid_Angle_Samples": len(df_angles),

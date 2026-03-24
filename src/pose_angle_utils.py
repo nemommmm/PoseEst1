@@ -1,4 +1,5 @@
 import math
+import os
 
 import numpy as np
 from scipy.interpolate import interp1d
@@ -9,16 +10,20 @@ from pose_postprocess import (
     LEFT_HIP,
     LEFT_KNEE,
     LEFT_SHOULDER,
+    LEFT_WRIST,
     RIGHT_ANKLE,
     RIGHT_ELBOW,
     RIGHT_HIP,
     RIGHT_KNEE,
     RIGHT_SHOULDER,
+    RIGHT_WRIST,
 )
 
 
-SEMANTIC_ANGLE_VERSION = "semantic_pose_angles_v1"
-DEFAULT_ANGLE_SMOOTH_RADIUS = 2
+SHOULDER_REFERENCE_MODE = os.environ.get("POSE_SHOULDER_REFERENCE_MODE", "midline").strip().lower()
+SEMANTIC_ANGLE_VERSION = f"semantic_pose_angles_v2_{SHOULDER_REFERENCE_MODE}"
+DEFAULT_ANGLE_SMOOTH_RADIUS = max(0, int(os.environ.get("POSE_ANGLE_SMOOTH_RADIUS", "2")))
+DEFAULT_WRIST_SMOOTH_RADIUS = max(0, int(os.environ.get("POSE_WRIST_SMOOTH_RADIUS", "0")))
 
 SEMANTIC_ANGLE_NAMES = (
     "LeftShoulder",
@@ -36,8 +41,10 @@ SEMANTIC_ANGLE_NAMES = (
 # shoulder quantity that best matches ergonomic scoring is the upper-arm ergo
 # angle rather than the anatomical shoulder joint angle.
 GT_ANGLE_SPECS = {
-    "LeftShoulder": {"source": "ergo", "label": "T8_LeftUpperArm", "axis": 2, "sign": 1.0},
-    "RightShoulder": {"source": "ergo", "label": "T8_RightUpperArm", "axis": 2, "sign": 1.0},
+    # Shoulders: use xz_mag (sqrt(x^2+z^2)) = total elevation in coronal+sagittal plane,
+    # which matches our geometric angle_between(upper_arm, torso_down) better than axis=2 alone.
+    "LeftShoulder": {"source": "ergo", "label": "T8_LeftUpperArm", "mode": "xz_mag"},
+    "RightShoulder": {"source": "ergo", "label": "T8_RightUpperArm", "mode": "xz_mag"},
     "LeftElbow": {"source": "joint", "label": "jLeftElbow", "axis": 2, "sign": 1.0},
     "RightElbow": {"source": "joint", "label": "jRightElbow", "axis": 2, "sign": 1.0},
     "LeftHip": {"source": "joint", "label": "jLeftHip", "axis": 2, "sign": 1.0},
@@ -76,7 +83,9 @@ def compute_semantic_joint_angles(pose):
     Compute ergonomically meaningful angles from a 3D pose.
 
     Angle semantics:
-    - Shoulder: upper-arm elevation relative to the torso-down vector.
+    - Shoulder: upper-arm elevation relative to the torso-down vector. The default
+      reference is the shared torso midline; an ipsilateral shoulder-hip vector
+      can be enabled for ablation via POSE_SHOULDER_REFERENCE_MODE=ipsilateral.
     - Elbow/Knee: hinge flexion (180 - interior angle).
     - Hip: flexion proxy using the ipsilateral shoulder-hip-knee chain. This is
       not a full anatomical hip decomposition, but it matches the current MVNX
@@ -84,17 +93,23 @@ def compute_semantic_joint_angles(pose):
     """
     angles = {name: np.nan for name in SEMANTIC_ANGLE_NAMES}
 
-    hip_mid = 0.5 * (pose[LEFT_HIP] + pose[RIGHT_HIP])
-    shoulder_mid = 0.5 * (pose[LEFT_SHOULDER] + pose[RIGHT_SHOULDER])
-    torso_down = hip_mid - shoulder_mid
+    if SHOULDER_REFERENCE_MODE == "ipsilateral":
+        left_shoulder_ref = pose[LEFT_HIP] - pose[LEFT_SHOULDER]
+        right_shoulder_ref = pose[RIGHT_HIP] - pose[RIGHT_SHOULDER]
+    else:
+        hip_mid = 0.5 * (pose[LEFT_HIP] + pose[RIGHT_HIP])
+        shoulder_mid = 0.5 * (pose[LEFT_SHOULDER] + pose[RIGHT_SHOULDER])
+        torso_down = hip_mid - shoulder_mid
+        left_shoulder_ref = torso_down
+        right_shoulder_ref = torso_down
 
     angles["LeftShoulder"] = angle_between_deg(
         pose[LEFT_ELBOW] - pose[LEFT_SHOULDER],
-        torso_down,
+        left_shoulder_ref,
     )
     angles["RightShoulder"] = angle_between_deg(
         pose[RIGHT_ELBOW] - pose[RIGHT_SHOULDER],
-        torso_down,
+        right_shoulder_ref,
     )
 
     left_elbow_interior = interior_angle_deg(pose[LEFT_SHOULDER], pose[LEFT_ELBOW], pose[9])
@@ -120,9 +135,38 @@ def compute_semantic_joint_angles(pose):
     return angles
 
 
-def compute_semantic_angle_sequence(keypoints_3d):
-    angle_values = np.full((len(keypoints_3d), len(SEMANTIC_ANGLE_NAMES)), np.nan, dtype=np.float64)
-    for frame_idx, pose in enumerate(keypoints_3d):
+def median_smooth_keypoints(keypoints_3d, joint_indices, radius):
+    """Apply per-axis median filter to specific joints across frames.
+
+    keypoints_3d: (N, J, 3) array.
+    joint_indices: list of joint indices to smooth.
+    radius: temporal radius (window = 2*radius+1 frames).
+    Returns a copy with smoothed joints.
+    """
+    if radius <= 0:
+        return keypoints_3d
+    kpts = np.array(keypoints_3d, dtype=np.float64)
+    N = len(kpts)
+    for j in joint_indices:
+        for axis in range(3):
+            col = kpts[:, j, axis]
+            smoothed = col.copy()
+            for i in range(N):
+                lo = max(0, i - radius)
+                hi = min(N, i + radius + 1)
+                finite = col[lo:hi][np.isfinite(col[lo:hi])]
+                if finite.size > 0:
+                    smoothed[i] = float(np.median(finite))
+            kpts[:, j, axis] = smoothed
+    return kpts
+
+
+def compute_semantic_angle_sequence(keypoints_3d, wrist_smooth_radius=DEFAULT_WRIST_SMOOTH_RADIUS):
+    kpts = np.asarray(keypoints_3d, dtype=np.float64)
+    if wrist_smooth_radius > 0:
+        kpts = median_smooth_keypoints(kpts, [LEFT_WRIST, RIGHT_WRIST], wrist_smooth_radius)
+    angle_values = np.full((len(kpts), len(SEMANTIC_ANGLE_NAMES)), np.nan, dtype=np.float64)
+    for frame_idx, pose in enumerate(kpts):
         pose_angles = compute_semantic_joint_angles(pose)
         for angle_idx, angle_name in enumerate(SEMANTIC_ANGLE_NAMES):
             angle_values[frame_idx, angle_idx] = pose_angles[angle_name]
@@ -170,8 +214,15 @@ def build_gt_angle_interpolators(mvnx, xsens_ts, xidx, specs=None):
         if raw is None:
             continue
 
-        sign = float(spec.get("sign", 1.0))
-        series = sign * raw[xidx, int(spec["axis"])]
+        mode = spec.get("mode", "axis")
+        if mode == "xz_mag":
+            # Total elevation magnitude in coronal+sagittal plane: sqrt(x^2 + z^2).
+            # Better match for absolute elevation angle (e.g. shoulder raise).
+            series = np.sqrt(raw[xidx, 0] ** 2 + raw[xidx, 2] ** 2)
+        else:
+            sign = float(spec.get("sign", 1.0))
+            series = sign * raw[xidx, int(spec["axis"])]
+
         interpolators[angle_name] = interp1d(
             xsens_ts,
             series,
@@ -180,6 +231,81 @@ def build_gt_angle_interpolators(mvnx, xsens_ts, xidx, specs=None):
             fill_value=np.nan,
         )
     return interpolators
+
+
+def fit_piecewise_calibration(est_values, gt_values, n_bins=10):
+    """Fit a piecewise-linear calibration mapping est -> corrected.
+
+    Returns (bin_centers, corrections) that can be used with np.interp.
+    Only uses finite pairs for fitting.
+    """
+    mask = np.isfinite(est_values) & np.isfinite(gt_values)
+    est_f = np.asarray(est_values)[mask]
+    gt_f = np.asarray(gt_values)[mask]
+    if len(est_f) < 20:
+        return None
+
+    bin_edges = np.percentile(est_f, np.linspace(0, 100, n_bins + 1))
+    bin_edges[0] = -np.inf
+    bin_edges[-1] = np.inf
+
+    centers = []
+    corrections = []
+    for b in range(n_bins):
+        m = (est_f >= bin_edges[b]) & (est_f < bin_edges[b + 1])
+        if m.sum() >= 5:
+            centers.append(float(np.mean(est_f[m])))
+            corrections.append(float(np.mean(gt_f[m] - est_f[m])))
+
+    if len(centers) < 2:
+        return None
+    return np.array(centers), np.array(corrections)
+
+
+def apply_piecewise_calibration(est_values, calibration):
+    """Apply piecewise-linear calibration to estimated angle values.
+
+    calibration: output of fit_piecewise_calibration, or None (no-op).
+    Returns corrected values (same shape).
+    """
+    if calibration is None:
+        return np.asarray(est_values, dtype=np.float64).copy()
+    centers, corrections = calibration
+    est = np.asarray(est_values, dtype=np.float64)
+    out = est.copy()
+    finite = np.isfinite(est)
+    out[finite] = est[finite] + np.interp(est[finite], centers, corrections)
+    return out
+
+
+def save_calibration(path, calibrations):
+    """Save per-joint calibration curves to an npz file.
+
+    calibrations: dict of angle_name -> (centers, corrections) or None.
+    """
+    data = {}
+    for name, cal in calibrations.items():
+        if cal is not None:
+            data[f"{name}__centers"] = cal[0]
+            data[f"{name}__corrections"] = cal[1]
+    np.savez(path, **data)
+
+
+def load_calibration(path, angle_names):
+    """Load per-joint calibration from npz file.
+
+    Returns dict of angle_name -> (centers, corrections) or None.
+    """
+    d = np.load(path)
+    result = {}
+    for name in angle_names:
+        c_key = f"{name}__centers"
+        r_key = f"{name}__corrections"
+        if c_key in d and r_key in d:
+            result[name] = (d[c_key], d[r_key])
+        else:
+            result[name] = None
+    return result
 
 
 def reduce_max_finite(values):

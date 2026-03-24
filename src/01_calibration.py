@@ -1,213 +1,219 @@
-import cv2
-import numpy as np
+import json
 import os
-import sys
 
-# Ensure utils.py can be imported from the same directory
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from utils import StereoDataLoader
+import numpy as np
 
-# ================= Configuration Area =================
+try:
+    from calibration_utils import (
+        calibrate_stereo_from_entries,
+        detect_circle_grid_pairs,
+        evaluate_calibration,
+        group_entries_by_pair,
+        score_validation_summary,
+        search_calibration_config,
+    )
+except ModuleNotFoundError as exc:
+    raise ModuleNotFoundError(
+        "01_calibration.py requires calibration_utils.py, but that module is missing from the current workspace. "
+        "The calibration pipeline is not reproducible until calibration_utils.py is restored."
+    ) from exc
+
+
 CURRENT_SCRIPT_PATH = os.path.abspath(__file__)
 SRC_DIR = os.path.dirname(CURRENT_SCRIPT_PATH)
 PROJECT_ROOT = os.path.dirname(SRC_DIR)
 DATA_DIR = os.path.join(PROJECT_ROOT, "Calibration_video")
 
-# Strategy: Include all available video pairs; rely on the algorithm to automatically clean bad data.
 VIDEO_PAIRS = [
-    # ("cap_0_left.avi", "cap_0_right.avi", "cap_0_left.txt", "cap_0_right.txt")]
-     ("cap_1_left.avi", "cap_1_right.avi", "cap_1_left.txt", "cap_1_right.txt")]
+    ("cap_0_left.avi", "cap_0_right.avi", "cap_0_left.txt", "cap_0_right.txt"),
+    ("cap_1_left.avi", "cap_1_right.avi", "cap_1_left.txt", "cap_1_right.txt"),
+]
 
-# Core Parameters
-PATTERN_SIZE = (5, 9)       # Asymmetric Circle Grid
-SQUARE_SIZE = 15.0          # Center distance 15cm
-MAX_ERROR_THRESHOLD = 1.0   # [Core Optimization] Only keep frames with single-camera error < 1.0 px
-# ======================================================
+PATTERN_SIZE = (5, 9)
+SQUARE_SIZE_CM = 15.0
+USE_CLUSTERING = os.environ.get("CALIB_USE_CLUSTERING", "1") == "1"
+PROMOTE_IF_IMPROVED = os.environ.get("CALIB_PROMOTE_IF_IMPROVED", "1") == "1"
 
-def calculate_reprojection_error(objpoints, imgpoints, rvecs, tvecs, mtx, dist):
-    """
-    Calculate single-camera reprojection error to filter out bad frames.
-    """
-    total_error = 0
-    errors_per_frame = []
-    
-    for i in range(len(objpoints)):
-        imgpoints2, _ = cv2.projectPoints(objpoints[i], rvecs[i], tvecs[i], mtx, dist)
-        error = cv2.norm(imgpoints[i], imgpoints2, cv2.NORM_L2) / len(imgpoints2)
-        errors_per_frame.append(error)
-        
-    return errors_per_frame
+OUTPUT_PATH = os.environ.get("CALIB_OUTPUT_PATH", os.path.join(SRC_DIR, "camera_params.npz"))
+CANDIDATE_OUTPUT_PATH = os.environ.get("CALIB_CANDIDATE_OUTPUT_PATH", os.path.join(SRC_DIR, "camera_params_candidate.npz"))
+SUMMARY_PATH = os.environ.get("CALIB_SUMMARY_PATH", os.path.join(SRC_DIR, "calibration_search_summary.json"))
 
-def calculate_epipolar_error(imgpoints_l, imgpoints_r, mtx_l, dist_l, mtx_r, dist_r, F):
-    """
-    Calculate Epipolar Error.
-    This metric measures whether a point in the left image precisely falls onto the 
-    corresponding epipolar line in the right image.
-    """
-    total_error = 0
-    total_points = 0
+CONFIG_GRID = [
+    {"reprojection_threshold_px": threshold, "use_rational_model": use_rational, "fix_intrinsic": fix_intrinsic}
+    for threshold in (0.35, 0.50, 0.75, 1.00)
+    for use_rational in (False, True)
+    for fix_intrinsic in (True, False)
+]
 
-    # Iterate through each frame
-    for i in range(len(imgpoints_l)):
-        n_pts = len(imgpoints_l[i])
-        
-        # 1. Points must be undistorted first
-        p_l = cv2.undistortPoints(imgpoints_l[i], mtx_l, dist_l, P=mtx_l)
-        p_r = cv2.undistortPoints(imgpoints_r[i], mtx_r, dist_r, P=mtx_r)
 
-        # 2. Compute epilines
-        lines1 = cv2.computeCorrespondEpilines(p_l, 1, F)
-        lines1 = lines1.reshape(-1, 3)
-        lines2 = cv2.computeCorrespondEpilines(p_r, 2, F)
-        lines2 = lines2.reshape(-1, 3)
+def save_camera_params(path, params):
+    np.savez(
+        path,
+        mtx_l=params["mtx_l"],
+        dist_l=params["dist_l"],
+        mtx_r=params["mtx_r"],
+        dist_r=params["dist_r"],
+        R=params["R"],
+        T=params["T"],
+        E=params["E"],
+        F=params["F"],
+    )
 
-        # 3. Calculate distance error from point to line
-        # Distance from points in right image to epilines from left image
-        for j in range(n_pts):
-            x, y = p_r[j][0]
-            a, b, c = lines1[j]
-            dist = abs(a*x + b*y + c) / np.sqrt(a**2 + b**2)
-            total_error += dist
 
-        # Distance from points in left image to epilines from right image
-        for j in range(n_pts):
-            x, y = p_l[j][0]
-            a, b, c = lines2[j]
-            dist = abs(a*x + b*y + c) / np.sqrt(a**2 + b**2)
-            total_error += dist
-            
-        total_points += (n_pts * 2) 
+def load_camera_params(path):
+    if not os.path.exists(path):
+        return None
+    data = np.load(path)
+    return {
+        "mtx_l": data["mtx_l"],
+        "dist_l": data["dist_l"],
+        "mtx_r": data["mtx_r"],
+        "dist_r": data["dist_r"],
+        "R": data["R"],
+        "T": data["T"],
+        "E": data["E"] if "E" in data.files else None,
+        "F": data["F"] if "F" in data.files else None,
+    }
 
-    return total_error / total_points
+
+def sanitize_for_json(obj):
+    if isinstance(obj, dict):
+        return {key: sanitize_for_json(value) for key, value in obj.items()}
+    if isinstance(obj, list):
+        return [sanitize_for_json(value) for value in obj]
+    if isinstance(obj, tuple):
+        return [sanitize_for_json(value) for value in obj]
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    if isinstance(obj, (np.floating,)):
+        return float(obj)
+    if isinstance(obj, (np.integer,)):
+        return int(obj)
+    if isinstance(obj, (np.bool_,)):
+        return bool(obj)
+    return obj
+
+
+def print_validation(title, summary):
+    metrics = summary["aggregate_mean_of_frame_metrics"]
+    print(f"\n{title}")
+    print("-" * len(title))
+    print(
+        "Vertical disparity mean / p95 (px): "
+        f"{metrics['vertical_disparity_px_mean']['mean']:.2f} / {metrics['vertical_disparity_px_p95']['mean']:.2f}"
+    )
+    print(
+        "Rigid alignment RMSE / plane RMS (cm): "
+        f"{metrics['rigid_alignment_rmse_cm']['mean']:.3f} / {metrics['plane_rms_cm']['mean']:.3f}"
+    )
+    print(
+        "Left / Right reprojection (px): "
+        f"{metrics['left_reprojection_px']['mean']:.3f} / {metrics['right_reprojection_px']['mean']:.3f}"
+    )
+    print(f"Composite score: {score_validation_summary(summary):.2f}")
+
 
 def main():
-    # 1. Prepare Object Points (Asymmetric Grid)
-    objp = np.zeros((PATTERN_SIZE[0] * PATTERN_SIZE[1], 3), np.float32)
-    for i in range(PATTERN_SIZE[1]): 
-        for j in range(PATTERN_SIZE[0]): 
-            x = (j + ((i % 2) * 0.5)) * SQUARE_SIZE
-            y = i * (SQUARE_SIZE / 2)
-            index = i * PATTERN_SIZE[0] + j
-            objp[index] = [x, y, 0]
+    print("🚀 Calibration optimization started")
+    print(f"[Info] Using circle-grid clustering: {USE_CLUSTERING}")
 
-    all_data = [] # Temporary storage for all raw data
-    
-    # --- Phase 1: Initial Scan (Collect all detectable frames) ---
-    print("🚀 Phase 1: Scanning all videos for initial collection...")
-    
-    for l_vid, r_vid, l_txt, r_txt in VIDEO_PAIRS:
-        l_path, r_path = os.path.join(DATA_DIR, l_vid), os.path.join(DATA_DIR, r_vid)
-        l_txt_path, r_txt_path = os.path.join(DATA_DIR, l_txt), os.path.join(DATA_DIR, r_txt)
-        
-        if not os.path.exists(l_path): continue
-        loader = StereoDataLoader(l_path, r_path, l_txt_path, r_txt_path)
-        
-        img_shape = None
-        count = 0
-        
-        while True:
-            frame_l, frame_r, fid, _ = loader.get_next_pair()
-            if frame_l is None: break
-            if img_shape is None: img_shape = frame_l.shape[:2][::-1]
-
-            gray_l = cv2.cvtColor(frame_l, cv2.COLOR_BGR2GRAY)
-            gray_r = cv2.cvtColor(frame_r, cv2.COLOR_BGR2GRAY)
-            
-            flags = cv2.CALIB_CB_ASYMMETRIC_GRID
-            found_l, corners_l = cv2.findCirclesGrid(gray_l, PATTERN_SIZE, flags=flags)
-            found_r, corners_r = cv2.findCirclesGrid(gray_r, PATTERN_SIZE, flags=flags)
-            
-            # If found in both, collect it first
-            if found_l and found_r:
-                all_data.append({
-                    'obj': objp,
-                    'img_l': corners_l,
-                    'img_r': corners_r,
-                    'video': l_vid,
-                    'fid': fid
-                })
-                count += 1
-                print(f"\r  -> {l_vid}: Collected {count} frames", end="")
-        
-        print("") # New line
-        loader.release()
-    
-    print(f"\n✅ Initial collection complete. Total raw frames: {len(all_data)}.")
-    if len(all_data) < 10: return
-
-    # --- Phase 2: Cleaning (Outlier Rejection) ---
-    print("\n🧹 Phase 2: Data Cleaning (Removing high-error frames)...")
-    
-    temp_obj = [d['obj'] for d in all_data]
-    temp_img_l = [d['img_l'] for d in all_data]
-    temp_img_r = [d['img_r'] for d in all_data]
-    
-    # Pre-calibration to get errors for each frame
-    ret_l, mtx_l, dist_l, rvecs_l, tvecs_l = cv2.calibrateCamera(temp_obj, temp_img_l, img_shape, None, None)
-    ret_r, mtx_r, dist_r, rvecs_r, tvecs_r = cv2.calibrateCamera(temp_obj, temp_img_r, img_shape, None, None)
-    
-    err_l = calculate_reprojection_error(temp_obj, temp_img_l, rvecs_l, tvecs_l, mtx_l, dist_l)
-    err_r = calculate_reprojection_error(temp_obj, temp_img_r, rvecs_r, tvecs_r, mtx_r, dist_r)
-    
-    # Filter elite frames
-    clean_obj = []
-    clean_img_l = []
-    clean_img_r = []
-    
-    kept_count = 0
-    for i in range(len(all_data)):
-        e_l = err_l[i]
-        e_r = err_r[i]
-        
-        # Only keep frames with error below threshold
-        if e_l < MAX_ERROR_THRESHOLD and e_r < MAX_ERROR_THRESHOLD:
-            clean_obj.append(all_data[i]['obj'])
-            clean_img_l.append(all_data[i]['img_l'])
-            clean_img_r.append(all_data[i]['img_r'])
-            kept_count += 1
-        else:
-            # Print rejected frame info for debugging (optional)
-            pass 
-            # print(f"❌ Rejecting bad frame {all_data[i]['fid']}: L={e_l:.2f}, R={e_r:.2f}")
-
-    print(f"✅ Cleaning complete! Kept {kept_count}/{len(all_data)} high-quality frames (Threshold: {MAX_ERROR_THRESHOLD} px)")
-
-    # --- Phase 3: Final High-Precision Calibration ---
-    print("\n🏆 Phase 3: Final Stereo Calibration...")
-    
-    # Strict termination criteria: 100 iterations or epsilon 1e-6
-    criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 1e-6)
-    
-    # Re-calculate single camera intrinsics using clean data
-    ret_l, mtx_l, dist_l, _, _ = cv2.calibrateCamera(clean_obj, clean_img_l, img_shape, None, None, criteria=criteria)
-    ret_r, mtx_r, dist_r, _, _ = cv2.calibrateCamera(clean_obj, clean_img_r, img_shape, None, None, criteria=criteria)
-
-    # Fix intrinsics to ensure stability
-    flags = cv2.CALIB_FIX_INTRINSIC
-    
-    ret, M1, d1, M2, d2, R, T, E, F = cv2.stereoCalibrate(
-        clean_obj, clean_img_l, clean_img_r,
-        mtx_l, dist_l,
-        mtx_r, dist_r,
-        img_shape,
-        criteria=criteria,
-        flags=flags
+    entries, image_size, per_pair_counts = detect_circle_grid_pairs(
+        DATA_DIR,
+        VIDEO_PAIRS,
+        PATTERN_SIZE,
+        SQUARE_SIZE_CM,
+        use_clustering=USE_CLUSTERING,
     )
-    
-    # --- Phase 4: Calculate Epipolar Error ---
-    epi_error = calculate_epipolar_error(clean_img_l, clean_img_r, M1, d1, M2, d2, F)
+    if image_size is None or len(entries) < 12:
+        raise RuntimeError("Not enough valid stereo circle-grid detections to calibrate")
 
-    print("="*50)
-    print(f"📊 Final Report (Based on {kept_count} optimized frames):")
-    print(f"✅ Reprojection Error (RMS): {ret:.4f} pixels")
-    print(f"✅ Epipolar Error:           {epi_error:.4f} pixels")
-    print(f"📏 Calculated Baseline:      {np.linalg.norm(T):.2f} cm")
-    print("="*50)
+    entries_by_pair = group_entries_by_pair(entries)
+    print(f"[Info] Image size: {image_size[0]} x {image_size[1]}")
+    print(f"[Info] Total detected stereo calibration frames: {len(entries)}")
+    for pair_name, count in per_pair_counts.items():
+        print(f"       {pair_name}: {count} frames")
 
-    # Save optimized parameters
-    save_path = os.path.join(SRC_DIR, "camera_params.npz")
-    np.savez(save_path, mtx_l=M1, dist_l=d1, mtx_r=M2, dist_r=d2, R=R, T=T)
-    print(f"💾 Optimized parameters saved to: {save_path}")
+    current_params = load_camera_params(OUTPUT_PATH)
+    current_validation = None
+    if current_params is not None:
+        current_validation = evaluate_calibration(entries, image_size, current_params, PATTERN_SIZE, SQUARE_SIZE_CM)
+        print_validation("Current camera_params.npz", current_validation)
+
+    best_result, search_results = search_calibration_config(
+        entries_by_pair,
+        image_size,
+        PATTERN_SIZE,
+        SQUARE_SIZE_CM,
+        CONFIG_GRID,
+    )
+    if best_result is None:
+        raise RuntimeError("Calibration config search failed for all candidates")
+
+    best_config = best_result["config"]
+    print("\n[Info] Best cross-validated config:")
+    print(
+        f"       threshold={best_config['reprojection_threshold_px']:.2f}px, "
+        f"rational={best_config['use_rational_model']}, "
+        f"fix_intrinsic={best_config['fix_intrinsic']}"
+    )
+    print(f"       mean holdout score={best_result['mean_validation_score']:.2f}")
+    print(
+        f"       mean holdout disparity={best_result['mean_holdout_vertical_disparity_px']:.2f}px, "
+        f"holdout rigid rmse={best_result['mean_holdout_rigid_rmse_cm']:.3f}cm"
+    )
+
+    final_params = calibrate_stereo_from_entries(
+        entries,
+        image_size,
+        reprojection_threshold_px=best_config["reprojection_threshold_px"],
+        use_rational_model=best_config["use_rational_model"],
+        fix_intrinsic=best_config["fix_intrinsic"],
+    )
+    if final_params is None:
+        raise RuntimeError("Final calibration failed with the selected config")
+
+    final_validation = evaluate_calibration(entries, image_size, final_params, PATTERN_SIZE, SQUARE_SIZE_CM)
+    print_validation("Candidate calibration (all pairs)", final_validation)
+
+    save_camera_params(CANDIDATE_OUTPUT_PATH, final_params)
+    print(f"[Info] Candidate parameters saved to: {CANDIDATE_OUTPUT_PATH}")
+
+    current_score = score_validation_summary(current_validation) if current_validation is not None else float("inf")
+    candidate_score = score_validation_summary(final_validation)
+    promoted = False
+    if PROMOTE_IF_IMPROVED and candidate_score < current_score:
+        save_camera_params(OUTPUT_PATH, final_params)
+        promoted = True
+        print(f"[Info] Candidate promoted to active camera params: {OUTPUT_PATH}")
+    elif current_validation is None and PROMOTE_IF_IMPROVED:
+        save_camera_params(OUTPUT_PATH, final_params)
+        promoted = True
+        print(f"[Info] Candidate promoted to active camera params: {OUTPUT_PATH}")
+    else:
+        print("[Info] Active camera params left unchanged.")
+
+    summary_payload = {
+        "image_size": list(image_size),
+        "use_clustering": USE_CLUSTERING,
+        "detected_frames_per_pair": per_pair_counts,
+        "total_detected_frames": len(entries),
+        "config_grid_size": len(CONFIG_GRID),
+        "best_crossval_result": best_result,
+        "top_search_results": sorted(search_results, key=lambda item: item["mean_validation_score"])[:5],
+        "current_validation": current_validation,
+        "candidate_validation": final_validation,
+        "current_score": current_score,
+        "candidate_score": candidate_score,
+        "candidate_kept_frames": int(final_params["kept_count"]),
+        "candidate_total_frames": int(final_params["total_count"]),
+        "candidate_output_path": CANDIDATE_OUTPUT_PATH,
+        "active_output_path": OUTPUT_PATH,
+        "promoted_to_active": promoted,
+    }
+    with open(SUMMARY_PATH, "w", encoding="utf-8") as f:
+        json.dump(sanitize_for_json(summary_payload), f, indent=2)
+    print(f"[Info] Search summary saved to: {SUMMARY_PATH}")
+
 
 if __name__ == "__main__":
     main()

@@ -9,9 +9,6 @@ import numpy as np
 from tqdm import tqdm
 from ultralytics import YOLO
 
-USE_RTMPOSE = os.environ.get("POSE_USE_RTMPOSE", "0") == "1"
-RTMPOSE_MODE = os.environ.get("POSE_RTMPOSE_MODE", "balanced")  # lightweight / balanced / performance
-
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from pose_postprocess import OneEuroFilter, estimate_bone_priors, postprocess_sequence
 from utils import StereoDataLoader
@@ -30,7 +27,7 @@ PARAM_PATH = os.path.join(SRC_DIR, "camera_params.npz")
 OUTPUT_TAG = os.environ.get("POSE_OUTPUT_TAG", "").strip()
 MODEL_NAME = os.environ.get("POSE_MODEL_NAME", "yolov8n-pose.pt")
 MODEL_PATH = os.path.join(SRC_DIR, MODEL_NAME)
-MODEL_SLUG = f"rtmpose_{RTMPOSE_MODE}" if USE_RTMPOSE else os.path.splitext(MODEL_NAME)[0].replace("-", "_")
+MODEL_SLUG = os.path.splitext(MODEL_NAME)[0].replace("-", "_")
 
 FULL_FRAME_CONF = float(os.environ.get("POSE_FULL_FRAME_CONF", "0.35"))
 CROP_CONF = float(os.environ.get("POSE_CROP_CONF", "0.20"))
@@ -255,90 +252,6 @@ def extract_candidates(result, offset_xy=(0.0, 0.0), source="full"):
             )
         )
     return candidates
-
-
-def extract_candidates_rtmpose(keypoints_all, scores_all, offset_xy=(0.0, 0.0), source="full"):
-    """Convert rtmlib Body output to DetectionCandidate list (same format as extract_candidates)."""
-    off_x, off_y = offset_xy
-    candidates = []
-    for kpts_xy, kpts_conf in zip(keypoints_all, scores_all):
-        kpts_xy = kpts_xy.copy().astype(np.float64)
-        kpts_conf = kpts_conf.copy().astype(np.float64)
-        kpts_xy[:, 0] += off_x
-        kpts_xy[:, 1] += off_y
-        valid_mask = np.isfinite(kpts_xy).all(axis=1) & (kpts_conf > 0)
-        if not valid_mask.any():
-            continue
-        x1 = kpts_xy[valid_mask, 0].min() - 20.0
-        y1 = kpts_xy[valid_mask, 1].min() - 20.0
-        x2 = kpts_xy[valid_mask, 0].max() + 20.0
-        y2 = kpts_xy[valid_mask, 1].max() + 20.0
-        bbox = np.array([x1, y1, x2, y2], dtype=np.float64)
-        candidates.append(
-            DetectionCandidate(
-                bbox=bbox,
-                keypoints=kpts_xy,
-                conf=kpts_conf,
-                det_conf=float(np.nanmean(kpts_conf)),
-                mean_conf=nanmean_subset(kpts_conf, np.arange(len(kpts_conf))),
-                torso_conf=nanmean_subset(kpts_conf, TORSO_JOINTS),
-                upper_conf=nanmean_subset(kpts_conf, UPPER_BODY_JOINTS),
-                area=float(bbox_area(bbox)),
-                source=source,
-            )
-        )
-    return candidates
-
-
-def infer_tracked_pose_rtmpose(rtm_body, frame, track_state, frame_idx):
-    """RTMPose variant of infer_tracked_pose — uses rtmlib Body instead of YOLO."""
-    frame_shape = frame.shape
-    attempts = []
-    if (
-        track_state.bbox is not None
-        and track_state.misses <= TRACK_MAX_MISSES
-        and frame_idx % REFULL_INTERVAL != 0
-    ):
-        x1, y1, x2, y2 = expand_bbox_to_crop(track_state.bbox, frame_shape, CROP_EXPAND)
-        crop = frame[y1:y2, x1:x2]
-        if crop.size > 0:
-            attempts.append(("crop", crop, (float(x1), float(y1))))
-    attempts.append(("full", frame, (0.0, 0.0)))
-
-    chosen = None
-    chosen_score = -np.inf
-    chosen_source = "none"
-    for source, image, offset_xy in attempts:
-        keypoints_all, scores_all = rtm_body(image)
-        if keypoints_all is None or len(keypoints_all) == 0:
-            continue
-        candidates = extract_candidates_rtmpose(keypoints_all, scores_all, offset_xy=offset_xy, source=source)
-        candidate, candidate_score = select_candidate(candidates, track_state.bbox, frame_shape)
-        if candidate is None:
-            continue
-        if source == "crop" and candidate_score >= MIN_CROP_ACCEPT_SCORE:
-            chosen = candidate
-            chosen_score = candidate_score
-            chosen_source = source
-            break
-        if candidate_score > chosen_score:
-            chosen = candidate
-            chosen_score = candidate_score
-            chosen_source = source
-
-    if chosen is not None:
-        track_state.bbox = chosen.bbox.copy()
-        track_state.misses = 0
-        track_state.last_score = chosen_score
-        track_state.last_source = chosen_source
-        return chosen, track_state
-
-    track_state.misses += 1
-    if track_state.misses > TRACK_MAX_MISSES:
-        track_state.bbox = None
-    track_state.last_score = float("nan")
-    track_state.last_source = "none"
-    return None, track_state
 
 
 def score_candidate(candidate, prev_bbox, frame_shape):
@@ -815,12 +728,7 @@ def main():
             "[Info] Temporal window triangulation rescue: "
             f"enabled (radius={TEMPORAL_WINDOW_RADIUS}, min_support={TEMPORAL_WINDOW_MIN_SUPPORT})"
         )
-    if USE_RTMPOSE:
-        from rtmlib import Body
-        model = Body(mode=RTMPOSE_MODE, backend="onnxruntime", device="cpu")
-        print(f"[Info] Using RTMPose (mode={RTMPOSE_MODE})")
-    else:
-        model = YOLO(MODEL_PATH)
+    model = YOLO(MODEL_PATH)
 
     loader = StereoDataLoader(
         os.path.join(DATA_DIR, "0_video_left.avi"),
@@ -879,12 +787,8 @@ def main():
         if frame_l is None:
             break
 
-        if USE_RTMPOSE:
-            candidate_l, track_left = infer_tracked_pose_rtmpose(model, frame_l, track_left, frame_idx)
-            candidate_r, track_right = infer_tracked_pose_rtmpose(model, frame_r, track_right, frame_idx)
-        else:
-            candidate_l, track_left = infer_tracked_pose(model, frame_l, track_left, frame_idx)
-            candidate_r, track_right = infer_tracked_pose(model, frame_r, track_right, frame_idx)
+        candidate_l, track_left = infer_tracked_pose(model, frame_l, track_left, frame_idx)
+        candidate_r, track_right = infer_tracked_pose(model, frame_r, track_right, frame_idx)
 
         pts_l = np.full((17, 2), np.nan, dtype=np.float64)
         pts_r = np.full((17, 2), np.nan, dtype=np.float64)

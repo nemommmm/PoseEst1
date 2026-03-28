@@ -29,6 +29,12 @@ MODEL_NAME = os.environ.get("POSE_MODEL_NAME", "yolov8n-pose.pt")
 MODEL_PATH = os.path.join(SRC_DIR, MODEL_NAME)
 MODEL_SLUG = os.path.splitext(MODEL_NAME)[0].replace("-", "_")
 
+USE_DENSE_STEREO = os.environ.get("POSE_USE_DENSE_STEREO", "0") == "1"
+SGBM_MIN_DISPARITY = int(os.environ.get("POSE_SGBM_MIN_DISPARITY", "100"))
+SGBM_NUM_DISPARITIES = int(os.environ.get("POSE_SGBM_NUM_DISPARITIES", "256"))
+SGBM_BLOCK_SIZE = int(os.environ.get("POSE_SGBM_BLOCK_SIZE", "9"))
+DISPARITY_LOOKUP_WINDOW = int(os.environ.get("POSE_DISPARITY_WINDOW", "5"))
+
 FULL_FRAME_CONF = float(os.environ.get("POSE_FULL_FRAME_CONF", "0.35"))
 CROP_CONF = float(os.environ.get("POSE_CROP_CONF", "0.20"))
 CROP_EXPAND = float(os.environ.get("POSE_TRACK_CROP_EXPAND", "1.55"))
@@ -675,6 +681,107 @@ def empty_bbox():
     return np.full(4, np.nan, dtype=np.float64)
 
 
+def compute_sgbm_disparity(frame_l_rect: np.ndarray, frame_r_rect: np.ndarray, sgbm) -> np.ndarray:
+    """Compute SGBM disparity map from a rectified stereo pair.
+
+    Args:
+        frame_l_rect: left rectified frame (BGR uint8).
+        frame_r_rect: right rectified frame (BGR uint8).
+        sgbm: cv2.StereoSGBM instance.
+
+    Returns:
+        disp: (H, W) float32 disparity map; NaN where disparity is invalid.
+    """
+    gray_l = cv2.cvtColor(frame_l_rect, cv2.COLOR_BGR2GRAY)
+    gray_r = cv2.cvtColor(frame_r_rect, cv2.COLOR_BGR2GRAY)
+    disp_raw = sgbm.compute(gray_l, gray_r).astype(np.float32) / 16.0
+    disp = disp_raw.copy()
+    disp[disp_raw < 0] = np.nan  # SGBM marks invalid pixels with -16 (raw) → -1.0 after /16
+    return disp
+
+
+def dense_triangulate_pose(
+    disp_map: np.ndarray,
+    rect_l: np.ndarray,
+    conf_l: np.ndarray,
+    Q: np.ndarray,
+    lookup_window: int = 5,
+) -> tuple:
+    """Triangulate 3D pose from an SGBM disparity map and left rectified keypoints.
+
+    Depth is obtained by looking up the disparity map at each keypoint position
+    using a small median window, then converting via the Q reprojection matrix.
+
+    Args:
+        disp_map: (H, W) float32 disparity map (NaN = invalid).
+        rect_l: (17, 2) rectified left keypoints (x, y).
+        conf_l: (17,) detection confidence for each keypoint.
+        Q: 4×4 reprojection matrix from cv2.stereoRectify.
+        lookup_window: side length of the median window used for disparity lookup.
+
+    Returns:
+        pose_3d: (17, 3) 3-D keypoints (same units as baseline, here cm); NaN if invalid.
+        stereo_quality: (17,) quality score in [0, 1].
+        disparity: (17,) disparity value at each keypoint (px); NaN if invalid.
+    """
+    num_joints = rect_l.shape[0]
+    pose_3d = np.full((num_joints, 3), np.nan, dtype=np.float64)
+    stereo_quality = np.full(num_joints, np.nan, dtype=np.float64)
+    disparity = np.full(num_joints, np.nan, dtype=np.float64)
+
+    H, W = disp_map.shape
+    hw = lookup_window // 2
+
+    # Decompose Q for manual reconstruction (avoids reprojectImageTo3D overhead).
+    # Q @ [x, y, d, 1]^T = [X, Y, Z, W]^T  →  3D = [X/W, Y/W, Z/W]
+    cx = -Q[0, 3]        # principal point x in rectified image
+    cy = -Q[1, 3]        # principal point y in rectified image
+    f = Q[2, 3]          # focal length in rectified image
+    inv_b = Q[3, 2]      # 1 / baseline  (positive)
+
+    for j in range(num_joints):
+        if not np.isfinite(rect_l[j]).all():
+            continue
+        c = conf_l[j]
+        if not np.isfinite(c) or c < 0.05:
+            continue
+
+        x, y = rect_l[j, 0], rect_l[j, 1]
+        xi, yi = int(round(x)), int(round(y))
+
+        x0, x1 = max(0, xi - hw), min(W, xi + hw + 1)
+        y0, y1 = max(0, yi - hw), min(H, yi + hw + 1)
+        if x0 >= x1 or y0 >= y1:
+            continue
+
+        window = disp_map[y0:y1, x0:x1]
+        valid_vals = window[np.isfinite(window) & (window >= SGBM_MIN_DISPARITY)]
+        if valid_vals.size == 0:
+            continue
+
+        d = float(np.median(valid_vals))
+        if d <= 0:
+            continue
+
+        W_val = d * inv_b
+        if abs(W_val) < 1e-9:
+            continue
+
+        X = (x - cx) / W_val
+        Y = (y - cy) / W_val
+        Z = f / W_val
+
+        if not np.isfinite([X, Y, Z]).all() or Z <= 0:
+            continue
+
+        pose_3d[j] = [X, Y, Z]
+        disparity[j] = d
+        fill_rate = valid_vals.size / max((x1 - x0) * (y1 - y0), 1)
+        stereo_quality[j] = float(c) * fill_rate
+
+    return pose_3d, stereo_quality, disparity
+
+
 def main():
     print("[Info] Starting batch 3D inference with tracked crops and weighted stereo triangulation...")
 
@@ -706,7 +813,7 @@ def main():
     h, w = frame_l.shape[:2]
     loader_test.release()
 
-    R1, R2, P1, P2, _, _, _ = cv2.stereoRectify(mtx_l, dist_l, mtx_r, dist_r, (w, h), R, T, alpha=0)
+    R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(mtx_l, dist_l, mtx_r, dist_r, (w, h), R, T, alpha=0)
 
     print("[Info] Loading YOLO model...")
     print(f"[Info] Using pose model: {os.path.basename(MODEL_PATH)}")
@@ -729,6 +836,28 @@ def main():
             f"enabled (radius={TEMPORAL_WINDOW_RADIUS}, min_support={TEMPORAL_WINDOW_MIN_SUPPORT})"
         )
     model = YOLO(MODEL_PATH)
+
+    sgbm = None
+    map1_l = map2_l = map1_r = map2_r = None
+    if USE_DENSE_STEREO:
+        map1_l, map2_l = cv2.initUndistortRectifyMap(mtx_l, dist_l, R1, P1, (w, h), cv2.CV_32FC1)
+        map1_r, map2_r = cv2.initUndistortRectifyMap(mtx_r, dist_r, R2, P2, (w, h), cv2.CV_32FC1)
+        sgbm = cv2.StereoSGBM_create(
+            minDisparity=SGBM_MIN_DISPARITY,
+            numDisparities=SGBM_NUM_DISPARITIES,
+            blockSize=SGBM_BLOCK_SIZE,
+            P1=8 * 3 * SGBM_BLOCK_SIZE**2,
+            P2=32 * 3 * SGBM_BLOCK_SIZE**2,
+            disp12MaxDiff=1,
+            uniquenessRatio=5,
+            speckleWindowSize=100,
+            speckleRange=2,
+            mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
+        )
+        print(
+            f"[Info] Dense stereo mode (SGBM): minDisp={SGBM_MIN_DISPARITY}, "
+            f"numDisp={SGBM_NUM_DISPARITIES}, block={SGBM_BLOCK_SIZE}"
+        )
 
     loader = StereoDataLoader(
         os.path.join(DATA_DIR, "0_video_left.avi"),
@@ -843,14 +972,25 @@ def main():
             epipolar_shift_right = np.zeros(17, dtype=np.float64)
             triang_conf_l = np.clip(conf_l.copy(), 0.0, 1.0)
             triang_conf_r = np.clip(conf_r.copy(), 0.0, 1.0)
-        pose_3d, reproj_error, pair_conf, epipolar_error, disparity, stereo_quality = triangulate_pose(
-            P1,
-            P2,
-            rect_l,
-            rect_r,
-            triang_conf_l,
-            triang_conf_r,
-        )
+        if USE_DENSE_STEREO:
+            frame_l_rect_full = cv2.remap(frame_l, map1_l, map2_l, cv2.INTER_LINEAR)
+            frame_r_rect_full = cv2.remap(frame_r, map1_r, map2_r, cv2.INTER_LINEAR)
+            disp_map = compute_sgbm_disparity(frame_l_rect_full, frame_r_rect_full, sgbm)
+            pose_3d, stereo_quality, disparity = dense_triangulate_pose(
+                disp_map, rect_l, triang_conf_l, Q, lookup_window=DISPARITY_LOOKUP_WINDOW
+            )
+            reproj_error = np.full(17, np.nan, dtype=np.float64)
+            pair_conf = triang_conf_l.copy()
+            epipolar_error = np.zeros(17, dtype=np.float64)
+        else:
+            pose_3d, reproj_error, pair_conf, epipolar_error, disparity, stereo_quality = triangulate_pose(
+                P1,
+                P2,
+                rect_l,
+                rect_r,
+                triang_conf_l,
+                triang_conf_r,
+            )
 
         all_timestamps.append(ts)
         all_keypoints_3d.append(pose_3d)
@@ -928,49 +1068,56 @@ def main():
     all_source_left = np.asarray(all_source_left, dtype="<U8")
     all_source_right = np.asarray(all_source_right, dtype="<U8")
 
-    rect_left_for_triangulation = all_keypoints_left_rect_raw.copy()
-    rect_right_for_triangulation = all_keypoints_right_rect_raw.copy()
-    triang_conf_left = np.clip(all_conf_left.copy(), 0.0, 1.0)
-    triang_conf_right = np.clip(all_conf_right.copy(), 0.0, 1.0)
+    if USE_DENSE_STEREO:
+        # Dense stereo path: 3D keypoints were computed per-frame in the loop.
+        # Skip temporal-window rescue and DLT re-triangulation — they require
+        # stereo keypoint pairs which are not used in the dense path.
+        pair_confidence = all_pair_conf
+        print("[Info] Dense stereo: skipping DLT re-triangulation pass.")
+    else:
+        rect_left_for_triangulation = all_keypoints_left_rect_raw.copy()
+        rect_right_for_triangulation = all_keypoints_right_rect_raw.copy()
+        triang_conf_left = np.clip(all_conf_left.copy(), 0.0, 1.0)
+        triang_conf_right = np.clip(all_conf_right.copy(), 0.0, 1.0)
 
-    if ENABLE_TEMPORAL_WINDOW_TRIANGULATION:
-        (
+        if ENABLE_TEMPORAL_WINDOW_TRIANGULATION:
+            (
+                rect_left_for_triangulation,
+                rect_right_for_triangulation,
+                triang_conf_left,
+                triang_conf_right,
+                temporal_rescue_left,
+                temporal_rescue_right,
+            ) = temporal_window_rescue_rectified(
+                rect_left_for_triangulation,
+                rect_right_for_triangulation,
+                triang_conf_left,
+                triang_conf_right,
+                all_timestamps,
+                all_keypoints_3d,
+                all_stereo_quality,
+            )
+
+        retriangulated = retriangulate_sequence(
+            P1,
+            P2,
             rect_left_for_triangulation,
             rect_right_for_triangulation,
             triang_conf_left,
             triang_conf_right,
-            temporal_rescue_left,
-            temporal_rescue_right,
-        ) = temporal_window_rescue_rectified(
-            rect_left_for_triangulation,
-            rect_right_for_triangulation,
-            triang_conf_left,
-            triang_conf_right,
-            all_timestamps,
-            all_keypoints_3d,
-            all_stereo_quality,
         )
-
-    retriangulated = retriangulate_sequence(
-        P1,
-        P2,
-        rect_left_for_triangulation,
-        rect_right_for_triangulation,
-        triang_conf_left,
-        triang_conf_right,
-    )
-    all_keypoints_3d = retriangulated["keypoints"]
-    all_reprojection_errors = retriangulated["reprojection_error"]
-    all_pair_conf = retriangulated["pair_confidence"]
-    all_epipolar_errors_pre = retriangulated["epipolar_error_pre"]
-    all_epipolar_errors = retriangulated["epipolar_error"]
-    all_disparity = retriangulated["disparity_px"]
-    all_stereo_quality = retriangulated["stereo_quality"]
-    all_keypoints_left_rect = retriangulated["keypoints_left_rect"]
-    all_keypoints_right_rect = retriangulated["keypoints_right_rect"]
-    all_epipolar_shift_left = retriangulated["epipolar_shift_left_px"]
-    all_epipolar_shift_right = retriangulated["epipolar_shift_right_px"]
-    pair_confidence = all_pair_conf
+        all_keypoints_3d = retriangulated["keypoints"]
+        all_reprojection_errors = retriangulated["reprojection_error"]
+        all_pair_conf = retriangulated["pair_confidence"]
+        all_epipolar_errors_pre = retriangulated["epipolar_error_pre"]
+        all_epipolar_errors = retriangulated["epipolar_error"]
+        all_disparity = retriangulated["disparity_px"]
+        all_stereo_quality = retriangulated["stereo_quality"]
+        all_keypoints_left_rect = retriangulated["keypoints_left_rect"]
+        all_keypoints_right_rect = retriangulated["keypoints_right_rect"]
+        all_epipolar_shift_left = retriangulated["epipolar_shift_left_px"]
+        all_epipolar_shift_right = retriangulated["epipolar_shift_right_px"]
+        pair_confidence = all_pair_conf
 
     finite_reproj = all_reprojection_errors[np.isfinite(all_reprojection_errors)]
     finite_epi_pre = all_epipolar_errors_pre[np.isfinite(all_epipolar_errors_pre)]

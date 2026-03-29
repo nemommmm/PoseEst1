@@ -1072,6 +1072,8 @@ def main():
         # Dense stereo path: 3D keypoints were computed per-frame in the loop.
         # Skip temporal-window rescue and DLT re-triangulation — they require
         # stereo keypoint pairs which are not used in the dense path.
+        triang_conf_left = np.clip(all_conf_left.copy(), 0.0, 1.0)
+        triang_conf_right = np.clip(all_conf_right.copy(), 0.0, 1.0)
         pair_confidence = all_pair_conf
         print("[Info] Dense stereo: skipping DLT re-triangulation pass.")
     else:

@@ -5,7 +5,9 @@ import cv2
 # ================= Path Configuration =================
 CURRENT_SCRIPT_PATH = os.path.abspath(__file__)
 SRC_DIR = os.path.dirname(CURRENT_SCRIPT_PATH)
-PARAM_PATH = os.path.join(SRC_DIR, "camera_params.npz")
+_METHOD_DIR = os.path.dirname(SRC_DIR)
+_PROJECT_ROOT = os.path.dirname(_METHOD_DIR)
+PARAM_PATH = os.path.join(_PROJECT_ROOT, "shared", "camera_params.npz")
 
 
 def distortion_model_name(dist):

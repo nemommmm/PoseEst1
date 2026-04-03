@@ -9,21 +9,23 @@ import numpy as np
 from tqdm import tqdm
 from ultralytics import YOLO
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))          # 01_stereo_triangulation/src/
+_METHOD_DIR = os.path.dirname(_SRC_DIR)                         # 01_stereo_triangulation/
+PROJECT_ROOT = os.path.dirname(_METHOD_DIR)                     # PoseEst1/
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "shared"))
 from pose_postprocess import OneEuroFilter, estimate_bone_priors, postprocess_sequence
 from utils import StereoDataLoader
 
 
 # ================= Configuration =================
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(PROJECT_ROOT, "2025_Ergonomics_Data")
-OUTPUT_DIR = os.environ.get("POSE_RESULTS_DIR", os.path.join(PROJECT_ROOT, "results"))
+OUTPUT_DIR = os.environ.get("POSE_RESULTS_DIR", os.path.join(_METHOD_DIR, "results"))
 if not os.path.isabs(OUTPUT_DIR):
-    OUTPUT_DIR = os.path.join(PROJECT_ROOT, OUTPUT_DIR)
+    OUTPUT_DIR = os.path.join(_METHOD_DIR, OUTPUT_DIR)
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-PARAM_PATH = os.path.join(SRC_DIR, "camera_params.npz")
+SRC_DIR = _SRC_DIR
+PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params.npz")
 OUTPUT_TAG = os.environ.get("POSE_OUTPUT_TAG", "").strip()
 MODEL_NAME = os.environ.get("POSE_MODEL_NAME", "yolov8n-pose.pt")
 MODEL_PATH = os.path.join(SRC_DIR, MODEL_NAME)

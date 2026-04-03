@@ -22,7 +22,10 @@ import sys
 import json
 from scipy.interpolate import interp1d
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))          # 01_stereo_triangulation/src/
+_METHOD_DIR = os.path.dirname(_SRC_DIR)                         # 01_stereo_triangulation/
+PROJECT_ROOT = os.path.dirname(_METHOD_DIR)                     # PoseEst1/
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "shared"))
 from utils_mvnx import MvnxParser
 from pose_postprocess import (LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_ELBOW,
     RIGHT_ELBOW, LEFT_HIP, RIGHT_HIP, LEFT_KNEE, RIGHT_KNEE, LEFT_ANKLE,
@@ -66,12 +69,11 @@ SCENARIO_MAPPING = {
 }
 # ================================================
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = _SRC_DIR
 MVNX_PATH = os.path.join(PROJECT_ROOT, "..", "Xsens_ground_truth", "Aitor-001.mvnx")
-RESULTS_DIR = os.environ.get("POSE_RESULTS_DIR", os.path.join(PROJECT_ROOT, "results"))
+RESULTS_DIR = os.environ.get("POSE_RESULTS_DIR", os.path.join(_METHOD_DIR, "results"))
 if not os.path.isabs(RESULTS_DIR):
-    RESULTS_DIR = os.path.join(PROJECT_ROOT, RESULTS_DIR)
+    RESULTS_DIR = os.path.join(_METHOD_DIR, RESULTS_DIR)
 OUTPUT_TAG = os.environ.get("POSE_OUTPUT_TAG", "").strip()
 ALIGNMENT_SUMMARY_PATH = os.environ.get(
     "POSE_ALIGNMENT_SUMMARY_NAME",

@@ -19,9 +19,12 @@ except ModuleNotFoundError as exc:
     ) from exc
 
 
+import sys
 CURRENT_SCRIPT_PATH = os.path.abspath(__file__)
-SRC_DIR = os.path.dirname(CURRENT_SCRIPT_PATH)
-PROJECT_ROOT = os.path.dirname(SRC_DIR)
+SRC_DIR = os.path.dirname(CURRENT_SCRIPT_PATH)     # 01_stereo_triangulation/src/
+_METHOD_DIR = os.path.dirname(SRC_DIR)              # 01_stereo_triangulation/
+PROJECT_ROOT = os.path.dirname(_METHOD_DIR)         # PoseEst1/
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "shared"))
 DATA_DIR = os.path.join(PROJECT_ROOT, "Calibration_video")
 
 VIDEO_PAIRS = [
@@ -34,9 +37,10 @@ SQUARE_SIZE_CM = 15.0
 USE_CLUSTERING = os.environ.get("CALIB_USE_CLUSTERING", "1") == "1"
 PROMOTE_IF_IMPROVED = os.environ.get("CALIB_PROMOTE_IF_IMPROVED", "1") == "1"
 
-OUTPUT_PATH = os.environ.get("CALIB_OUTPUT_PATH", os.path.join(SRC_DIR, "camera_params.npz"))
-CANDIDATE_OUTPUT_PATH = os.environ.get("CALIB_CANDIDATE_OUTPUT_PATH", os.path.join(SRC_DIR, "camera_params_candidate.npz"))
-SUMMARY_PATH = os.environ.get("CALIB_SUMMARY_PATH", os.path.join(SRC_DIR, "calibration_search_summary.json"))
+SHARED_DIR = os.path.join(PROJECT_ROOT, "shared")
+OUTPUT_PATH = os.environ.get("CALIB_OUTPUT_PATH", os.path.join(SHARED_DIR, "camera_params.npz"))
+CANDIDATE_OUTPUT_PATH = os.environ.get("CALIB_CANDIDATE_OUTPUT_PATH", os.path.join(SHARED_DIR, "camera_params_candidate.npz"))
+SUMMARY_PATH = os.environ.get("CALIB_SUMMARY_PATH", os.path.join(SHARED_DIR, "calibration_search_summary.json"))
 
 CONFIG_GRID = [
     {"reprojection_threshold_px": threshold, "use_rational_model": use_rational, "fix_intrinsic": fix_intrinsic}

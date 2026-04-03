@@ -32,16 +32,19 @@ import numpy as np
 
 matplotlib.use("Agg")
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))          # 02_dense_stereo_sgbm/src/
+_METHOD_DIR = os.path.dirname(_SRC_DIR)                         # 02_dense_stereo_sgbm/
+PROJECT_ROOT = os.path.dirname(_METHOD_DIR)                     # PoseEst1/
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "shared"))
 from utils import StereoDataLoader
 
 # ── Configuration ──────────────────────────────────────────────────────────────
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = _SRC_DIR
 DATA_DIR = os.path.join(PROJECT_ROOT, "2025_Ergonomics_Data")
-RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
-PARAM_PATH = os.path.join(SRC_DIR, "camera_params.npz")
-NPZ_PATH = os.path.join(RESULTS_DIR, "yolo_3d_raw.npz")
+RESULTS_DIR = os.path.join(_METHOD_DIR, "results")
+PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params.npz")
+# Reference triangulation results from Direction A (cross-method dependency)
+NPZ_PATH = os.path.join(PROJECT_ROOT, "01_stereo_triangulation", "results", "yolo_3d_raw.npz")
 
 SAMPLE_STEP = 30        # analyse every Nth frame
 LOOKUP_WINDOW = 5       # window size for median disparity lookup

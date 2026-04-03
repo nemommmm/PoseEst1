@@ -2,17 +2,18 @@
 import os, base64
 
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
-RESULTS_DIR = os.path.join(os.path.dirname(SRC_DIR), "results")
-PROJECT_ROOT = os.path.dirname(SRC_DIR)
+_METHOD_DIR = os.path.dirname(SRC_DIR)
+PROJECT_ROOT = os.path.dirname(_METHOD_DIR)
+RESULTS_DIR = os.path.join(_METHOD_DIR, "results")
 
 imgs_zh = {
     "evolution":    os.path.join(RESULTS_DIR, "report_error_evolution.png"),
     "pipeline":     os.path.join(RESULTS_DIR, "report_pipeline_diagram.png"),
     "cal_compare":  os.path.join(RESULTS_DIR, "report_calibration_comparison.png"),
-    "joint_cal":    os.path.join(SRC_DIR, "eval_angle_by_joint_calibrated.png"),
-    "scenario_cal": os.path.join(SRC_DIR, "eval_angle_by_scenario_calibrated.png"),
-    "rula_conf":    os.path.join(SRC_DIR, "eval_rula_confusion.png"),
-    "trunk":        os.path.join(SRC_DIR, "eval_trunk_flexion_compare_calibrated.png"),
+    "joint_cal":    os.path.join(RESULTS_DIR, "eval_angle_by_joint_calibrated.png"),
+    "scenario_cal": os.path.join(RESULTS_DIR, "eval_angle_by_scenario_calibrated.png"),
+    "rula_conf":    os.path.join(RESULTS_DIR, "eval_rula_confusion.png"),
+    "trunk":        os.path.join(RESULTS_DIR, "eval_trunk_flexion_compare_calibrated.png"),
 }
 imgs_en = {**imgs_zh,
     "evolution":   os.path.join(RESULTS_DIR, "report_error_evolution_en.png"),

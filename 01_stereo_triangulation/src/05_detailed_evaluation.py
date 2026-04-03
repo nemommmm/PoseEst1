@@ -20,7 +20,10 @@ import sys
 import json
 from scipy.interpolate import interp1d
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+_METHOD_DIR = os.path.dirname(_SRC_DIR)
+_PROJECT_ROOT = os.path.dirname(_METHOD_DIR)
+sys.path.insert(0, os.path.join(_PROJECT_ROOT, "shared"))
 from utils_mvnx import MvnxParser
 from pose_angle_utils import (
     DEFAULT_ANGLE_SMOOTH_RADIUS,
@@ -76,12 +79,12 @@ RULA_THRESHOLDS = {
 
 # ================================================
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+PROJECT_ROOT = _PROJECT_ROOT
+SRC_DIR = _SRC_DIR
 MVNX_PATH = os.path.join(PROJECT_ROOT, "..", "Xsens_ground_truth", "Aitor-001.mvnx")
-RESULTS_DIR = os.environ.get("POSE_RESULTS_DIR", os.path.join(PROJECT_ROOT, "results"))
+RESULTS_DIR = os.environ.get("POSE_RESULTS_DIR", os.path.join(_METHOD_DIR, "results"))
 if not os.path.isabs(RESULTS_DIR):
-    RESULTS_DIR = os.path.join(PROJECT_ROOT, RESULTS_DIR)
+    RESULTS_DIR = os.path.join(_METHOD_DIR, RESULTS_DIR)
 OUTPUT_TAG = os.environ.get("POSE_OUTPUT_TAG", "").strip()
 ALIGNMENT_SUMMARY_PATH = os.environ.get(
     "POSE_ALIGNMENT_SUMMARY_NAME",

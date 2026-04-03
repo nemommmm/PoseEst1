@@ -10,6 +10,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
+import sys
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))          # 01_stereo_triangulation/src/
+_METHOD_DIR = os.path.dirname(_SRC_DIR)                         # 01_stereo_triangulation/
+PROJECT_ROOT = os.path.dirname(_METHOD_DIR)                     # PoseEst1/
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "shared"))
+
 from pose_angle_utils import (
     DEFAULT_ANGLE_SMOOTH_RADIUS,
     SEMANTIC_ANGLE_VERSION,
@@ -21,14 +27,13 @@ from utils_mvnx import MvnxParser
 from utils import StereoDataLoader
 
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-SRC_DIR = os.path.dirname(os.path.abspath(__file__))
+SRC_DIR = _SRC_DIR
 DATA_DIR = os.path.join(PROJECT_ROOT, "2025_Ergonomics_Data")
-DEFAULT_RESULTS_DIR = os.path.join(PROJECT_ROOT, "results")
+DEFAULT_RESULTS_DIR = os.path.join(_METHOD_DIR, "results")
 RESULTS_DIR = os.environ.get("POSE_RESULTS_DIR", DEFAULT_RESULTS_DIR)
 if not os.path.isabs(RESULTS_DIR):
-    RESULTS_DIR = os.path.join(PROJECT_ROOT, RESULTS_DIR)
-PARAM_PATH = os.path.join(SRC_DIR, "camera_params.npz")
+    RESULTS_DIR = os.path.join(_METHOD_DIR, RESULTS_DIR)
+PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params.npz")
 RESULT_PATH = os.environ.get(
     "POSE_INPUT_PATH",
     os.path.join(DEFAULT_RESULTS_DIR, os.environ.get("POSE_INPUT_FILENAME", "yolo_3d_optimized.npz")),
@@ -39,7 +44,7 @@ TIMELINE_PATH = os.environ.get(
 )
 OUTPUT_FIG_PATH = os.environ.get(
     "POSE_OUTPUT_FIG_PATH",
-    os.path.join(SRC_DIR, "stereo_keypoint_mismatch_examples.png"),
+    os.path.join(RESULTS_DIR, "stereo_keypoint_mismatch_examples.png"),
 )
 OUTPUT_SUMMARY_PATH = os.environ.get(
     "POSE_OUTPUT_SUMMARY_PATH",

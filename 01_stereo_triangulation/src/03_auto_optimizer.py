@@ -7,7 +7,10 @@ from scipy.spatial.transform import Rotation as R
 from scipy.signal import medfilt
 from scipy.interpolate import interp1d
 
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+_SRC_DIR = os.path.dirname(os.path.abspath(__file__))          # 01_stereo_triangulation/src/
+_METHOD_DIR = os.path.dirname(_SRC_DIR)                         # 01_stereo_triangulation/
+PROJECT_ROOT = os.path.dirname(_METHOD_DIR)                     # PoseEst1/
+sys.path.insert(0, os.path.join(PROJECT_ROOT, "shared"))
 from utils_mvnx import MvnxParser
 
 # ================= 🤖 自动搜索配置 =================
@@ -21,8 +24,7 @@ GT_LIMB_LENGTHS = [38.6, 39.8, 40.3, 39.5]
 TOP_K = 150
 # =================================================
 
-PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-YOLO_DATA_PATH = os.path.join(PROJECT_ROOT, "results", "yolo_3d_raw.npz")
+YOLO_DATA_PATH = os.path.join(_METHOD_DIR, "results", "yolo_3d_raw.npz")
 MVNX_PATH = os.path.join(PROJECT_ROOT, "..", "Xsens_ground_truth", "Aitor-001.mvnx")
 
 def calculate_limb_error(kpts, gt_lengths):

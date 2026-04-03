@@ -1,0 +1,15 @@
+{
+  "input_video": "../../2025_Ergonomics_Data/0_video_left.avi",
+  "fps": 12.5,
+  "num_frames": 3015,
+  "video_info": {
+    "fps": 12.5,
+    "frame_count": 3015,
+    "width": 2048,
+    "height": 1536,
+    "duration": 241.2
+  },
+  "model_name": "rbarac/rtmpose3d",
+  "device": "cpu",
+  "inference_time": 2063.636730194092
+}

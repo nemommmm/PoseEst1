@@ -1,0 +1,60 @@
+
+---------------------------------------------------------------------
+OpenSim scaling and inverse kinematics for results_mono, for all frames.
+On Sunday 29. March 2026, 11:14:09
+Project directory: /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono
+---------------------------------------------------------------------
+
+Processing TRC file: /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/pose-3d/markers_results_mono.trc
+
+Scaling...
+	Done. OpenSim logs saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/opensim_logs.txt.
+	Scaled model saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/markers_results_mono_scaled.osim
+
+Inverse Kinematics...
+	Done. OpenSim logs saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/opensim_logs.txt.
+	Joint angle data saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/markers_results_mono.mot
+
+
+OpenSim scaling and inverse kinematics took 00h00m33s.
+
+
+---------------------------------------------------------------------
+OpenSim scaling and inverse kinematics for results_mono, for all frames.
+On Sunday 29. March 2026, 16:03:20
+Project directory: /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono
+---------------------------------------------------------------------
+
+Processing TRC file: /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/pose-3d/markers_results_mono.trc
+
+Scaling...
+	Done. OpenSim logs saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/opensim_logs.txt.
+	Scaled model saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/markers_results_mono_scaled.osim
+
+Inverse Kinematics...
+	Done. OpenSim logs saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/opensim_logs.txt.
+	Joint angle data saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/markers_results_mono.mot
+
+
+OpenSim scaling and inverse kinematics took 00h00m33s.
+
+
+---------------------------------------------------------------------
+OpenSim scaling and inverse kinematics for results_mono, for all frames.
+On Sunday 29. March 2026, 16:11:25
+Project directory: /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono
+---------------------------------------------------------------------
+
+Processing TRC file: /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/pose-3d/markers_results_mono.trc
+
+Scaling...
+	Done. OpenSim logs saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/opensim_logs.txt.
+	Scaled model saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/markers_results_mono_scaled.osim
+
+Inverse Kinematics...
+	Done. OpenSim logs saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/opensim_logs.txt.
+	Joint angle data saved to /Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/markers_results_mono.mot
+
+
+OpenSim scaling and inverse kinematics took 00h00m29s.
+

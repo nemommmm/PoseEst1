@@ -228,7 +228,10 @@ Calibration_video/
 # Generated experiment outputs
 results/
 src/*.png
+*.html
 
 # Ignore local output folders (generated parameters/results)
 output/
 results/
+CLAUDE.md
+AGENTS.md

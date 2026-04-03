@@ -1,0 +1,31 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<OpenSimDocument Version="40000">
+	<InverseKinematicsTool>
+		
+		<results_directory>./</results_directory>
+		
+		<model_file>/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/markers_results_mono_22markers.osim</model_file>
+		
+		<constraint_weight>Inf</constraint_weight>
+		
+		<accuracy>1.0000000000000001e-05</accuracy>
+		
+		<time_range>0.0 241.12</time_range>
+		
+		<output_motion_file>/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/kinematics/markers_results_mono.mot</output_motion_file>
+		
+		<report_errors>true</report_errors>
+		
+		<IKTaskSet>
+			<objects>
+				<IKMarkerTask name="Nose"><apply>true</apply><weight>0.1</weight></IKMarkerTask><IKMarkerTask name="Neck"><apply>true</apply><weight>0.2</weight></IKMarkerTask><IKMarkerTask name="LShoulder"><apply>true</apply><weight>2.0</weight></IKMarkerTask><IKMarkerTask name="RShoulder"><apply>true</apply><weight>2.0</weight></IKMarkerTask><IKMarkerTask name="LElbow"><apply>true</apply><weight>1.0</weight></IKMarkerTask><IKMarkerTask name="RElbow"><apply>true</apply><weight>1.0</weight></IKMarkerTask><IKMarkerTask name="LWrist"><apply>true</apply><weight>1.0</weight></IKMarkerTask><IKMarkerTask name="RWrist"><apply>true</apply><weight>1.0</weight></IKMarkerTask><IKMarkerTask name="LHip"><apply>true</apply><weight>2.0</weight></IKMarkerTask><IKMarkerTask name="RHip"><apply>true</apply><weight>2.0</weight></IKMarkerTask><IKMarkerTask name="LKnee"><apply>true</apply><weight>1.0</weight></IKMarkerTask><IKMarkerTask name="RKnee"><apply>true</apply><weight>1.0</weight></IKMarkerTask><IKMarkerTask name="LAnkle"><apply>true</apply><weight>1.0</weight></IKMarkerTask><IKMarkerTask name="RAnkle"><apply>true</apply><weight>1.0</weight></IKMarkerTask><IKMarkerTask name="LEye"><apply>true</apply><weight>0.05</weight></IKMarkerTask><IKMarkerTask name="REye"><apply>true</apply><weight>0.05</weight></IKMarkerTask><IKMarkerTask name="LThumb"><apply>true</apply><weight>0.2</weight></IKMarkerTask><IKMarkerTask name="LIndex"><apply>true</apply><weight>0.2</weight></IKMarkerTask><IKMarkerTask name="LPinky"><apply>true</apply><weight>0.2</weight></IKMarkerTask><IKMarkerTask name="RThumb"><apply>true</apply><weight>0.2</weight></IKMarkerTask><IKMarkerTask name="RIndex"><apply>true</apply><weight>0.2</weight></IKMarkerTask><IKMarkerTask name="RPinky"><apply>true</apply><weight>0.2</weight></IKMarkerTask><IKCoordinateTask name="L5_S1_Flex_Ext"><apply>true</apply><weight>0.1</weight><value_type>default_value</value_type><value>0</value></IKCoordinateTask><IKCoordinateTask name="pelvis_tilt"><apply>true</apply><weight>0.05</weight><value_type>default_value</value_type><value>0</value></IKCoordinateTask><IKCoordinateTask name="pelvis_list"><apply>true</apply><weight>0.005</weight><value_type>default_value</value_type><value>0</value></IKCoordinateTask><IKCoordinateTask name="hip_adduction_r"><apply>true</apply><weight>0.005</weight><value_type>default_value</value_type><value>0</value></IKCoordinateTask><IKCoordinateTask name="hip_adduction_l"><apply>true</apply><weight>0.005</weight><value_type>default_value</value_type><value>0</value></IKCoordinateTask></objects>
+			<groups />
+		</IKTaskSet>
+		
+		<marker_file>/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/monocular_baseline/results_mono/markers_results_mono.trc</marker_file>
+		
+		<coordinate_file>Unassigned</coordinate_file>
+		
+		<report_marker_locations>false</report_marker_locations>
+	</InverseKinematicsTool>
+</OpenSimDocument>

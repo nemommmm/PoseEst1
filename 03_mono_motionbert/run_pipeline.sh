@@ -47,11 +47,17 @@ echo ""
 echo "[run] Stage 1: RTMDet + RTMW + MotionBERT inference ..."
 conda run -n mmpose python "$AITOR_REPO/run_inference.py" \
     --input "$VIDEO_PATH" \
-    --output-dir "$OUT_DIR" \
+    --output "$OUT_DIR" \
     --device "$DEVICE"
 
 echo "[run] Stage 1 complete → video_outputs.json"
 echo ""
+
+JSON_FILE="$OUT_DIR/video_outputs.json"
+if [ ! -f "$JSON_FILE" ]; then
+    echo "[run] ERROR: Expected inference output not found: $JSON_FILE"
+    exit 1
+fi
 
 # ---------------------------------------------------------------------------
 # Stage 2: TRC generation + OpenSim IK  (~17 s)
@@ -59,8 +65,8 @@ echo ""
 # ---------------------------------------------------------------------------
 echo "[run] Stage 2: TRC markers + OpenSim IK ..."
 conda run -n mmpose python "$AITOR_REPO/run_hybrid_pipeline.py" \
-    --input "$VIDEO_PATH" \
-    --output-dir "$OUT_DIR" \
+    --input "$JSON_FILE" \
+    --output "$OUT_DIR" \
     --height "$HEIGHT_M" \
     --smooth "$SMOOTH"
 
@@ -78,5 +84,5 @@ else
     echo "[run] Joint angles: $MOT_FILE"
     echo ""
     echo "Next step → evaluate vs Xsens GT:"
-    echo "  MONO_MOT_PATH=\"$MOT_FILE\" /opt/anaconda3/envs/pose/bin/python evaluate_vs_gt.py"
+    echo "  MONO_TRC_PATH=\"$OUT_DIR/markers_results_mono.trc\" /opt/anaconda3/envs/pose/bin/python evaluate_vs_gt.py"
 fi

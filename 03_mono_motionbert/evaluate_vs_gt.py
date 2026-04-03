@@ -32,10 +32,13 @@ from scipy.interpolate import interp1d
 # ---------------------------------------------------------------------------
 SCRIPT_DIR   = os.path.dirname(os.path.abspath(__file__))
 PROJECT_ROOT = os.path.dirname(SCRIPT_DIR)
-SRC_DIR      = os.path.join(PROJECT_ROOT, "src")
+SHARED_DIR   = os.path.join(PROJECT_ROOT, "shared")
 
 MVNX_PATH   = os.path.join(PROJECT_ROOT, "..", "Xsens_ground_truth", "Aitor-001.mvnx")
-ALIGN_JSON  = os.path.join(PROJECT_ROOT, "results", "alignment_summary.json")
+ALIGN_JSON  = os.environ.get(
+    "MONO_ALIGNMENT_JSON",
+    os.path.join(PROJECT_ROOT, "01_stereo_triangulation", "results", "alignment_summary.json"),
+)
 OUT_DIR     = os.path.join(SCRIPT_DIR, "results_mono")
 
 DEFAULT_TRC = os.path.join(OUT_DIR, "markers_results_mono.trc")
@@ -235,8 +238,8 @@ def _rula_grand(shoulder, elbow, trunk, knee):
 
 def main() -> None:
     os.makedirs(OUT_DIR, exist_ok=True)
-    if SRC_DIR not in sys.path:
-        sys.path.insert(0, SRC_DIR)
+    if SHARED_DIR not in sys.path:
+        sys.path.insert(0, SHARED_DIR)
     from utils_mvnx import MvnxParser
     from pose_angle_utils import build_gt_angle_interpolators
 

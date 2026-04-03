@@ -2,9 +2,12 @@
 """
 Render a diagnostic 3D skeleton video from monocular TRC output.
 
-By default the video shows a synchronized comparison:
-- left: monocular reconstruction
-- right: Xsens GT reference
+The rendered comparison uses a shared coordinate system:
+- monocular TRC is mapped into Xsens space with a similarity transform
+- both skeletons are projected with the same camera, center, and scale
+
+This makes the per-frame spatial gap visually meaningful instead of showing
+two independently normalized skeletons.
 
 The raw video is upside-down, but monocular inference already rotates it by
 180 degrees inside RTMDet-MotionBert-OpenSim/run_inference.py, so the TRC is
@@ -200,6 +203,55 @@ def compute_scene_stats(marker_names: list[str], positions: np.ndarray, vertical
     return center, scale, upright_ok
 
 
+def umeyama_similarity(source_xyz: np.ndarray, target_xyz: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
+    """Estimate a similarity transform from source to target points."""
+    if source_xyz.shape != target_xyz.shape:
+        raise ValueError("Source and target point clouds must share shape.")
+    if len(source_xyz) < 3:
+        raise ValueError("At least 3 correspondences are required for similarity alignment.")
+
+    src_mean = np.mean(source_xyz, axis=0)
+    tgt_mean = np.mean(target_xyz, axis=0)
+    src_centered = source_xyz - src_mean
+    tgt_centered = target_xyz - tgt_mean
+
+    cov = (tgt_centered.T @ src_centered) / float(len(source_xyz))
+    u, singular_vals, vt = np.linalg.svd(cov)
+    correction = np.eye(3, dtype=np.float64)
+    if np.linalg.det(u) * np.linalg.det(vt) < 0.0:
+        correction[-1, -1] = -1.0
+
+    rotation = u @ correction @ vt
+    src_var = np.mean(np.sum(src_centered ** 2, axis=1))
+    if src_var < 1e-8:
+        raise ValueError("Source point cloud variance is too small for similarity alignment.")
+    scale = float(np.sum(singular_vals * np.diag(correction)) / src_var)
+    translation = tgt_mean - scale * (rotation @ src_mean)
+    return scale, rotation, translation
+
+
+def fit_similarity_from_sequences(mono_xyz: np.ndarray, xsens_xyz: np.ndarray) -> tuple[float, np.ndarray, np.ndarray, int]:
+    """Fit a single similarity transform across all valid frame-marker pairs."""
+    mono_flat = mono_xyz.reshape(-1, 3)
+    xsens_flat = xsens_xyz.reshape(-1, 3)
+    finite = np.isfinite(mono_flat).all(axis=1) & np.isfinite(xsens_flat).all(axis=1)
+    correspondence_count = int(np.count_nonzero(finite))
+    if correspondence_count < 30:
+        raise ValueError("Not enough finite correspondences to align mono and Xsens sequences.")
+    scale, rotation, translation = umeyama_similarity(mono_flat[finite], xsens_flat[finite])
+    return scale, rotation, translation, correspondence_count
+
+
+def apply_similarity(points_xyz: np.ndarray, scale: float, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
+    """Apply a similarity transform to a batch of 3D points."""
+    transformed = np.full_like(points_xyz, np.nan, dtype=np.float64)
+    finite = np.isfinite(points_xyz).all(axis=-1)
+    if not np.any(finite):
+        return transformed
+    transformed[finite] = scale * (points_xyz[finite] @ rotation.T) + translation
+    return transformed
+
+
 def project_points(
     points_xyz: np.ndarray,
     center_xyz: np.ndarray,
@@ -254,6 +306,22 @@ def draw_skeleton(
         px, py = np.round(projected[idx]).astype(int)
         cv2.circle(image, (px, py), 5, point_color, thickness=-1, lineType=cv2.LINE_AA)
         cv2.circle(image, (px, py), 5, (18, 18, 18), thickness=1, lineType=cv2.LINE_AA)
+
+
+def draw_correspondence_lines(
+    image: np.ndarray,
+    mono_proj: np.ndarray,
+    mono_mask: np.ndarray,
+    xsens_proj: np.ndarray,
+    xsens_mask: np.ndarray,
+    color: tuple[int, int, int] = (110, 110, 110),
+) -> None:
+    """Draw connector lines between corresponding mono and Xsens joints."""
+    valid = mono_mask & xsens_mask
+    for idx in np.flatnonzero(valid):
+        p1 = tuple(np.round(mono_proj[idx]).astype(int))
+        p2 = tuple(np.round(xsens_proj[idx]).astype(int))
+        cv2.line(image, p1, p2, color, 1, lineType=cv2.LINE_AA)
 
 
 def extract_trc_body(marker_names: list[str], positions: np.ndarray) -> tuple[list[str], np.ndarray]:
@@ -419,7 +487,6 @@ def main() -> None:
 
     body_names, mono_body = extract_trc_body(marker_names, trc_positions)
     mono_edges = build_edges(body_names, BODY_EDGES)
-    mono_center, mono_scale, mono_upright_ok = compute_scene_stats(body_names, mono_body, vertical_axis=1)
 
     mono_angles = compute_geometric_angles(marker_names, trc_positions)
     shoulder_deg = np.nanmax(np.stack([mono_angles["RightShoulder"], mono_angles["LeftShoulder"]], axis=1), axis=1)
@@ -439,10 +506,27 @@ def main() -> None:
     xsens_edges = build_edges(body_names, BODY_EDGES)
     xsens_center, xsens_scale, xsens_upright_ok = compute_scene_stats(body_names, xsens_body_aligned, vertical_axis=1)
 
+    similarity_scale, similarity_rotation, similarity_translation, match_count = fit_similarity_from_sequences(
+        mono_body,
+        xsens_body_aligned,
+    )
+    mono_body_aligned = apply_similarity(mono_body, similarity_scale, similarity_rotation, similarity_translation)
+    _, _, mono_upright_ok = compute_scene_stats(body_names, mono_body_aligned, vertical_axis=1)
+
+    combined_positions = np.concatenate([mono_body_aligned, xsens_body_aligned], axis=1)
+    shared_center, shared_scale, _ = compute_scene_stats(
+        body_names + body_names,
+        combined_positions,
+        vertical_axis=1,
+    )
+
     aligned_ts, angle_errors, mean_angle_error, rula_gt = prepare_error_arrays(trc_ts, mono_angles, rula_est, mvnx, offset_sec)
+    joint_distance_cm = np.linalg.norm(mono_body_aligned - xsens_body_aligned, axis=2)
+    mean_joint_distance = np.nanmean(joint_distance_cm, axis=1)
+    max_joint_distance = np.nanmax(joint_distance_cm, axis=1)
+    pelvis_distance = np.nanmean(joint_distance_cm[:, [8, 9]], axis=1)
 
     canvas = np.full((args.height, args.width, 3), 20, dtype=np.uint8)
-    split_x = args.width // 2
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(output_mp4), fourcc, fps, (args.width, args.height))
     if not writer.isOpened():
@@ -452,17 +536,17 @@ def main() -> None:
         for frame_idx, timestamp in enumerate(trc_ts):
             frame = canvas.copy()
 
-            mono_points = mono_body[frame_idx]
+            mono_points = mono_body_aligned[frame_idx]
             mono_finite = np.isfinite(mono_points).all(axis=1)
             mono_proj = np.full((len(mono_points), 2), np.nan, dtype=np.float64)
             mono_depth = np.full(len(mono_points), np.nan, dtype=np.float64)
             if np.any(mono_finite):
                 mono_proj_valid, mono_depth_valid = project_points(
                     mono_points[mono_finite],
-                    mono_center,
-                    mono_scale,
+                    shared_center,
+                    shared_scale,
                     0,
-                    split_x,
+                    args.width,
                     args.height,
                     args.azimuth,
                     args.elevation,
@@ -479,10 +563,10 @@ def main() -> None:
             if np.any(xsens_finite):
                 xsens_proj_valid, xsens_depth_valid = project_points(
                     xsens_points[xsens_finite],
-                    xsens_center,
-                    xsens_scale,
-                    split_x,
-                    split_x,
+                    shared_center,
+                    shared_scale,
+                    0,
+                    args.width,
                     args.height,
                     args.azimuth,
                     args.elevation,
@@ -490,41 +574,33 @@ def main() -> None:
                 )
                 xsens_proj[xsens_finite] = xsens_proj_valid
                 xsens_depth[xsens_finite] = xsens_depth_valid
+            draw_correspondence_lines(frame, mono_proj, mono_finite, xsens_proj, xsens_finite)
             draw_skeleton(frame, xsens_proj, xsens_depth, xsens_finite, xsens_edges, (144, 235, 144), (255, 255, 255))
-
-            cv2.line(frame, (split_x, 0), (split_x, args.height), (44, 66, 88), 2, cv2.LINE_AA)
             draw_text_block(
                 frame,
                 26,
-                "Monocular reconstruction",
+                "Shared-frame overlay",
                 [
                     f"t(video): {float(timestamp):6.2f}s",
-                    f"RULA est: {rula_est[frame_idx]:4.1f}" if np.isfinite(rula_est[frame_idx]) else "RULA est: n/a",
-                    f"Mean angle error: {mean_angle_error[frame_idx]:5.1f} deg" if np.isfinite(mean_angle_error[frame_idx]) else "Mean angle error: n/a",
-                ],
-                split_x,
-            )
-            draw_text_block(
-                frame,
-                split_x + 26,
-                "Xsens GT reference",
-                [
                     f"t(gt): {aligned_ts[frame_idx]:6.2f}s",
-                    f"RULA gt: {rula_gt[frame_idx]:4.1f}" if np.isfinite(rula_gt[frame_idx]) else "RULA gt: n/a",
-                    f"RULA delta: {abs(rula_est[frame_idx] - rula_gt[frame_idx]):4.1f}"
+                    "Mono: cyan/orange  |  Xsens: green/white",
+                    f"RULA est / gt: {rula_est[frame_idx]:4.1f} / {rula_gt[frame_idx]:4.1f}"
                     if np.isfinite(rula_est[frame_idx]) and np.isfinite(rula_gt[frame_idx])
-                    else "RULA delta: n/a",
+                    else "RULA est / gt: n/a",
                 ],
-                split_x,
+                args.width,
             )
 
             error_lines = [
+                f"Mean joint distance: {mean_joint_distance[frame_idx]:5.1f} cm" if np.isfinite(mean_joint_distance[frame_idx]) else "Mean joint distance: n/a",
+                f"Max joint distance:  {max_joint_distance[frame_idx]:5.1f} cm" if np.isfinite(max_joint_distance[frame_idx]) else "Max joint distance: n/a",
+                f"Pelvis distance:     {pelvis_distance[frame_idx]:5.1f} cm" if np.isfinite(pelvis_distance[frame_idx]) else "Pelvis distance: n/a",
                 f"L/R shoulder err: {angle_errors['LeftShoulder'][frame_idx]:4.1f} / {angle_errors['RightShoulder'][frame_idx]:4.1f}",
                 f"L/R elbow err:    {angle_errors['LeftElbow'][frame_idx]:4.1f} / {angle_errors['RightElbow'][frame_idx]:4.1f}",
                 f"L/R knee err:     {angle_errors['LeftKnee'][frame_idx]:4.1f} / {angle_errors['RightKnee'][frame_idx]:4.1f}",
                 f"Trunk err:        {angle_errors['TrunkFlex'][frame_idx]:4.1f}",
             ]
-            base_y = args.height - 116
+            base_y = args.height - 160
             cv2.rectangle(frame, (18, base_y - 30), (args.width - 18, args.height - 18), (10, 16, 22), thickness=-1)
             for line_idx, text in enumerate(error_lines):
                 cv2.putText(
@@ -549,6 +625,7 @@ def main() -> None:
         "input_mvnx": str(args.mvnx_path),
         "alignment_json": str(args.alignment_json),
         "output_mp4": str(output_mp4),
+        "comparison_mode": "shared_coordinate_overlay",
         "fps": fps,
         "frame_count": int(len(trc_ts)),
         "marker_count": int(len(body_names)),
@@ -559,16 +636,24 @@ def main() -> None:
         "upright_handling": {
             "monocular": (
                 "TRC is assumed upright because the raw upside-down video is rotated 180 degrees "
-                "inside RTMDet-MotionBert-OpenSim/run_inference.py before monocular inference."
+                "inside RTMDet-MotionBert-OpenSim/run_inference.py before monocular inference. "
+                "The resulting 3D sequence is then aligned into Xsens space with a single similarity transform."
             ),
-            "xsens": "MVNX segment positions are transformed into a Y-up visualization frame for side-by-side comparison.",
+            "xsens": "MVNX segment positions are transformed into a Y-up visualization frame and used as the common reference space.",
         },
         "upright_check_pass": {
             "monocular": bool(mono_upright_ok),
             "xsens": bool(xsens_upright_ok),
         },
+        "similarity_alignment": {
+            "scale": float(similarity_scale),
+            "rotation_matrix": similarity_rotation.tolist(),
+            "translation_cm": similarity_translation.tolist(),
+            "correspondence_count": int(match_count),
+        },
         "best_offset_seconds": float(offset_sec),
         "mean_angle_error_overall": float(np.nanmean(mean_angle_error)),
+        "mean_joint_distance_overall_cm": float(np.nanmean(mean_joint_distance)),
         "azimuth_deg": float(args.azimuth),
         "elevation_deg": float(args.elevation),
         "canvas_size": [int(args.width), int(args.height)],

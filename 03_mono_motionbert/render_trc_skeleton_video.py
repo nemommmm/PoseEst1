@@ -6,6 +6,12 @@ The rendered comparison uses a shared coordinate system:
 - monocular TRC is mapped into Xsens space with a similarity transform
 - both skeletons are projected with the same camera, center, and scale
 
+This renderer now follows the earlier `04_skeleton_compare.py` logic:
+- fit a rigid Kabsch transform from monocular pelvis centers to Xsens pelvis
+- use elite frames with stable limb lengths for alignment
+- follow the Xsens pelvis in the visualization window
+- render Xsens with its segment tree, monocular with the body-keypoint skeleton
+
 This makes the per-frame spatial gap visually meaningful instead of showing
 two independently normalized skeletons.
 
@@ -99,6 +105,57 @@ SEGMENT_DEPENDENCIES = {
     "LeftFoot",
     "RightFoot",
 }
+
+XSENS_SEGMENTS_TO_LOAD = [
+    "Pelvis",
+    "L5",
+    "L3",
+    "T12",
+    "T8",
+    "Neck",
+    "Head",
+    "RightShoulder",
+    "RightUpperArm",
+    "RightForeArm",
+    "RightHand",
+    "LeftShoulder",
+    "LeftUpperArm",
+    "LeftForeArm",
+    "LeftHand",
+    "RightUpperLeg",
+    "RightLowerLeg",
+    "RightFoot",
+    "LeftUpperLeg",
+    "LeftLowerLeg",
+    "LeftFoot",
+]
+
+XSENS_LINKS = [
+    ("Pelvis", "L5"),
+    ("L5", "L3"),
+    ("L3", "T12"),
+    ("T12", "T8"),
+    ("T8", "Neck"),
+    ("Neck", "Head"),
+    ("T8", "RightShoulder"),
+    ("RightShoulder", "RightUpperArm"),
+    ("RightUpperArm", "RightForeArm"),
+    ("RightForeArm", "RightHand"),
+    ("T8", "LeftShoulder"),
+    ("LeftShoulder", "LeftUpperArm"),
+    ("LeftUpperArm", "LeftForeArm"),
+    ("LeftForeArm", "LeftHand"),
+    ("Pelvis", "RightUpperLeg"),
+    ("RightUpperLeg", "RightLowerLeg"),
+    ("RightLowerLeg", "RightFoot"),
+    ("Pelvis", "LeftUpperLeg"),
+    ("LeftUpperLeg", "LeftLowerLeg"),
+    ("LeftLowerLeg", "LeftFoot"),
+]
+
+GT_LIMB_LENGTHS = np.array([38.6, 39.8, 40.3, 39.5], dtype=np.float64)
+TOP_K = 150
+FOLLOW_RADIUS_CM = 100.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -203,53 +260,51 @@ def compute_scene_stats(marker_names: list[str], positions: np.ndarray, vertical
     return center, scale, upright_ok
 
 
-def umeyama_similarity(source_xyz: np.ndarray, target_xyz: np.ndarray) -> tuple[float, np.ndarray, np.ndarray]:
-    """Estimate a similarity transform from source to target points."""
+def kabsch_transform(source_xyz: np.ndarray, target_xyz: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
+    """Estimate a rigid transform from source to target points."""
     if source_xyz.shape != target_xyz.shape:
         raise ValueError("Source and target point clouds must share shape.")
-    if len(source_xyz) < 3:
-        raise ValueError("At least 3 correspondences are required for similarity alignment.")
+    finite = np.isfinite(source_xyz).all(axis=1) & np.isfinite(target_xyz).all(axis=1)
+    source_xyz = source_xyz[finite]
+    target_xyz = target_xyz[finite]
+    if len(source_xyz) < 10:
+        raise ValueError("Not enough correspondences for Kabsch alignment.")
 
     src_mean = np.mean(source_xyz, axis=0)
     tgt_mean = np.mean(target_xyz, axis=0)
     src_centered = source_xyz - src_mean
     tgt_centered = target_xyz - tgt_mean
-
-    cov = (tgt_centered.T @ src_centered) / float(len(source_xyz))
-    u, singular_vals, vt = np.linalg.svd(cov)
-    correction = np.eye(3, dtype=np.float64)
-    if np.linalg.det(u) * np.linalg.det(vt) < 0.0:
-        correction[-1, -1] = -1.0
-
-    rotation = u @ correction @ vt
-    src_var = np.mean(np.sum(src_centered ** 2, axis=1))
-    if src_var < 1e-8:
-        raise ValueError("Source point cloud variance is too small for similarity alignment.")
-    scale = float(np.sum(singular_vals * np.diag(correction)) / src_var)
-    translation = tgt_mean - scale * (rotation @ src_mean)
-    return scale, rotation, translation
+    cov = src_centered.T @ tgt_centered
+    u, _, vt = np.linalg.svd(cov)
+    rotation = vt.T @ u.T
+    if np.linalg.det(rotation) < 0.0:
+        vt[-1, :] *= -1.0
+        rotation = vt.T @ u.T
+    translation = tgt_mean - rotation @ src_mean
+    return rotation, translation
 
 
-def fit_similarity_from_sequences(mono_xyz: np.ndarray, xsens_xyz: np.ndarray) -> tuple[float, np.ndarray, np.ndarray, int]:
-    """Fit a single similarity transform across all valid frame-marker pairs."""
-    mono_flat = mono_xyz.reshape(-1, 3)
-    xsens_flat = xsens_xyz.reshape(-1, 3)
-    finite = np.isfinite(mono_flat).all(axis=1) & np.isfinite(xsens_flat).all(axis=1)
-    correspondence_count = int(np.count_nonzero(finite))
-    if correspondence_count < 30:
-        raise ValueError("Not enough finite correspondences to align mono and Xsens sequences.")
-    scale, rotation, translation = umeyama_similarity(mono_flat[finite], xsens_flat[finite])
-    return scale, rotation, translation, correspondence_count
-
-
-def apply_similarity(points_xyz: np.ndarray, scale: float, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
-    """Apply a similarity transform to a batch of 3D points."""
+def apply_rigid(points_xyz: np.ndarray, rotation: np.ndarray, translation: np.ndarray) -> np.ndarray:
+    """Apply a rigid transform to a batch of 3D points."""
     transformed = np.full_like(points_xyz, np.nan, dtype=np.float64)
     finite = np.isfinite(points_xyz).all(axis=-1)
     if not np.any(finite):
         return transformed
-    transformed[finite] = scale * (points_xyz[finite] @ rotation.T) + translation
+    transformed[finite] = points_xyz[finite] @ rotation.T + translation
     return transformed
+
+
+def calculate_limb_error(body_xyz: np.ndarray) -> np.ndarray:
+    """Compute leg-length deviation for elite-frame selection."""
+    lengths = np.column_stack(
+        [
+            np.linalg.norm(body_xyz[:, 8] - body_xyz[:, 10], axis=1),
+            np.linalg.norm(body_xyz[:, 9] - body_xyz[:, 11], axis=1),
+            np.linalg.norm(body_xyz[:, 10] - body_xyz[:, 12], axis=1),
+            np.linalg.norm(body_xyz[:, 11] - body_xyz[:, 13], axis=1),
+        ]
+    )
+    return np.sum(np.abs(lengths - GT_LIMB_LENGTHS[None, :]), axis=1)
 
 
 def project_points(
@@ -324,6 +379,24 @@ def draw_correspondence_lines(
         cv2.line(image, p1, p2, color, 1, lineType=cv2.LINE_AA)
 
 
+def draw_xsens_tree(
+    image: np.ndarray,
+    projected_map: dict[str, np.ndarray],
+    line_color: tuple[int, int, int],
+    point_color: tuple[int, int, int],
+) -> None:
+    """Draw the old-style Xsens segment tree."""
+    for parent, child in XSENS_LINKS:
+        if parent in projected_map and child in projected_map:
+            p1 = tuple(np.round(projected_map[parent]).astype(int))
+            p2 = tuple(np.round(projected_map[child]).astype(int))
+            cv2.line(image, p1, p2, line_color, 2, lineType=cv2.LINE_AA)
+    for _, point in projected_map.items():
+        px, py = np.round(point).astype(int)
+        cv2.circle(image, (px, py), 4, point_color, thickness=-1, lineType=cv2.LINE_AA)
+        cv2.circle(image, (px, py), 4, (18, 18, 18), thickness=1, lineType=cv2.LINE_AA)
+
+
 def extract_trc_body(marker_names: list[str], positions: np.ndarray) -> tuple[list[str], np.ndarray]:
     index = {name: idx for idx, name in enumerate(marker_names)}
     body = np.full((positions.shape[0], len(BODY_MARKER_NAMES), 3), np.nan, dtype=np.float64)
@@ -375,6 +448,32 @@ def build_xsens_body_positions(mvnx: MvnxParser) -> tuple[np.ndarray, np.ndarray
     xsens_ts = xsens_ts - xsens_ts[0]
     body = transform_xsens_points(body)
     return xsens_ts, body
+
+
+def build_xsens_segment_positions(mvnx: MvnxParser) -> tuple[np.ndarray, dict[str, np.ndarray]]:
+    """Load full Xsens segment positions for old-style tree rendering."""
+    xsens_ts = mvnx.timestamps.copy()
+    xsens_ts, unique_idx = np.unique(xsens_ts, return_index=True)
+    xsens_ts = xsens_ts - xsens_ts[0]
+    segment_series: dict[str, np.ndarray] = {}
+    for name in XSENS_SEGMENTS_TO_LOAD:
+        data = mvnx.get_segment_data(name)
+        if data is None:
+            continue
+        segment_series[name] = transform_xsens_points(data[unique_idx])
+    return xsens_ts, segment_series
+
+
+def interpolate_segment_dict(
+    source_ts: np.ndarray,
+    source_segments: dict[str, np.ndarray],
+    target_ts: np.ndarray,
+) -> dict[str, np.ndarray]:
+    """Interpolate a dict of Xsens segment trajectories onto target timestamps."""
+    aligned: dict[str, np.ndarray] = {}
+    for name, values in source_segments.items():
+        aligned[name] = interpolate_positions(source_ts, values[:, None, :], target_ts)[:, 0, :]
+    return aligned
 
 
 def interpolate_positions(source_ts: np.ndarray, source_positions: np.ndarray, target_ts: np.ndarray) -> np.ndarray:
@@ -500,25 +599,31 @@ def main() -> None:
     mvnx = MvnxParser(str(args.mvnx_path))
     mvnx.parse()
     xsens_ts, xsens_body = build_xsens_body_positions(mvnx)
+    xsens_seg_ts, xsens_segments = build_xsens_segment_positions(mvnx)
     offset_sec = best_offset(Path(args.alignment_json))
     aligned_ts = trc_ts + offset_sec
     xsens_body_aligned = interpolate_positions(xsens_ts, xsens_body, aligned_ts)
-    xsens_edges = build_edges(body_names, BODY_EDGES)
-    xsens_center, xsens_scale, xsens_upright_ok = compute_scene_stats(body_names, xsens_body_aligned, vertical_axis=1)
+    xsens_segments_aligned = interpolate_segment_dict(xsens_seg_ts, xsens_segments, aligned_ts)
+    xsens_upright_ok = compute_scene_stats(body_names, xsens_body_aligned, vertical_axis=1)[2]
 
-    similarity_scale, similarity_rotation, similarity_translation, match_count = fit_similarity_from_sequences(
-        mono_body,
-        xsens_body_aligned,
+    mono_pelvis = 0.5 * (mono_body[:, 8] + mono_body[:, 9])
+    xsens_pelvis = xsens_segments_aligned.get("Pelvis", np.full((len(trc_ts), 3), np.nan, dtype=np.float64))
+    limb_error = calculate_limb_error(mono_body)
+    valid_align = (
+        np.isfinite(mono_pelvis).all(axis=1)
+        & np.isfinite(xsens_pelvis).all(axis=1)
+        & np.isfinite(limb_error)
     )
-    mono_body_aligned = apply_similarity(mono_body, similarity_scale, similarity_rotation, similarity_translation)
+    valid_indices = np.flatnonzero(valid_align)
+    if len(valid_indices) < 10:
+        raise RuntimeError("Not enough valid mono/Xsens pelvis correspondences for rigid alignment.")
+    ranked = valid_indices[np.argsort(limb_error[valid_indices])]
+    elite_indices = ranked[: min(TOP_K, len(ranked))]
+    mono_elite = mono_pelvis[elite_indices]
+    xsens_elite = xsens_pelvis[elite_indices]
+    rigid_rotation, rigid_translation = kabsch_transform(mono_elite, xsens_elite)
+    mono_body_aligned = apply_rigid(mono_body, rigid_rotation, rigid_translation)
     _, _, mono_upright_ok = compute_scene_stats(body_names, mono_body_aligned, vertical_axis=1)
-
-    combined_positions = np.concatenate([mono_body_aligned, xsens_body_aligned], axis=1)
-    shared_center, shared_scale, _ = compute_scene_stats(
-        body_names + body_names,
-        combined_positions,
-        vertical_axis=1,
-    )
 
     aligned_ts, angle_errors, mean_angle_error, rula_gt = prepare_error_arrays(trc_ts, mono_angles, rula_est, mvnx, offset_sec)
     joint_distance_cm = np.linalg.norm(mono_body_aligned - xsens_body_aligned, axis=2)
@@ -535,6 +640,14 @@ def main() -> None:
     try:
         for frame_idx, timestamp in enumerate(trc_ts):
             frame = canvas.copy()
+            xsens_points = xsens_body_aligned[frame_idx]
+            xsens_finite = np.isfinite(xsens_points).all(axis=1)
+            if np.isfinite(xsens_pelvis[frame_idx]).all():
+                frame_center = xsens_pelvis[frame_idx]
+            elif np.any(xsens_finite):
+                frame_center = np.nanmedian(xsens_points[xsens_finite], axis=0)
+            else:
+                frame_center = np.zeros(3, dtype=np.float64)
 
             mono_points = mono_body_aligned[frame_idx]
             mono_finite = np.isfinite(mono_points).all(axis=1)
@@ -543,8 +656,8 @@ def main() -> None:
             if np.any(mono_finite):
                 mono_proj_valid, mono_depth_valid = project_points(
                     mono_points[mono_finite],
-                    shared_center,
-                    shared_scale,
+                    frame_center,
+                    0.42 / FOLLOW_RADIUS_CM,
                     0,
                     args.width,
                     args.height,
@@ -554,17 +667,13 @@ def main() -> None:
                 )
                 mono_proj[mono_finite] = mono_proj_valid
                 mono_depth[mono_finite] = mono_depth_valid
-            draw_skeleton(frame, mono_proj, mono_depth, mono_finite, mono_edges, (87, 208, 255), (255, 199, 77))
-
-            xsens_points = xsens_body_aligned[frame_idx]
-            xsens_finite = np.isfinite(xsens_points).all(axis=1)
             xsens_proj = np.full((len(xsens_points), 2), np.nan, dtype=np.float64)
             xsens_depth = np.full(len(xsens_points), np.nan, dtype=np.float64)
             if np.any(xsens_finite):
                 xsens_proj_valid, xsens_depth_valid = project_points(
                     xsens_points[xsens_finite],
-                    shared_center,
-                    shared_scale,
+                    frame_center,
+                    0.42 / FOLLOW_RADIUS_CM,
                     0,
                     args.width,
                     args.height,
@@ -574,16 +683,36 @@ def main() -> None:
                 )
                 xsens_proj[xsens_finite] = xsens_proj_valid
                 xsens_depth[xsens_finite] = xsens_depth_valid
+
+            xsens_tree_proj: dict[str, np.ndarray] = {}
+            for name, seq in xsens_segments_aligned.items():
+                point = seq[frame_idx]
+                if not np.isfinite(point).all():
+                    continue
+                proj, _ = project_points(
+                    point[None, :],
+                    frame_center,
+                    0.42 / FOLLOW_RADIUS_CM,
+                    0,
+                    args.width,
+                    args.height,
+                    args.azimuth,
+                    args.elevation,
+                    vertical_axis=1,
+                )
+                xsens_tree_proj[name] = proj[0]
+
             draw_correspondence_lines(frame, mono_proj, mono_finite, xsens_proj, xsens_finite)
-            draw_skeleton(frame, xsens_proj, xsens_depth, xsens_finite, xsens_edges, (144, 235, 144), (255, 255, 255))
+            draw_xsens_tree(frame, xsens_tree_proj, (90, 90, 90), (255, 255, 255))
+            draw_skeleton(frame, mono_proj, mono_depth, mono_finite, mono_edges, (0, 0, 255), (0, 0, 255))
             draw_text_block(
                 frame,
                 26,
-                "Shared-frame overlay",
+                "04-style rigid comparison",
                 [
                     f"t(video): {float(timestamp):6.2f}s",
                     f"t(gt): {aligned_ts[frame_idx]:6.2f}s",
-                    "Mono: cyan/orange  |  Xsens: green/white",
+                    "Mono: red  |  Xsens: grey/white",
                     f"RULA est / gt: {rula_est[frame_idx]:4.1f} / {rula_gt[frame_idx]:4.1f}"
                     if np.isfinite(rula_est[frame_idx]) and np.isfinite(rula_gt[frame_idx])
                     else "RULA est / gt: n/a",
@@ -625,7 +754,7 @@ def main() -> None:
         "input_mvnx": str(args.mvnx_path),
         "alignment_json": str(args.alignment_json),
         "output_mp4": str(output_mp4),
-        "comparison_mode": "shared_coordinate_overlay",
+        "comparison_mode": "old_04_rigid_overlay",
         "fps": fps,
         "frame_count": int(len(trc_ts)),
         "marker_count": int(len(body_names)),
@@ -637,7 +766,7 @@ def main() -> None:
             "monocular": (
                 "TRC is assumed upright because the raw upside-down video is rotated 180 degrees "
                 "inside RTMDet-MotionBert-OpenSim/run_inference.py before monocular inference. "
-                "The resulting 3D sequence is then aligned into Xsens space with a single similarity transform."
+                "The resulting 3D sequence is aligned into Xsens space with an elite-frame pelvis-based rigid Kabsch transform."
             ),
             "xsens": "MVNX segment positions are transformed into a Y-up visualization frame and used as the common reference space.",
         },
@@ -645,11 +774,11 @@ def main() -> None:
             "monocular": bool(mono_upright_ok),
             "xsens": bool(xsens_upright_ok),
         },
-        "similarity_alignment": {
-            "scale": float(similarity_scale),
-            "rotation_matrix": similarity_rotation.tolist(),
-            "translation_cm": similarity_translation.tolist(),
-            "correspondence_count": int(match_count),
+        "rigid_alignment": {
+            "rotation_matrix": rigid_rotation.tolist(),
+            "translation_cm": rigid_translation.tolist(),
+            "elite_frame_count": int(len(elite_indices)),
+            "follow_radius_cm": float(FOLLOW_RADIUS_CM),
         },
         "best_offset_seconds": float(offset_sec),
         "mean_angle_error_overall": float(np.nanmean(mean_angle_error)),

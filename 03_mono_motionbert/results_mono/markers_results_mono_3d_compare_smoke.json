@@ -3,7 +3,7 @@
   "input_mvnx": "/Users/laomeng/Desktop/MVE386 Project Course/Xsens_ground_truth/Aitor-001.mvnx",
   "alignment_json": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/01_stereo_triangulation/results/alignment_summary.json",
   "output_mp4": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_mono_motionbert/results_mono/markers_results_mono_3d_compare_smoke.mp4",
-  "comparison_mode": "shared_coordinate_overlay",
+  "comparison_mode": "old_04_rigid_overlay",
   "fps": 12.5,
   "frame_count": 80,
   "marker_count": 14,
@@ -27,42 +27,42 @@
   "monocular_missing_rate": 0.0,
   "xsens_missing_rate": 0.0,
   "upright_handling": {
-    "monocular": "TRC is assumed upright because the raw upside-down video is rotated 180 degrees inside RTMDet-MotionBert-OpenSim/run_inference.py before monocular inference. The resulting 3D sequence is then aligned into Xsens space with a single similarity transform.",
+    "monocular": "TRC is assumed upright because the raw upside-down video is rotated 180 degrees inside RTMDet-MotionBert-OpenSim/run_inference.py before monocular inference. The resulting 3D sequence is aligned into Xsens space with an elite-frame pelvis-based rigid Kabsch transform.",
     "xsens": "MVNX segment positions are transformed into a Y-up visualization frame and used as the common reference space."
   },
   "upright_check_pass": {
     "monocular": true,
     "xsens": true
   },
-  "similarity_alignment": {
-    "scale": 22.435037093251317,
+  "rigid_alignment": {
     "rotation_matrix": [
       [
-        0.9264793502919532,
-        -0.05352820576357791,
-        0.37251945542526077
+        0.26939080496931916,
+        -0.9625503208040561,
+        0.030421606104723352
       ],
       [
-        -0.14349158957585473,
-        0.8648201039528884,
-        0.48114067747376144
+        0.6861617250422303,
+        0.21401112066318353,
+        0.6952563033296133
       ],
       [
-        -0.3479169113503901,
-        -0.49922031107182274,
-        0.7935571206975323
+        -0.6757297398258071,
+        -0.16642151349058615,
+        0.7181178166307042
       ]
     ],
     "translation_cm": [
-      -518.8726526597463,
-      71.10690792074651,
-      225.951174638501
+      -503.3858239045494,
+      64.43822420451535,
+      220.06872997072824
     ],
-    "correspondence_count": 1120
+    "elite_frame_count": 80,
+    "follow_radius_cm": 100.0
   },
   "best_offset_seconds": 17.400000000000077,
   "mean_angle_error_overall": 32.799053037945576,
-  "mean_joint_distance_overall_cm": 24.114160596772905,
+  "mean_joint_distance_overall_cm": 37.496250984203634,
   "azimuth_deg": -58.0,
   "elevation_deg": 16.0,
   "canvas_size": [

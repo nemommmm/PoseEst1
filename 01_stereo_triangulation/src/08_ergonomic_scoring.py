@@ -81,7 +81,8 @@ ALIGNMENT_SUMMARY_PATH = os.environ.get(
 )
 if not os.path.isabs(ALIGNMENT_SUMMARY_PATH):
     ALIGNMENT_SUMMARY_PATH = os.path.join(RESULTS_DIR, ALIGNMENT_SUMMARY_PATH)
-SAVE_PLOTS = os.environ.get("POSE_SAVE_PLOTS", "1").lower() not in {"0", "false", "no"}
+# Default to numeric outputs only; plots are opt-in via POSE_SAVE_PLOTS=1.
+SAVE_PLOTS = os.environ.get("POSE_SAVE_PLOTS", "0").lower() not in {"0", "false", "no"}
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 

@@ -30,6 +30,7 @@ from pose_angle_utils import (
     SEMANTIC_ANGLE_VERSION,
     apply_piecewise_calibration,
     build_gt_angle_interpolators,
+    build_fair_gt_interpolators,
     compute_aligned_trunk_flexion,
     compute_semantic_angle_sequence,
     fit_piecewise_calibration,
@@ -92,7 +93,8 @@ ALIGNMENT_SUMMARY_PATH = os.environ.get(
 )
 if not os.path.isabs(ALIGNMENT_SUMMARY_PATH):
     ALIGNMENT_SUMMARY_PATH = os.path.join(RESULTS_DIR, ALIGNMENT_SUMMARY_PATH)
-SAVE_PLOTS = os.environ.get("POSE_SAVE_PLOTS", "1").lower() not in {"0", "false", "no"}
+# Default to numeric outputs only; plots are opt-in via POSE_SAVE_PLOTS=1.
+SAVE_PLOTS = os.environ.get("POSE_SAVE_PLOTS", "0").lower() not in {"0", "false", "no"}
 os.makedirs(RESULTS_DIR, exist_ok=True)
 
 
@@ -220,6 +222,14 @@ def main():
 
     # Build interpolators for GT joint angles
     gt_angle_interp = build_gt_angle_interpolators(mvnx, xsens_ts, xidx)
+
+    # Load fair GT (Xsens 3D → our formula): isolates pure 3D reconstruction error
+    FAIR_GT_NPZ = os.path.join(_PROJECT_ROOT, "shared", "fair_gt_angles.npz")
+    fair_gt_interp = build_fair_gt_interpolators(FAIR_GT_NPZ)
+    if fair_gt_interp:
+        print(f"[Info] Fair GT loaded ({len(fair_gt_interp)} joints) — will output _fair metrics")
+    else:
+        print("[Info] Fair GT not found — run baseline_xsens3d_angles.py to generate")
 
     # GT trunk flexion from ergonomic angles (Pelvis_T8 or Vertical_T8)
     trunk_ergo = mvnx.get_ergo_angle_data("Pelvis_T8")
@@ -365,6 +375,29 @@ def main():
     df_trunk = pd.DataFrame(trunk_records)
     df_mpjpe = pd.DataFrame(mpjpe_records)
 
+    # --- 4d. Fair GT angle comparison (pure 3D reconstruction error) ---
+    fair_angle_records = []
+    if fair_gt_interp:
+        for i, curr_t in enumerate(est_ts_v):
+            target_t = curr_t - best_offset
+            activity, scenario = get_activity_and_scenario(curr_t)
+            for angle_idx, angle_name in enumerate(est_angle_names):
+                est_val = est_angle_vals_v[i, angle_idx]
+                if not np.isfinite(est_val):
+                    continue
+                if angle_name not in fair_gt_interp:
+                    continue
+                fair_val = fair_gt_interp[angle_name](target_t)
+                if not np.isfinite(fair_val):
+                    continue
+                fair_angle_records.append({
+                    "Time": curr_t, "Activity": activity, "Scenario": scenario,
+                    "AngleName": angle_name,
+                    "Estimated_deg": est_val, "FairGT_deg": fair_val,
+                    "Error": abs(est_val - fair_val),
+                })
+    df_fair = pd.DataFrame(fair_angle_records)
+
     # --- 5. Print results ---
     print("\n" + "=" * 60)
     print("📐 PRIMARY: Joint Angle Error (degrees)")
@@ -449,6 +482,39 @@ def main():
         angle_by_scenario.to_csv(resolve_results_path("eval_angle_by_scenario.csv"))
     if not df_trunk.empty:
         df_trunk.to_csv(resolve_results_path("eval_trunk_flexion.csv"), index=False)
+
+    # --- Fair GT results (pure 3D reconstruction error) ---
+    if not df_fair.empty:
+        fair_by_joint = df_fair.groupby("AngleName")["Error"].agg(
+            MAE="mean", Median="median", Std="std", Samples="count"
+        ).sort_values("MAE")
+        fair_by_scenario = df_fair.groupby("Scenario")["Error"].agg(
+            MAE="mean", Median="median", Std="std", Samples="count"
+        ).sort_values("MAE")
+        fair_overall_mae = df_fair["Error"].mean()
+        fair_overall_med = df_fair["Error"].median()
+
+        print("\n" + "=" * 60)
+        print("🎯 FAIR GT: Pure 3D Reconstruction Error (angle-definition gap removed)")
+        print("=" * 60)
+        print(f"\n[Result] Fair Overall Joint Angle MAE:    {fair_overall_mae:.2f}°")
+        print(f"[Result] Fair Overall Joint Angle Median: {fair_overall_med:.2f}°")
+        print(f"[Result] Definition gap (②) removed:     ~{overall_angle_mae - fair_overall_mae:.2f}°")
+        print(f"\n[Result] Per-Joint Fair MAE (°)")
+        print("-" * 50)
+        print(fair_by_joint.to_string())
+
+        fair_core = {
+            "Fair_Joint_Angle_MAE_deg": fair_overall_mae,
+            "Fair_Joint_Angle_Median_deg": fair_overall_med,
+            "Definition_Gap_deg": overall_angle_mae - fair_overall_mae,
+            "Valid_Fair_Samples": len(df_fair),
+        }
+        pd.Series(fair_core).to_frame("Value").to_csv(
+            resolve_results_path("eval_core_metrics_fair.csv"))
+        fair_by_joint.to_csv(resolve_results_path("eval_angle_by_joint_fair.csv"))
+        fair_by_scenario.to_csv(resolve_results_path("eval_angle_by_scenario_fair.csv"))
+        print(f"\n[Saved] Fair GT CSVs written.")
 
     # --- 7. Visualization ---
     if not SAVE_PLOTS:

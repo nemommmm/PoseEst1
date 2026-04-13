@@ -12,9 +12,9 @@ Input:
   MONO_TRC_PATH  — path to the TRC file (auto-detected if not set)
 
 Outputs:
-  results_mono/eval_angle_mono.png    — joint angle MAE bar chart vs Xsens GT
-  results_mono/eval_rula_mono.png     — RULA timeline (estimated vs GT)
   results_mono/eval_results_mono.npz  — numeric results for further analysis
+  results_mono/eval_angle_mono.png    — optional, when MONO_SAVE_PLOTS=1
+  results_mono/eval_rula_mono.png     — optional, when MONO_SAVE_PLOTS=1
 """
 
 import json
@@ -40,6 +40,7 @@ ALIGN_JSON  = os.environ.get(
     os.path.join(PROJECT_ROOT, "01_stereo_triangulation", "results", "alignment_summary.json"),
 )
 OUT_DIR     = os.path.join(SCRIPT_DIR, "results_mono")
+SAVE_PLOTS  = os.environ.get("MONO_SAVE_PLOTS", "0").lower() not in {"0", "false", "no"}
 
 DEFAULT_TRC = os.path.join(OUT_DIR, "markers_results_mono.trc")
 TRC_PATH    = os.environ.get("MONO_TRC_PATH", DEFAULT_TRC)
@@ -241,7 +242,7 @@ def main() -> None:
     if SHARED_DIR not in sys.path:
         sys.path.insert(0, SHARED_DIR)
     from utils_mvnx import MvnxParser
-    from pose_angle_utils import build_gt_angle_interpolators
+    from pose_angle_utils import build_gt_angle_interpolators, build_fair_gt_interpolators
 
     offset = best_offset()
     print(f"[eval] Temporal offset: {offset:.2f} s")
@@ -294,6 +295,14 @@ def main() -> None:
     xsens_ts -= xsens_ts[0]
     gt_interps = build_gt_angle_interpolators(mvnx, xsens_ts, xidx)
 
+    # Load fair GT for pure 3D reconstruction error
+    FAIR_GT_NPZ = os.path.join(PROJECT_ROOT, "shared", "fair_gt_angles.npz")
+    fair_gt_interps = build_fair_gt_interpolators(FAIR_GT_NPZ)
+    if fair_gt_interps:
+        print(f"[eval] Fair GT loaded ({len(fair_gt_interps)} joints)")
+    else:
+        print("[eval] Fair GT not found — run baseline_xsens3d_angles.py to generate")
+
     # ------------------------------------------------------------------ #
     # 3. Time-align and compute MAE
     # ------------------------------------------------------------------ #
@@ -323,12 +332,34 @@ def main() -> None:
             continue
         mae_results[label] = float(np.mean(np.abs(est[fin] - gt[fin])))
 
-    print("\n[eval] Joint angle MAE vs Xsens GT:")
+    print("\n[eval] Joint angle MAE vs Xsens GT (end-to-end, ①+②):")
     for k, v in sorted(mae_results.items()):
         print(f"       {k:<22s}: {v:.2f}°")
     if mae_results:
         print(f"       {'Overall mean':<22s}: "
               f"{np.mean(list(mae_results.values())):.2f}°")
+
+    # Fair GT comparison — pure 3D reconstruction error (① only)
+    fair_mae_results: dict[str, float] = {}
+    if fair_gt_interps:
+        for label in DOF_TO_GT:
+            if label not in fair_gt_interps or not mask.any():
+                continue
+            est = angles[label][mask]
+            fair = fair_gt_interps[label](aligned_ts[mask])
+            fin = np.isfinite(est) & np.isfinite(fair)
+            if fin.sum() < 5:
+                continue
+            fair_mae_results[label] = float(np.mean(np.abs(est[fin] - fair[fin])))
+
+        print("\n[eval] Joint angle MAE vs Fair GT (pure 3D error, ① only):")
+        for k, v in sorted(fair_mae_results.items()):
+            print(f"       {k:<22s}: {v:.2f}°")
+        if fair_mae_results:
+            overall_fair = np.mean(list(fair_mae_results.values()))
+            overall_e2e  = np.mean(list(mae_results.values())) if mae_results else np.nan
+            print(f"       {'Overall mean':<22s}: {overall_fair:.2f}°")
+            print(f"       {'Definition gap ②':<22s}: ~{overall_e2e - overall_fair:.2f}°")
 
     # GT RULA — trunk from Xsens ergo angle Pelvis_T8 axis=0
     def _gt(key):
@@ -359,9 +390,12 @@ def main() -> None:
     # 4. Save and plot
     # ------------------------------------------------------------------ #
     _save_results(trc_ts, angles, rula_est, mae_results)
-    _plot_mae(mae_results)
-    _plot_rula(trc_ts, rula_est, xsens_ts, rula_gt)
-    _plot_angle_timeseries(trc_ts, angles, gt_interps, aligned_ts, mask, xsens_ts)
+    if SAVE_PLOTS:
+        _plot_mae(mae_results)
+        _plot_rula(trc_ts, rula_est, xsens_ts, rula_gt)
+        _plot_angle_timeseries(trc_ts, angles, gt_interps, aligned_ts, mask, xsens_ts)
+    else:
+        print("[eval] Plot generation disabled by MONO_SAVE_PLOTS=0")
 
 
 def _save_results(timestamps, angles, rula_scores, mae_results):

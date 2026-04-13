@@ -11,5 +11,5 @@
   },
   "model_name": "rbarac/rtmpose3d",
   "device": "cpu",
-  "inference_time": 2063.636730194092
+  "inference_time": 8604.507309913635
 }

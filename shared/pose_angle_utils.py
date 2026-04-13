@@ -233,6 +233,35 @@ def build_gt_angle_interpolators(mvnx, xsens_ts, xidx, specs=None):
     return interpolators
 
 
+def build_fair_gt_interpolators(fair_gt_npz_path: str) -> dict:
+    """Load fair GT angles and return interpolators (same format as build_gt_angle_interpolators).
+
+    Fair GT = Xsens 3D segment positions → compute_semantic_joint_angles().
+    Comparing our pipeline output against these isolates pure 3D reconstruction
+    error (①), removing the angle definition gap (②) that exists between our
+    geometric calculation and Xsens native angles.
+
+    Args:
+        fair_gt_npz_path: path to shared/fair_gt_angles.npz
+
+    Returns:
+        dict mapping angle_name → scipy.interpolate.interp1d callable,
+        or empty dict if file not found.
+    """
+    if not os.path.exists(fair_gt_npz_path):
+        return {}
+    data = np.load(fair_gt_npz_path)
+    ts = data["timestamps"].astype(float)
+    interps = {}
+    for name in SEMANTIC_ANGLE_NAMES:
+        if name in data:
+            vals = data[name].astype(float)
+            interps[name] = interp1d(
+                ts, vals, kind="linear", bounds_error=False, fill_value=np.nan
+            )
+    return interps
+
+
 def fit_piecewise_calibration(est_values, gt_values, n_bins=10):
     """Fit a piecewise-linear calibration mapping est -> corrected.
 

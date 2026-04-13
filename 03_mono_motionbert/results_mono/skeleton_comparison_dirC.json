@@ -1,0 +1,56 @@
+{
+  "output_mp4": "03_mono_motionbert/results_mono/skeleton_comparison_dirC.mp4",
+  "frames_rendered": 693,
+  "fps": 12.5,
+  "frame_step": 4,
+  "offset_seconds": 17.400000000000077,
+  "subject_label": "MTL (Mono)",
+  "mean_joint_distance_cm": 218.15169119125866,
+  "mean_pelvis_distance_cm": 207.10850887647766,
+  "rotation_matrix": [
+    [
+      -0.6929407971826369,
+      -0.058130576875371785,
+      0.7186472623144325
+    ],
+    [
+      0.12369778743593124,
+      -0.9915505931342227,
+      0.039067616239368594
+    ],
+    [
+      0.7103040961330207,
+      0.1159666214361177,
+      0.6942764821952022
+    ]
+  ],
+  "translation_cm": [
+    -472.642162279779,
+    -307.1152864936623,
+    69.02600680375207
+  ],
+  "marker_names": [
+    "Nose",
+    "Neck",
+    "LShoulder",
+    "RShoulder",
+    "LElbow",
+    "RElbow",
+    "LWrist",
+    "RWrist",
+    "LHip",
+    "RHip",
+    "LKnee",
+    "RKnee",
+    "LAnkle",
+    "RAnkle",
+    "LEye",
+    "REye",
+    "LThumb",
+    "LIndex",
+    "LPinky",
+    "RThumb",
+    "RIndex",
+    "RPinky"
+  ]
+}

@@ -8,13 +8,16 @@
 ## Tunable parameters
 - The primary stable artifact for downstream visualization is `results_mono/markers_results_mono.trc`, not the raw `video_outputs.json`.
 - Render-side choices that matter are camera view, missing-marker handling, and frame-rate preservation; they should not modify the underlying 3D sequence.
+- For evaluation, the immediate high-impact fix was semantic correctness, not model retraining: elbow flexion needed `180 - interior_angle`, and hip angles needed to be added so Direction C could be compared on the same 8-joint basis as Direction A.
 
 ## Method limitations observed so far
 - The monocular branch still depends on learned depth priors and is expected to drift more in the sagittal/depth direction than stereo.
-- Upside-down video handling is currently correct for `03`: `RTMDet-MotionBert-OpenSim/run_inference.py` rotates the raw video by 180° before pose inference. The resulting TRC is already upright and must not be rotated again during rendering.
+- The current Aitor inference path does **not** explicitly rotate the upside-down raw video inside `run_inference.py`. This is an important caveat: at the moment, Direction C is consistent with Aitor's released pipeline, but not yet guaranteed to be consistent with Direction A's upright-input assumption.
+- After fixing the elbow semantics bug and adding hip evaluation, the current monocular branch evaluates at roughly `31.20°` overall MAE instead of the previously inflated `35.38°`. This is a meaningful correction, but it still leaves MTL clearly behind SKT.
 
 ## New diagnostic outputs from this round
-- A lightweight 3D skeleton renderer now produces:
-  - `markers_results_mono_3d.mp4`
-  - `markers_results_mono_3d.json`
-- The short smoke render passed the upright check, but the full-sequence metadata failed the same geometric check, which is a useful diagnostic sign: the current monocular sequence appears to drift structurally over time rather than simply suffering from a double-rotation bug.
+- A new comparison video now produces:
+  - `results_mono/skeleton_comparison_dirC.mp4`
+  - `results_mono/skeleton_comparison_dirC.json`
+- This video overlays the monocular TRC skeleton and Xsens GT in one aligned 3D coordinate frame, which makes long-horizon drift immediately visible.
+- The current metadata shows very large mean overlay errors (`~218 cm` anchor distance, `~207 cm` pelvis distance), confirming that the main remaining weakness is not just evaluation syntax but the monocular 3D sequence itself.

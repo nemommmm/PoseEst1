@@ -243,9 +243,9 @@ def render_comparison_video(
     output_json = Path(output_json)
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
 
-    fig = plt.figure(figsize=(10, 8))
+    fig = plt.figure(figsize=(11, 9))
     ax = fig.add_subplot(111, projection="3d")
-    fig.tight_layout()
+    fig.subplots_adjust(left=0.02, right=0.98, bottom=0.03, top=0.90)
     fig.canvas.draw()
     width, height = fig.canvas.get_width_height()
     writer = cv2.VideoWriter(
@@ -301,6 +301,7 @@ def render_comparison_video(
             f"t={subject_ts[frame_idx]:.2f}s  gt={target_t:.2f}s  "
             f"joint={joint_dist:.1f} cm  pelvis={pelvis_distances[-1]:.1f} cm",
             fontsize=11,
+            pad=20,
         )
         ax.plot([], [], [], color="black", label="Xsens GT")
         ax.plot([], [], [], color=subject_color, label=subject_label)

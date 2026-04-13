@@ -41,6 +41,22 @@ COCO_EDGES = [
 ]
 
 
+def to_display_coords(points: np.ndarray) -> np.ndarray:
+    """Convert OpenCV camera coordinates to a human-friendly viewer frame.
+
+    OpenCV dense stereo uses X-right, Y-down, Z-forward. For interactive viewing
+    we display:
+      X_display = X_right
+      Y_display = Z_depth
+      Z_display = -Y_up
+    so that people appear upright.
+    """
+    pts = np.asarray(points, dtype=np.float32).copy()
+    if pts.ndim != 2 or pts.shape[1] != 3:
+        return pts
+    return np.column_stack([pts[:, 0], pts[:, 2], -pts[:, 1]])
+
+
 def parse_args() -> argparse.Namespace:
     """Parse CLI arguments."""
     parser = argparse.ArgumentParser(description="Create an interactive dense stereo point-cloud HTML.")
@@ -164,8 +180,9 @@ def select_frames(args: argparse.Namespace, reference_npz: dict[str, np.ndarray]
 
 def skeleton_payload(points: np.ndarray) -> dict[str, list]:
     """Convert one 17-joint skeleton into JSON-safe payload."""
+    display_points = to_display_coords(np.asarray(points, dtype=np.float32))
     return {
-        "points": np.asarray(points, dtype=np.float32).tolist(),
+        "points": display_points.tolist(),
         "edges": COCO_EDGES,
     }
 
@@ -299,11 +316,12 @@ def main() -> None:
         frame_l, frame_r = fetch_frame_pair(frame_idx)
         left_rect, disparity = compute_disparity(frame_l, frame_r, map1_l, map2_l, map1_r, map2_r, sgbm)
         points, colors, total_count = build_point_cloud(disparity, left_rect, q_mat, args.max_points)
+        display_points = to_display_coords(points)
         skeleton = skeleton_payload(reference_npz["keypoints"][frame_idx])
         payload_frames.append({
             "tag": tag,
             "frame_idx": frame_idx,
-            "points": points.tolist(),
+            "points": display_points.tolist(),
             "colors": colors.tolist(),
             "skeleton": skeleton,
             "meta": {
@@ -319,6 +337,11 @@ def main() -> None:
                     "lookup_window": LOOKUP_WINDOW,
                 },
                 "upright_handling": "StereoDataLoader rotates raw upside-down videos by 180 degrees once before rectification.",
+                "display_axes": {
+                    "x": "Right (X)",
+                    "y": "Depth (Z)",
+                    "z": "Up (-Y)",
+                },
             },
         })
 

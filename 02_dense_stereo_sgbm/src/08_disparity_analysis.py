@@ -46,12 +46,13 @@ PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params.npz")
 # Reference triangulation results from Direction A (cross-method dependency)
 NPZ_PATH = os.path.join(PROJECT_ROOT, "01_stereo_triangulation", "results", "yolo_3d_raw.npz")
 
-SAMPLE_STEP = 30        # analyse every Nth frame
-LOOKUP_WINDOW = 5       # window size for median disparity lookup
+SAMPLE_STEP = int(os.environ.get("POSE_DDM_SAMPLE_STEP", "30"))
+LOOKUP_WINDOW = int(os.environ.get("POSE_DDM_LOOKUP_WINDOW", "5"))
 
-SGBM_MIN_DISPARITY = 100
-SGBM_NUM_DISPARITIES = 256   # must be multiple of 16; covers 100-356 px
-SGBM_BLOCK_SIZE = 9
+SGBM_MIN_DISPARITY = int(os.environ.get("POSE_SGBM_MIN_DISPARITY", "100"))
+SGBM_NUM_DISPARITIES = int(os.environ.get("POSE_SGBM_NUM_DISPARITIES", "256"))
+SGBM_BLOCK_SIZE = int(os.environ.get("POSE_SGBM_BLOCK_SIZE", "9"))
+OUTPUT_TAG = os.environ.get("POSE_DDM_OUTPUT_TAG", "").strip()
 
 JOINT_NAMES = [
     "Nose", "LEye", "REye", "LEar", "REar",
@@ -80,6 +81,13 @@ def build_sgbm(min_d: int, num_d: int, block: int) -> cv2.StereoSGBM:
         speckleRange=2,
         mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY,
     )
+
+
+def tagged_path(filename: str) -> str:
+    if not OUTPUT_TAG:
+        return os.path.join(RESULTS_DIR, filename)
+    stem, ext = os.path.splitext(filename)
+    return os.path.join(RESULTS_DIR, f"{stem}_{OUTPUT_TAG}{ext}")
 
 
 def query_disparity_at_keypoints(
@@ -273,7 +281,7 @@ def main() -> None:
     ax.set_title("SGBM Disparity Fill Rate per Joint")
     ax.legend()
     plt.tight_layout()
-    out1 = os.path.join(RESULTS_DIR, "disparity_analysis_fill_rate.png")
+    out1 = tagged_path("disparity_analysis_fill_rate.png")
     fig.savefig(out1, dpi=120)
     plt.close(fig)
     print(f"  Saved: {out1}")
@@ -290,7 +298,7 @@ def main() -> None:
         ax.set_title(f"SGBM vs DLT Disparity\nMAE={mae:.2f}px  Bias={bias:+.2f}px  r={corr:.3f}")
         ax.legend()
         plt.tight_layout()
-        out2 = os.path.join(RESULTS_DIR, "disparity_analysis_scatter.png")
+        out2 = tagged_path("disparity_analysis_scatter.png")
         fig.savefig(out2, dpi=120)
         plt.close(fig)
         print(f"  Saved: {out2}")
@@ -307,10 +315,27 @@ def main() -> None:
         ax.set_title("Disparity Error Distribution")
         ax.legend()
         plt.tight_layout()
-        out3 = os.path.join(RESULTS_DIR, "disparity_analysis_error_hist.png")
+        out3 = tagged_path("disparity_analysis_error_hist.png")
         fig.savefig(out3, dpi=120)
         plt.close(fig)
         print(f"  Saved: {out3}")
+
+    summary = {
+        "sample_step": SAMPLE_STEP,
+        "lookup_window": LOOKUP_WINDOW,
+        "sgbm_min_disparity": SGBM_MIN_DISPARITY,
+        "sgbm_num_disparities": SGBM_NUM_DISPARITIES,
+        "sgbm_block_size": SGBM_BLOCK_SIZE,
+        "mean_fill_rate": mean_fill,
+        "mae_vs_dlt_px": mae,
+        "bias_px": bias,
+        "correlation": corr,
+    }
+    summary_path = tagged_path("disparity_analysis_summary.json")
+    with open(summary_path, "w", encoding="utf-8") as f:
+        import json
+        json.dump(summary, f, indent=2)
+    print(f"  Saved: {summary_path}")
 
     print("\n[Done] Analysis complete.")
     print(f"  Mean fill rate : {mean_fill:.3f}")

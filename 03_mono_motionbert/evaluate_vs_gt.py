@@ -142,6 +142,7 @@ def compute_geometric_angles(marker_names, positions):
     Returns dict of angle arrays (degrees):
       RightShoulder, LeftShoulder  — upper arm elevation (angle from torso-down)
       RightElbow, LeftElbow        — elbow flexion
+      RightHip, LeftHip            — hip flexion proxy
       RightKnee, LeftKnee          — knee flexion
       TrunkFlex                    — trunk inclination from vertical
     """
@@ -156,6 +157,8 @@ def compute_geometric_angles(marker_names, positions):
         "LeftShoulder":  np.full(n, np.nan),
         "RightElbow":    np.full(n, np.nan),
         "LeftElbow":     np.full(n, np.nan),
+        "RightHip":      np.full(n, np.nan),
+        "LeftHip":       np.full(n, np.nan),
         "RightKnee":     np.full(n, np.nan),
         "LeftKnee":      np.full(n, np.nan),
         "TrunkFlex":     np.full(n, np.nan),
@@ -185,9 +188,13 @@ def compute_geometric_angles(marker_names, positions):
         angles["RightShoulder"][i] = _vec_angle_deg(r_elbow - r_shoulder, torso_down)
         angles["LeftShoulder"][i]  = _vec_angle_deg(l_elbow - l_shoulder, torso_down)
 
-        # Elbow flexion: angle at elbow joint
-        angles["RightElbow"][i] = _elbow_angle(r_shoulder, r_elbow, r_wrist)
-        angles["LeftElbow"][i]  = _elbow_angle(l_shoulder, l_elbow, l_wrist)
+        # Elbow flexion: 180 - interior angle, matching the shared stereo evaluation.
+        angles["RightElbow"][i] = 180.0 - _elbow_angle(r_shoulder, r_elbow, r_wrist)
+        angles["LeftElbow"][i]  = 180.0 - _elbow_angle(l_shoulder, l_elbow, l_wrist)
+
+        # Hip flexion proxy: same semantic proxy used in the stereo evaluation.
+        angles["RightHip"][i] = 180.0 - _vec_angle_deg(r_shoulder - r_hip, r_knee - r_hip)
+        angles["LeftHip"][i]  = 180.0 - _vec_angle_deg(l_shoulder - l_hip, l_knee - l_hip)
 
         # Knee flexion: angle at knee joint
         angles["RightKnee"][i] = 180.0 - _vec_angle_deg(r_hip - r_knee, r_ankle - r_knee)
@@ -317,6 +324,8 @@ def main() -> None:
         "LeftShoulder":  "LeftShoulder",
         "RightElbow":    "RightElbow",
         "LeftElbow":     "LeftElbow",
+        "RightHip":      "RightHip",
+        "LeftHip":       "LeftHip",
         "RightKnee":     "RightKnee",
         "LeftKnee":      "LeftKnee",
     }
@@ -478,9 +487,13 @@ def _plot_rula(mot_ts, rula_est, xsens_ts, rula_gt) -> None:
 def _plot_angle_timeseries(trc_ts, angles, gt_interps, aligned_ts, mask,
                            xsens_ts) -> None:
     """Plot per-joint time series: estimated vs GT."""
-    joints = ["RightShoulder", "LeftShoulder", "RightElbow", "LeftElbow",
-              "RightKnee", "LeftKnee"]
-    fig, axes = plt.subplots(3, 2, figsize=(16, 10), sharex=False)
+    joints = [
+        "RightShoulder", "LeftShoulder",
+        "RightElbow", "LeftElbow",
+        "RightHip", "LeftHip",
+        "RightKnee", "LeftKnee",
+    ]
+    fig, axes = plt.subplots(4, 2, figsize=(16, 13), sharex=False)
 
     for j, name in enumerate(joints):
         ax = axes[j // 2, j % 2]

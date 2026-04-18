@@ -13,7 +13,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Callable
+from typing import Any, Callable
 
 import cv2
 import matplotlib
@@ -212,6 +212,144 @@ def draw_xsens_pose(ax, pose: dict[str, np.ndarray], color: str = "black", linew
             ax.plot([p0[0], p1[0]], [p0[1], p1[1]], [p0[2], p1[2]], color=color, linewidth=linewidth, alpha=0.75)
 
 
+def _render_overlay_frame(
+    ax,
+    title: str,
+    subject_pose: np.ndarray,
+    xsens_pose: dict[str, np.ndarray],
+    subject_edges: list[tuple[int, int]],
+    subject_label: str,
+    subject_color: str,
+    follow_radius_cm: float,
+    overlay_lines: list[str] | None = None,
+) -> None:
+    """Render a single comparison frame onto an existing 3D axis."""
+    ax.cla()
+    draw_xsens_pose(ax, xsens_pose, color="black", linewidth=1.6)
+    draw_pose_edges(ax, subject_pose, subject_edges, color=subject_color, linewidth=2.0)
+
+    finite_subject = np.isfinite(subject_pose).all(axis=1)
+    if np.any(finite_subject):
+        pts = subject_pose[finite_subject]
+        ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c=subject_color, s=18, alpha=0.9)
+
+    gt_pts = np.array(list(xsens_pose.values()), dtype=np.float64)
+    ax.scatter(gt_pts[:, 0], gt_pts[:, 1], gt_pts[:, 2], c="black", s=10, alpha=0.5)
+
+    center = xsens_pose["Pelvis"]
+    ax.set_xlim(center[0] - follow_radius_cm, center[0] + follow_radius_cm)
+    ax.set_ylim(center[1] - follow_radius_cm, center[1] + follow_radius_cm)
+    ax.set_zlim(center[2] - follow_radius_cm, center[2] + follow_radius_cm)
+    ax.set_xlabel("X (cm)")
+    ax.set_ylabel("Y (cm)")
+    ax.set_zlabel("Z (cm)")
+    ax.view_init(elev=18, azim=-62)
+    ax.set_title(title, fontsize=12, pad=18)
+    ax.plot([], [], [], color="black", label="Xsens GT")
+    ax.plot([], [], [], color=subject_color, label=subject_label)
+    ax.legend(loc="upper right")
+
+    if overlay_lines:
+        ax.text2D(
+            0.02,
+            0.98,
+            "\n".join(overlay_lines),
+            transform=ax.transAxes,
+            va="top",
+            ha="left",
+            fontsize=10,
+            bbox={
+                "boxstyle": "round,pad=0.35",
+                "facecolor": "white",
+                "alpha": 0.88,
+                "edgecolor": "#BBBBBB",
+            },
+        )
+
+
+def _select_snapshots(
+    frame_records: list[dict[str, Any]],
+    score_key: str,
+    good_count: int,
+    bad_count: int,
+    min_gap_s: float,
+) -> list[dict[str, Any]]:
+    """Select low-score and high-score frames as representative snapshots."""
+
+    def _pick_candidates(candidates: list[dict[str, Any]], reverse: bool, count: int, used: set[int]) -> list[dict[str, Any]]:
+        chosen: list[dict[str, Any]] = []
+        ordered = sorted(
+            candidates,
+            key=lambda rec: float(rec.get(score_key, np.nan)),
+            reverse=reverse,
+        )
+        for rec in ordered:
+            frame_idx = int(rec["frame_idx"])
+            score = float(rec.get(score_key, np.nan))
+            if frame_idx in used or not np.isfinite(score):
+                continue
+            if any(abs(float(rec["subject_time_s"]) - float(prev["subject_time_s"])) < min_gap_s for prev in chosen):
+                continue
+            chosen.append(rec)
+            used.add(frame_idx)
+            if len(chosen) >= count:
+                break
+        return chosen
+
+    used_frames: set[int] = set()
+    good = _pick_candidates(frame_records, reverse=False, count=good_count, used=used_frames)
+    bad = _pick_candidates(frame_records, reverse=True, count=bad_count, used=used_frames)
+
+    snapshots = []
+    for label, picked in (("good", good), ("bad", bad)):
+        for rank, rec in enumerate(picked, start=1):
+            item = dict(rec)
+            item["snapshot_type"] = label
+            item["snapshot_rank"] = rank
+            snapshots.append(item)
+    snapshots.sort(key=lambda rec: float(rec["subject_time_s"]))
+    return snapshots
+
+
+def _jsonify(value: Any) -> Any:
+    """Convert NumPy-heavy structures into JSON-serialisable Python types."""
+    if isinstance(value, dict):
+        return {str(key): _jsonify(val) for key, val in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonify(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, (np.floating, np.integer)):
+        return value.item()
+    return value
+
+
+def _analysis_summary(frame_records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Summarise numeric analysis fields across rendered frames."""
+    summary: dict[str, Any] = {}
+    if not frame_records:
+        return summary
+
+    keys: set[str] = set()
+    for rec in frame_records:
+        keys.update(rec.get("analysis", {}).keys())
+
+    for key in sorted(keys):
+        values = []
+        for rec in frame_records:
+            value = rec.get("analysis", {}).get(key)
+            if isinstance(value, (int, float, np.integer, np.floating)) and np.isfinite(float(value)):
+                values.append(float(value))
+        if values:
+            arr = np.asarray(values, dtype=np.float64)
+            summary[key] = {
+                "mean": float(np.nanmean(arr)),
+                "median": float(np.nanmedian(arr)),
+                "p90": float(np.nanpercentile(arr, 90)),
+            }
+    return summary
+
+
 def render_comparison_video(
     subject_points: np.ndarray,
     subject_ts: np.ndarray,
@@ -228,6 +366,15 @@ def render_comparison_video(
     follow_radius_cm: float = 100.0,
     max_frames: int | None = None,
     frame_step: int = 1,
+    analysis_fn: Callable[
+        [int, float, float, np.ndarray, dict[str, np.ndarray], np.ndarray, np.ndarray, float, float],
+        dict[str, Any],
+    ] | None = None,
+    overlay_formatter: Callable[[dict[str, Any]], list[str]] | None = None,
+    snapshot_dir: str | Path | None = None,
+    snapshot_good_count: int = 2,
+    snapshot_bad_count: int = 2,
+    snapshot_min_gap_s: float = 15.0,
 ) -> dict:
     """Render an overlay video of subject skeleton and Xsens GT."""
     xsens = load_xsens_skeleton(mvnx_path)
@@ -242,6 +389,11 @@ def render_comparison_video(
     output_mp4 = Path(output_mp4)
     output_json = Path(output_json)
     output_mp4.parent.mkdir(parents=True, exist_ok=True)
+    snapshot_path = Path(snapshot_dir) if snapshot_dir is not None else None
+    if snapshot_path is not None:
+        snapshot_path.mkdir(parents=True, exist_ok=True)
+        for old_png in snapshot_path.glob("*.png"):
+            old_png.unlink()
 
     fig = plt.figure(figsize=(11, 9))
     ax = fig.add_subplot(111, projection="3d")
@@ -258,9 +410,11 @@ def render_comparison_video(
     rendered = 0
     joint_distances: list[float] = []
     pelvis_distances: list[float] = []
+    frame_records: list[dict[str, Any]] = []
 
+    collected = 0
     for frame_idx in range(0, len(subject_ts), max(1, frame_step)):
-        if max_frames is not None and rendered >= max_frames:
+        if max_frames is not None and collected >= max_frames:
             break
         target_t = float(subject_ts[frame_idx] - offset_s)
         xsens_pose = xsens_pose_at(xsens, target_t)
@@ -274,44 +428,86 @@ def render_comparison_video(
 
         joint_dist = frame_joint_distance(subject_pose, xsens_pose, anchor_mapping)
         joint_distances.append(joint_dist)
-        pelvis_distances.append(float(np.linalg.norm(pelvis_center - xsens_pose["Pelvis"])) if np.isfinite(pelvis_center).all() else np.nan)
+        pelvis_dist = float(np.linalg.norm(pelvis_center - xsens_pose["Pelvis"])) if np.isfinite(pelvis_center).all() else np.nan
+        pelvis_distances.append(pelvis_dist)
 
-        ax.cla()
-        draw_xsens_pose(ax, xsens_pose, color="black", linewidth=1.6)
-        draw_pose_edges(ax, subject_pose, subject_edges, color=subject_color, linewidth=2.0)
-
-        finite_subject = np.isfinite(subject_pose).all(axis=1)
-        if np.any(finite_subject):
-            pts = subject_pose[finite_subject]
-            ax.scatter(pts[:, 0], pts[:, 1], pts[:, 2], c=subject_color, s=18, alpha=0.9)
-
-        gt_pts = np.array(list(xsens_pose.values()), dtype=np.float64)
-        ax.scatter(gt_pts[:, 0], gt_pts[:, 1], gt_pts[:, 2], c="black", s=10, alpha=0.5)
-
-        center = xsens_pose["Pelvis"]
-        ax.set_xlim(center[0] - follow_radius_cm, center[0] + follow_radius_cm)
-        ax.set_ylim(center[1] - follow_radius_cm, center[1] + follow_radius_cm)
-        ax.set_zlim(center[2] - follow_radius_cm, center[2] + follow_radius_cm)
-        ax.set_xlabel("X (cm)")
-        ax.set_ylabel("Y (cm)")
-        ax.set_zlabel("Z (cm)")
-        ax.view_init(elev=18, azim=-62)
-        ax.set_title(
-            f"{title}\n"
-            f"t={subject_ts[frame_idx]:.2f}s  gt={target_t:.2f}s  "
-            f"joint={joint_dist:.1f} cm  pelvis={pelvis_distances[-1]:.1f} cm",
-            fontsize=11,
-            pad=20,
+        analysis = (
+            analysis_fn(
+                frame_idx,
+                float(subject_ts[frame_idx]),
+                target_t,
+                subject_pose,
+                xsens_pose,
+                rot,
+                trans,
+                float(joint_dist),
+                float(pelvis_dist),
+            )
+            if analysis_fn is not None
+            else {}
         )
-        ax.plot([], [], [], color="black", label="Xsens GT")
-        ax.plot([], [], [], color=subject_color, label=subject_label)
-        ax.legend(loc="upper right")
+        if analysis is None:
+            analysis = {}
+        frame_records.append(
+            {
+                "frame_idx": int(frame_idx),
+                "subject_time_s": float(subject_ts[frame_idx]),
+                "gt_time_s": float(target_t),
+                "subject_pose": subject_pose,
+                "xsens_pose": xsens_pose,
+                "joint_distance_cm": float(joint_dist),
+                "pelvis_distance_cm": float(pelvis_dist),
+                "snapshot_score": float(analysis.get("snapshot_score", joint_dist)),
+                "analysis": analysis,
+            }
+        )
+        collected += 1
+
+    snapshot_records = _select_snapshots(
+        frame_records,
+        score_key="snapshot_score",
+        good_count=max(0, int(snapshot_good_count)),
+        bad_count=max(0, int(snapshot_bad_count)),
+        min_gap_s=max(0.0, float(snapshot_min_gap_s)),
+    ) if snapshot_path is not None else []
+    snapshot_lookup = {int(rec["frame_idx"]): rec for rec in snapshot_records}
+
+    for rec in frame_records:
+        overlay_lines = (
+            overlay_formatter(rec)
+            if overlay_formatter is not None
+            else [
+                f"t={rec['subject_time_s']:.2f}s | gt={rec['gt_time_s']:.2f}s",
+                f"Joint {rec['joint_distance_cm']:.1f} cm | Pelvis {rec['pelvis_distance_cm']:.1f} cm",
+            ]
+        )
+        _render_overlay_frame(
+            ax=ax,
+            title=title,
+            subject_pose=rec["subject_pose"],
+            xsens_pose=rec["xsens_pose"],
+            subject_edges=subject_edges,
+            subject_label=subject_label,
+            subject_color=subject_color,
+            follow_radius_cm=follow_radius_cm,
+            overlay_lines=overlay_lines,
+        )
 
         fig.canvas.draw()
         rgba = np.asarray(fig.canvas.buffer_rgba())
         bgr = cv2.cvtColor(rgba, cv2.COLOR_RGBA2BGR)
         writer.write(bgr)
         rendered += 1
+
+        if snapshot_path is not None and int(rec["frame_idx"]) in snapshot_lookup:
+            snap = snapshot_lookup[int(rec["frame_idx"])]
+            filename = (
+                f"{snap['snapshot_type']}_{snap['snapshot_rank']:02d}"
+                f"_t{rec['subject_time_s']:.2f}_score{snap['snapshot_score']:.2f}.png"
+            )
+            png_path = snapshot_path / filename
+            fig.savefig(png_path, dpi=180, bbox_inches="tight")
+            snap["png_path"] = str(png_path)
 
     writer.release()
     plt.close(fig)
@@ -327,6 +523,15 @@ def render_comparison_video(
         "mean_pelvis_distance_cm": float(np.nanmean(pelvis_distances)) if pelvis_distances else np.nan,
         "rotation_matrix": rot.tolist(),
         "translation_cm": trans.tolist(),
+        "analysis_summary": _analysis_summary(frame_records),
+        "snapshots": [
+            {
+                key: _jsonify(value)
+                for key, value in rec.items()
+                if key not in {"subject_pose", "xsens_pose"}
+            }
+            for rec in snapshot_records
+        ],
     }
     output_json.write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     return metadata

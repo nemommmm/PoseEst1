@@ -1,0 +1,55 @@
+{
+  "comparison_video": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_mono_motionbert/results_mono/skeleton_comparison_dirC.mp4",
+  "mean_joint_distance_cm": 218.15169119125866,
+  "mean_pelvis_distance_cm": 207.10850887647766,
+  "mean_angle_mae_deg": 24.769448109803566,
+  "mean_depth_component_cm": 109.7854166361611,
+  "mean_planar_component_cm": 182.40975130871243,
+  "mean_depth_share_pct": 34.52645613150986,
+  "depth_dominant_fraction": 0.01443001443001443,
+  "interpretation": "Planar drift is comparable to or larger than depth-direction error.",
+  "bad_snapshots": [
+    {
+      "frame_idx": 1964,
+      "subject_time_s": 157.12,
+      "gt_time_s": 139.7199999999999,
+      "joint_distance_cm": 467.1613949167023,
+      "pelvis_distance_cm": 456.5113776089093,
+      "snapshot_score": 96.2724120050813,
+      "analysis": {
+        "angle_mae_deg": 55.13033220190768,
+        "worst_joint": "LeftKnee",
+        "worst_joint_error_deg": 88.61610467495056,
+        "depth_component_cm": 327.8099027042875,
+        "planar_component_cm": 330.05370700439465,
+        "depth_share_pct": 49.82946280452411,
+        "depth_dominant_flag": 0.0,
+        "snapshot_score": 96.2724120050813
+      },
+      "snapshot_type": "bad",
+      "snapshot_rank": 1,
+      "png_path": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_mono_motionbert/results_mono/skeleton_snapshots_dirC/bad_01_t157.12_score96.27.png"
+    },
+    {
+      "frame_idx": 2912,
+      "subject_time_s": 232.96,
+      "gt_time_s": 215.55999999999995,
+      "joint_distance_cm": 153.8776657803029,
+      "pelvis_distance_cm": 157.31951740175248,
+      "snapshot_score": 94.16219581353725,
+      "analysis": {
+        "angle_mae_deg": 83.71636021556974,
+        "worst_joint": "LeftKnee",
+        "worst_joint_error_deg": 150.50736598962484,
+        "depth_component_cm": 30.329391278733564,
+        "planar_component_cm": 148.23952192537052,
+        "depth_share_pct": 16.984698363520362,
+        "depth_dominant_flag": 0.0,
+        "snapshot_score": 94.16219581353725
+      },
+      "snapshot_type": "bad",
+      "snapshot_rank": 2,
+      "png_path": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_mono_motionbert/results_mono/skeleton_snapshots_dirC/bad_02_t232.96_score94.16.png"
+    }
+  ]
+}

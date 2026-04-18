@@ -1,5 +1,5 @@
 {
-  "output_mp4": "03_mono_motionbert/results_mono/skeleton_comparison_dirC.mp4",
+  "output_mp4": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_mono_motionbert/results_mono/skeleton_comparison_dirC.mp4",
   "frames_rendered": 693,
   "fps": 12.5,
   "frame_step": 4,
@@ -28,6 +28,129 @@
     -472.642162279779,
     -307.1152864936623,
     69.02600680375207
+  ],
+  "analysis_summary": {
+    "angle_mae_deg": {
+      "mean": 24.769448109803566,
+      "median": 23.05334081312506,
+      "p90": 37.06282591972662
+    },
+    "depth_component_cm": {
+      "mean": 109.7854166361611,
+      "median": 86.87968663710511,
+      "p90": 232.8027203895134
+    },
+    "depth_dominant_flag": {
+      "mean": 0.01443001443001443,
+      "median": 0.0,
+      "p90": 0.0
+    },
+    "depth_share_pct": {
+      "mean": 34.52645613150986,
+      "median": 35.98482650885351,
+      "p90": 46.285161145100155
+    },
+    "planar_component_cm": {
+      "mean": 182.40975130871243,
+      "median": 185.12679102667698,
+      "p90": 300.03839185048673
+    },
+    "snapshot_score": {
+      "mean": 42.24996624672553,
+      "median": 39.41787850094883,
+      "p90": 60.33540085122193
+    },
+    "worst_joint_error_deg": {
+      "mean": 56.522375645871854,
+      "median": 54.94515028691225,
+      "p90": 82.68247272354581
+    }
+  },
+  "snapshots": [
+    {
+      "frame_idx": 776,
+      "subject_time_s": 62.08,
+      "gt_time_s": 44.67999999999992,
+      "joint_distance_cm": 68.95026880849073,
+      "pelvis_distance_cm": 32.71574162714928,
+      "snapshot_score": 18.38553259559005,
+      "analysis": {
+        "angle_mae_deg": 12.848763463139107,
+        "worst_joint": "LeftElbow",
+        "worst_joint_error_deg": 28.74557087739288,
+        "depth_component_cm": 34.99382509853744,
+        "planar_component_cm": 56.99421643704865,
+        "depth_share_pct": 38.04171119894958,
+        "depth_dominant_flag": 0.0,
+        "snapshot_score": 18.38553259559005
+      },
+      "snapshot_type": "good",
+      "snapshot_rank": 2,
+      "png_path": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_mono_motionbert/results_mono/skeleton_snapshots_dirC/good_02_t62.08_score18.39.png"
+    },
+    {
+      "frame_idx": 1964,
+      "subject_time_s": 157.12,
+      "gt_time_s": 139.7199999999999,
+      "joint_distance_cm": 467.1613949167023,
+      "pelvis_distance_cm": 456.5113776089093,
+      "snapshot_score": 96.2724120050813,
+      "analysis": {
+        "angle_mae_deg": 55.13033220190768,
+        "worst_joint": "LeftKnee",
+        "worst_joint_error_deg": 88.61610467495056,
+        "depth_component_cm": 327.8099027042875,
+        "planar_component_cm": 330.05370700439465,
+        "depth_share_pct": 49.82946280452411,
+        "depth_dominant_flag": 0.0,
+        "snapshot_score": 96.2724120050813
+      },
+      "snapshot_type": "bad",
+      "snapshot_rank": 1,
+      "png_path": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_mono_motionbert/results_mono/skeleton_snapshots_dirC/bad_01_t157.12_score96.27.png"
+    },
+    {
+      "frame_idx": 2452,
+      "subject_time_s": 196.16,
+      "gt_time_s": 178.75999999999993,
+      "joint_distance_cm": 101.08516914671337,
+      "pelvis_distance_cm": 84.80061729281135,
+      "snapshot_score": 18.07634368982752,
+      "analysis": {
+        "angle_mae_deg": 9.642288679232115,
+        "worst_joint": "LeftShoulder",
+        "worst_joint_error_deg": 22.965636656734777,
+        "depth_component_cm": 59.22362154481513,
+        "planar_component_cm": 80.44725265289057,
+        "depth_share_pct": 42.402270254987755,
+        "depth_dominant_flag": 0.0,
+        "snapshot_score": 18.07634368982752
+      },
+      "snapshot_type": "good",
+      "snapshot_rank": 1,
+      "png_path": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_mono_motionbert/results_mono/skeleton_snapshots_dirC/good_01_t196.16_score18.08.png"
+    },
+    {
+      "frame_idx": 2912,
+      "subject_time_s": 232.96,
+      "gt_time_s": 215.55999999999995,
+      "joint_distance_cm": 153.8776657803029,
+      "pelvis_distance_cm": 157.31951740175248,
+      "snapshot_score": 94.16219581353725,
+      "analysis": {
+        "angle_mae_deg": 83.71636021556974,
+        "worst_joint": "LeftKnee",
+        "worst_joint_error_deg": 150.50736598962484,
+        "depth_component_cm": 30.329391278733564,
+        "planar_component_cm": 148.23952192537052,
+        "depth_share_pct": 16.984698363520362,
+        "depth_dominant_flag": 0.0,
+        "snapshot_score": 94.16219581353725
+      },
+      "snapshot_type": "bad",
+      "snapshot_rank": 2,
+      "png_path": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_mono_motionbert/results_mono/skeleton_snapshots_dirC/bad_02_t232.96_score94.16.png"
+    }
   ],
   "marker_names": [
     "Nose",

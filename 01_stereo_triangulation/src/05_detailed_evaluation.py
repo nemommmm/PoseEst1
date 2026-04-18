@@ -177,6 +177,179 @@ def get_activity_and_scenario(t):
     return "Unclassified", "Unclassified"
 
 
+QUALITY_AWARE_SIGNAL_MAP = {
+    "LeftShoulder": {"signal": "epipolar_error_max", "bad_tail": "high"},
+    "RightShoulder": {"signal": "pair_conf_min", "bad_tail": "low"},
+    "LeftElbow": {"signal": "detect_conf_min", "bad_tail": "low"},
+    "RightElbow": {"signal": "detect_conf_min", "bad_tail": "low"},
+    "LeftHip": {"signal": "detect_conf_min", "bad_tail": "low"},
+    "RightHip": {"signal": "stereo_quality_min", "bad_tail": "low"},
+    "LeftKnee": {"signal": "detect_conf_min", "bad_tail": "low"},
+    "RightKnee": {"signal": "stereo_quality_min", "bad_tail": "low"},
+}
+
+QUALITY_AWARE_ANGLE_JOINTS = {
+    "LeftShoulder": [5, 6, 7, 11, 12],
+    "RightShoulder": [5, 6, 8, 11, 12],
+    "LeftElbow": [5, 7, 9],
+    "RightElbow": [6, 8, 10],
+    "LeftHip": [5, 11, 13],
+    "RightHip": [6, 12, 14],
+    "LeftKnee": [11, 13, 15],
+    "RightKnee": [12, 14, 16],
+}
+
+
+def nanmin_over_joints(array, joint_indices):
+    subset = np.asarray(array[:, joint_indices], dtype=np.float64)
+    out = np.full(subset.shape[0], np.nan, dtype=np.float64)
+    for frame_idx, row in enumerate(subset):
+        finite = row[np.isfinite(row)]
+        if finite.size:
+            out[frame_idx] = float(np.min(finite))
+    return out
+
+
+def nanmax_over_joints(array, joint_indices):
+    subset = np.asarray(array[:, joint_indices], dtype=np.float64)
+    out = np.full(subset.shape[0], np.nan, dtype=np.float64)
+    for frame_idx, row in enumerate(subset):
+        finite = row[np.isfinite(row)]
+        if finite.size:
+            out[frame_idx] = float(np.max(finite))
+    return out
+
+
+def build_quality_signal_lookup(pose_data, angle_names, valid_mask, unique_idx):
+    required_keys = {
+        "pair_confidence",
+        "stereo_quality",
+        "epipolar_error",
+        "conf_left",
+        "conf_right",
+    }
+    if not required_keys.issubset(set(pose_data.files)):
+        return {}
+
+    pair_conf = pose_data["pair_confidence"][valid_mask][unique_idx]
+    stereo_quality = pose_data["stereo_quality"][valid_mask][unique_idx]
+    epipolar_error = pose_data["epipolar_error"][valid_mask][unique_idx]
+    conf_left = pose_data["conf_left"][valid_mask][unique_idx]
+    conf_right = pose_data["conf_right"][valid_mask][unique_idx]
+
+    lookup = {}
+    for angle_name in angle_names:
+        joints = QUALITY_AWARE_ANGLE_JOINTS.get(angle_name)
+        if joints is None:
+            continue
+        lookup[angle_name] = {
+            "pair_conf_min": nanmin_over_joints(pair_conf, joints),
+            "stereo_quality_min": nanmin_over_joints(stereo_quality, joints),
+            "epipolar_error_max": nanmax_over_joints(epipolar_error, joints),
+            "detect_conf_min": np.minimum(
+                nanmin_over_joints(conf_left, joints),
+                nanmin_over_joints(conf_right, joints),
+            ),
+        }
+    return lookup
+
+
+def fit_quality_aware_calibrations(
+    angle_names,
+    est_angle_vals_v,
+    gt_angle_interp,
+    est_ts_v,
+    best_offset,
+    quality_lookup,
+    calibration_bins,
+    split_percentile,
+    min_fit_samples,
+):
+    global_calibrations = {}
+    quality_models = {}
+
+    for angle_idx, angle_name in enumerate(angle_names):
+        est_col = est_angle_vals_v[:, angle_idx]
+        if angle_name not in gt_angle_interp:
+            global_calibrations[angle_name] = None
+            quality_models[angle_name] = None
+            continue
+
+        gt_col = gt_angle_interp[angle_name](est_ts_v - best_offset)
+        finite = np.isfinite(est_col) & np.isfinite(gt_col)
+        global_calibrations[angle_name] = (
+            fit_piecewise_calibration(est_col[finite], gt_col[finite], n_bins=calibration_bins)
+            if int(finite.sum()) >= min_fit_samples
+            else None
+        )
+
+        signal_cfg = QUALITY_AWARE_SIGNAL_MAP.get(angle_name)
+        signal_values = None
+        if signal_cfg is not None:
+            signal_values = quality_lookup.get(angle_name, {}).get(signal_cfg["signal"])
+        if signal_values is None:
+            quality_models[angle_name] = None
+            continue
+
+        finite_signal = finite & np.isfinite(signal_values)
+        if int(finite_signal.sum()) < min_fit_samples:
+            quality_models[angle_name] = None
+            continue
+
+        threshold = float(np.nanpercentile(signal_values[finite_signal], split_percentile))
+        if signal_cfg["bad_tail"] == "high":
+            bad_mask = finite_signal & (signal_values >= threshold)
+            good_mask = finite_signal & (signal_values < threshold)
+        else:
+            bad_mask = finite_signal & (signal_values <= threshold)
+            good_mask = finite_signal & (signal_values > threshold)
+
+        bad_cal = (
+            fit_piecewise_calibration(est_col[bad_mask], gt_col[bad_mask], n_bins=calibration_bins)
+            if int(bad_mask.sum()) >= min_fit_samples
+            else None
+        )
+        good_cal = (
+            fit_piecewise_calibration(est_col[good_mask], gt_col[good_mask], n_bins=calibration_bins)
+            if int(good_mask.sum()) >= min_fit_samples
+            else None
+        )
+
+        quality_models[angle_name] = {
+            "signal_name": signal_cfg["signal"],
+            "bad_tail": signal_cfg["bad_tail"],
+            "threshold": threshold,
+            "bad": bad_cal,
+            "good": good_cal,
+        }
+
+    return global_calibrations, quality_models
+
+
+def apply_quality_aware_series(raw_values, signal_values, model, fallback_calibration):
+    out = np.asarray(raw_values, dtype=np.float64).copy()
+    if model is None:
+        if fallback_calibration is not None:
+            out = apply_piecewise_calibration(out, fallback_calibration)
+        return out
+
+    threshold = float(model["threshold"])
+    for idx, raw_value in enumerate(out):
+        if not np.isfinite(raw_value):
+            continue
+
+        signal_value = signal_values[idx] if signal_values is not None else np.nan
+        selected = None
+        if np.isfinite(signal_value):
+            is_bad = signal_value >= threshold if model["bad_tail"] == "high" else signal_value <= threshold
+            selected = model["bad"] if is_bad else model["good"]
+        if selected is None:
+            selected = fallback_calibration
+        if selected is not None:
+            out[idx] = apply_piecewise_calibration(np.array([raw_value]), selected)[0]
+    return out
+
+
 def main():
     print("=" * 60)
     print("[Evaluation] Joint Angle-based Ergonomic Evaluation")
@@ -275,32 +448,80 @@ def main():
     CALIBRATION_BINS = int(os.environ.get("POSE_CALIBRATION_BINS", "10"))
     CALIBRATION_SAVE = os.environ.get("POSE_CALIBRATION_SAVE", "").strip()
     CALIBRATION_LOAD = os.environ.get("POSE_CALIBRATION_LOAD", "").strip()
+    CALIBRATION_MODE = os.environ.get("POSE_ANGLE_CALIBRATION_MODE", "global").strip().lower()
+    QA_SPLIT_PERCENTILE = float(os.environ.get("POSE_QA_SPLIT_PERCENTILE", "35"))
+    QA_MIN_FIT_SAMPLES = int(os.environ.get("POSE_QA_MIN_FIT_SAMPLES", "80"))
     if ENABLE_CALIBRATION:
-        if CALIBRATION_LOAD and os.path.exists(CALIBRATION_LOAD):
+        if CALIBRATION_MODE == "quality_aware":
+            quality_lookup = build_quality_signal_lookup(pose_data, est_angle_names, valid_mask, uidx)
+            if not quality_lookup:
+                print("[Warning] Missing stereo quality arrays in pose file; falling back to global calibration.")
+                CALIBRATION_MODE = "global"
+
+        if CALIBRATION_LOAD and os.path.exists(CALIBRATION_LOAD) and CALIBRATION_MODE == "global":
             print(f"[Info] Loading calibration from {CALIBRATION_LOAD}...")
             calibrations = load_calibration(CALIBRATION_LOAD, est_angle_names)
         else:
-            print(f"[Info] Fitting piecewise angle calibration ({CALIBRATION_BINS} bins)...")
-            calibrations = {}
-            for angle_idx, angle_name in enumerate(est_angle_names):
-                if angle_name not in gt_angle_interp:
-                    calibrations[angle_name] = None
-                    continue
-                est_col = est_angle_vals_v[:, angle_idx]
-                gt_col = gt_angle_interp[angle_name](est_ts_v - best_offset)
-                calibrations[angle_name] = fit_piecewise_calibration(est_col, gt_col, n_bins=CALIBRATION_BINS)
-            if CALIBRATION_SAVE:
+            if CALIBRATION_MODE == "quality_aware":
+                print(
+                    f"[Info] Fitting quality-aware angle calibration ({CALIBRATION_BINS} bins, "
+                    f"split={QA_SPLIT_PERCENTILE:.0f}th percentile)..."
+                )
+                calibrations, qa_models = fit_quality_aware_calibrations(
+                    est_angle_names,
+                    est_angle_vals_v,
+                    gt_angle_interp,
+                    est_ts_v,
+                    best_offset,
+                    quality_lookup,
+                    CALIBRATION_BINS,
+                    QA_SPLIT_PERCENTILE,
+                    QA_MIN_FIT_SAMPLES,
+                )
+            else:
+                print(f"[Info] Fitting piecewise angle calibration ({CALIBRATION_BINS} bins)...")
+                calibrations = {}
+                for angle_idx, angle_name in enumerate(est_angle_names):
+                    if angle_name not in gt_angle_interp:
+                        calibrations[angle_name] = None
+                        continue
+                    est_col = est_angle_vals_v[:, angle_idx]
+                    gt_col = gt_angle_interp[angle_name](est_ts_v - best_offset)
+                    calibrations[angle_name] = fit_piecewise_calibration(est_col, gt_col, n_bins=CALIBRATION_BINS)
+            if CALIBRATION_SAVE and CALIBRATION_MODE == "global":
                 save_calibration(CALIBRATION_SAVE, calibrations)
                 print(f"[Info] Calibration saved to {CALIBRATION_SAVE}")
         for angle_idx, angle_name in enumerate(est_angle_names):
             cal = calibrations.get(angle_name)
-            if cal is not None:
-                est_angle_vals_v[:, angle_idx] = apply_piecewise_calibration(
-                    est_angle_vals_v[:, angle_idx], cal
+            if CALIBRATION_MODE == "quality_aware":
+                model = qa_models.get(angle_name) if "qa_models" in locals() else None
+                signal_name = None
+                signal_values = None
+                if model is not None:
+                    signal_name = model["signal_name"]
+                    signal_values = quality_lookup.get(angle_name, {}).get(signal_name)
+                est_angle_vals_v[:, angle_idx] = apply_quality_aware_series(
+                    est_angle_vals_v[:, angle_idx],
+                    signal_values,
+                    model,
+                    cal,
                 )
-                centers, corrections = cal
-                print(f"  {angle_name}: correction range [{corrections.min():+.1f}, {corrections.max():+.1f}]°")
-        print("[Info] Calibration applied.")
+                if model is not None:
+                    print(
+                        f"  {angle_name}: quality-aware via {signal_name} "
+                        f"(threshold={model['threshold']:.3f})"
+                    )
+                elif cal is not None:
+                    centers, corrections = cal
+                    print(f"  {angle_name}: fallback global range [{corrections.min():+.1f}, {corrections.max():+.1f}]°")
+            else:
+                if cal is not None:
+                    est_angle_vals_v[:, angle_idx] = apply_piecewise_calibration(
+                        est_angle_vals_v[:, angle_idx], cal
+                    )
+                    centers, corrections = cal
+                    print(f"  {angle_name}: correction range [{corrections.min():+.1f}, {corrections.max():+.1f}]°")
+        print(f"[Info] Calibration applied in {CALIBRATION_MODE} mode.")
 
     # Kabsch alignment for MPJPE
     y_pelvis = (est_kpts_v[:, 11] + est_kpts_v[:, 12]) / 2.0

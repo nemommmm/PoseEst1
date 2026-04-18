@@ -258,6 +258,56 @@
   - elbow correction triggered by low 2D detector confidence,
   - knee correction / stronger fallback triggered by low stereo quality in occlusion frames,
   - scenario-aware selective smoothing or interpolation instead of full-sequence replacement.
+
+## 2026-04-19 - Quality-Aware Angle Calibration Prototype
+
+- Added prototype evaluator:
+  - `01_stereo_triangulation/src/13_quality_aware_calibration_eval.py`
+- Added optional integration into main evaluation:
+  - `POSE_ANGLE_CALIBRATION_MODE=quality_aware`
+  - implemented in `01_stereo_triangulation/src/05_detailed_evaluation.py`
+
+### Prototype result
+
+- On historical best pose with `POSE_ANGLE_SMOOTH_RADIUS=8`:
+  - global piecewise calibration: `14.61°`
+  - quality-aware calibration: `13.44°`
+- Out-of-sample split comparison also improved:
+  - Baseline: `16.18° -> 15.90°`
+  - Occlusion: `21.19° -> 20.49°`
+  - Environmental Interference: `13.98° -> 13.80°`
+
+### Main evaluation result
+
+- Using:
+  - `POSE_ANGLE_CALIBRATION=1`
+  - `POSE_ANGLE_CALIBRATION_MODE=quality_aware`
+  - `POSE_QA_SPLIT_PERCENTILE=35`
+  - historical alignment offset `17.25 s`
+- Main script output:
+  - overall angle MAE `12.54°`
+  - fair GT angle MAE `13.10°`
+  - elbow RULA accuracy `75.59%`
+  - MPJPE `26.14 cm`
+
+### Comparison to same-setting global calibration
+
+- Same pose + same smoothing + global calibration:
+  - overall angle MAE `12.96°`
+  - fair GT angle MAE `13.49°`
+  - elbow RULA accuracy `77.27%`
+  - MPJPE `26.14 cm`
+
+### Interpretation
+
+- Quality-aware calibration is the first post-AFH1 direction that clearly improves the **primary metric** without changing the 3D skeleton itself.
+- Gain comes from using current stereo reliability signals to decide when a joint-angle correction curve should behave differently.
+- Tradeoff still exists:
+  - joint-angle MAE improves,
+  - elbow RULA drops slightly relative to same-setting global calibration.
+- Therefore the next refinement should optimize either:
+  - angle MAE as primary target, or
+  - a mixed objective that protects elbow RULA while keeping the MAE gain.
   - old `08_ergonomic_scoring.py` on the same chain: Grand Score within ±1 `84.7%`
 
 ### Interpretation

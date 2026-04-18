@@ -1,0 +1,193 @@
+AngleName,Scenario,Signal,N,MeanAngleError,MeanSignalValue
+LeftShoulder,Baseline,pair_conf_min,372,18.467464239150388,0.659255360177272
+LeftShoulder,Occlusion,pair_conf_min,645,15.225988173358488,0.5250183835657698
+LeftShoulder,Environmental Interference,pair_conf_min,282,17.535001688193006,0.49109337415052606
+LeftShoulder,Unclassified,pair_conf_min,1174,21.73239336916525,0.5940263388979948
+LeftShoulder,Baseline,stereo_quality_min,372,18.467464239150388,0.5284167466512257
+LeftShoulder,Occlusion,stereo_quality_min,645,15.225988173358488,0.39200683737426173
+LeftShoulder,Environmental Interference,stereo_quality_min,282,17.535001688193006,0.41696129040486996
+LeftShoulder,Unclassified,stereo_quality_min,1174,21.73239336916525,0.46471648972354296
+LeftShoulder,Baseline,reprojection_error_max,372,18.467464239150388,2.4858358784788663
+LeftShoulder,Occlusion,reprojection_error_max,645,15.225988173358488,2.7169547359781525
+LeftShoulder,Environmental Interference,reprojection_error_max,282,17.535001688193006,1.2215399108210894
+LeftShoulder,Unclassified,reprojection_error_max,1173,21.69264469923321,2.0986692163439677
+LeftShoulder,Baseline,epipolar_error_max,372,18.467464239150388,6.853127997537061
+LeftShoulder,Occlusion,epipolar_error_max,645,15.225988173358488,6.880424608211869
+LeftShoulder,Environmental Interference,epipolar_error_max,282,17.535001688193006,2.8479025580297344
+LeftShoulder,Unclassified,epipolar_error_max,1174,21.73239336916525,7.4503973869940605
+LeftShoulder,Baseline,detect_conf_min,363,18.07952960976563,0.8717480285847483
+LeftShoulder,Occlusion,detect_conf_min,635,15.279088574125144,0.6756949598130982
+LeftShoulder,Environmental Interference,detect_conf_min,280,17.632545701094312,0.6466715904750995
+LeftShoulder,Unclassified,detect_conf_min,1171,21.6249721972712,0.7631422233545913
+LeftShoulder,Baseline,temporal_rescue_fraction,386,19.834849648604695,0.09378238341968911
+LeftShoulder,Occlusion,temporal_rescue_fraction,645,15.225988173358488,0.16372093023255813
+LeftShoulder,Environmental Interference,temporal_rescue_fraction,282,17.535001688193006,0.11773049645390071
+LeftShoulder,Unclassified,temporal_rescue_fraction,1185,22.263879535485575,0.109873417721519
+RightShoulder,Baseline,pair_conf_min,372,15.388446657942364,0.6462742839282597
+RightShoulder,Occlusion,pair_conf_min,655,17.093958650403806,0.533795871920012
+RightShoulder,Environmental Interference,pair_conf_min,282,12.638321854748346,0.6920663338071535
+RightShoulder,Unclassified,pair_conf_min,1174,14.018151263317092,0.6203692749351716
+RightShoulder,Baseline,stereo_quality_min,372,15.388446657942364,0.5003402414821051
+RightShoulder,Occlusion,stereo_quality_min,655,17.093958650403806,0.3911858324299449
+RightShoulder,Environmental Interference,stereo_quality_min,282,12.638321854748346,0.5770310038577029
+RightShoulder,Unclassified,stereo_quality_min,1174,14.018151263317092,0.4823363264082728
+RightShoulder,Baseline,reprojection_error_max,372,15.388446657942364,3.0997712666020103
+RightShoulder,Occlusion,reprojection_error_max,655,17.093958650403806,2.921883862614951
+RightShoulder,Environmental Interference,reprojection_error_max,282,12.638321854748346,1.360793322204401
+RightShoulder,Unclassified,reprojection_error_max,1173,14.012069329849503,2.158013742202848
+RightShoulder,Baseline,epipolar_error_max,372,15.388446657942364,8.456505628769785
+RightShoulder,Occlusion,epipolar_error_max,655,17.093958650403806,7.335064994348566
+RightShoulder,Environmental Interference,epipolar_error_max,282,12.638321854748346,2.759477450660732
+RightShoulder,Unclassified,epipolar_error_max,1174,14.018151263317092,5.247232724607129
+RightShoulder,Baseline,detect_conf_min,363,15.087888262293438,0.847456406052776
+RightShoulder,Occlusion,detect_conf_min,645,16.942889682939693,0.6929782012838495
+RightShoulder,Environmental Interference,detect_conf_min,280,12.666983148563588,0.8744687538061823
+RightShoulder,Unclassified,detect_conf_min,1171,13.984301764141435,0.8183792617130646
+RightShoulder,Baseline,temporal_rescue_fraction,386,17.072751421253987,0.10362694300518134
+RightShoulder,Occlusion,temporal_rescue_fraction,655,17.093958650403806,0.1749618320610687
+RightShoulder,Environmental Interference,temporal_rescue_fraction,282,12.638321854748346,0.04680851063829788
+RightShoulder,Unclassified,temporal_rescue_fraction,1189,14.50685363439637,0.08242220353238015
+LeftElbow,Baseline,pair_conf_min,376,19.96114574496532,0.6691979185504348
+LeftElbow,Occlusion,pair_conf_min,645,19.867922883495414,0.635104187282742
+LeftElbow,Environmental Interference,pair_conf_min,282,21.516116891869235,0.4630531851913236
+LeftElbow,Unclassified,pair_conf_min,1172,24.330671282621125,0.5723928222748623
+LeftElbow,Baseline,stereo_quality_min,376,19.96114574496532,0.5469975230003817
+LeftElbow,Occlusion,stereo_quality_min,645,19.867922883495414,0.5220144772562484
+LeftElbow,Environmental Interference,stereo_quality_min,282,21.516116891869235,0.3867999595754114
+LeftElbow,Unclassified,stereo_quality_min,1172,24.330671282621125,0.44035109398947286
+LeftElbow,Baseline,reprojection_error_max,366,18.580267827646825,1.817635259018985
+LeftElbow,Occlusion,reprojection_error_max,642,19.872194652464156,1.736431385557641
+LeftElbow,Environmental Interference,reprojection_error_max,282,21.516116891869235,0.9778461495969153
+LeftElbow,Unclassified,reprojection_error_max,1082,20.883600902528023,2.061548901304069
+LeftElbow,Baseline,epipolar_error_max,376,19.96114574496532,6.25630794938764
+LeftElbow,Occlusion,epipolar_error_max,645,19.867922883495414,4.810382189743779
+LeftElbow,Environmental Interference,epipolar_error_max,282,21.516116891869235,3.481086369437442
+LeftElbow,Unclassified,epipolar_error_max,1172,24.330671282621125,10.556748891502902
+LeftElbow,Baseline,detect_conf_min,367,19.522111299538274,0.879113365670194
+LeftElbow,Occlusion,detect_conf_min,635,20.021216256851005,0.8196483089229253
+LeftElbow,Environmental Interference,detect_conf_min,280,21.57765001370383,0.613951595925859
+LeftElbow,Unclassified,detect_conf_min,1169,24.333936613741653,0.7538678208995416
+LeftElbow,Baseline,temporal_rescue_fraction,390,20.070542673100267,0.11709401709401707
+LeftElbow,Occlusion,temporal_rescue_fraction,645,19.867922883495414,0.1400516795865633
+LeftElbow,Environmental Interference,temporal_rescue_fraction,282,21.516116891869235,0.2895981087470449
+LeftElbow,Unclassified,temporal_rescue_fraction,1183,24.354390838719667,0.23612285150746692
+RightElbow,Baseline,pair_conf_min,376,23.553677814220595,0.6506995100673536
+RightElbow,Occlusion,pair_conf_min,655,22.535383227471375,0.6223234184021782
+RightElbow,Environmental Interference,pair_conf_min,282,16.469427736245652,0.7168686037816688
+RightElbow,Unclassified,pair_conf_min,1174,21.52712402070079,0.6668903566641965
+RightElbow,Baseline,stereo_quality_min,376,23.553677814220595,0.5030636716385837
+RightElbow,Occlusion,stereo_quality_min,655,22.535383227471375,0.4798446162042179
+RightElbow,Environmental Interference,stereo_quality_min,282,16.469427736245652,0.5922285036159869
+RightElbow,Unclassified,stereo_quality_min,1174,21.52712402070079,0.524053963074036
+RightElbow,Baseline,reprojection_error_max,374,23.50557591268551,3.073522223808948
+RightElbow,Occlusion,reprojection_error_max,641,21.958976525916636,2.5364516552286096
+RightElbow,Environmental Interference,reprojection_error_max,282,16.469427736245652,1.4844573621744608
+RightElbow,Unclassified,reprojection_error_max,1169,21.498652521105427,2.1531870394763053
+RightElbow,Baseline,epipolar_error_max,376,23.553677814220595,8.177942556472274
+RightElbow,Occlusion,epipolar_error_max,655,22.535383227471375,6.488130973621535
+RightElbow,Environmental Interference,epipolar_error_max,282,16.469427736245652,3.3881234975995307
+RightElbow,Unclassified,epipolar_error_max,1174,21.52712402070079,5.950684693306673
+RightElbow,Baseline,detect_conf_min,367,23.38836981323056,0.849760524096216
+RightElbow,Occlusion,detect_conf_min,645,22.373525837850096,0.8063837997528702
+RightElbow,Environmental Interference,detect_conf_min,280,16.39497750254367,0.9354699279580797
+RightElbow,Unclassified,detect_conf_min,1171,21.566690978824997,0.8840363979670454
+RightElbow,Baseline,temporal_rescue_fraction,392,25.421265413187502,0.16751700680272105
+RightElbow,Occlusion,temporal_rescue_fraction,655,22.535383227471375,0.16692111959287528
+RightElbow,Environmental Interference,temporal_rescue_fraction,282,16.469427736245652,0.048463356973995265
+RightElbow,Unclassified,temporal_rescue_fraction,1196,21.27240513714327,0.11092530657748048
+LeftHip,Baseline,pair_conf_min,363,12.587474707878336,0.6819623933102283
+LeftHip,Occlusion,pair_conf_min,370,19.28201455671725,0.4869875137027209
+LeftHip,Environmental Interference,pair_conf_min,282,22.665477053219103,0.6847606806732631
+LeftHip,Unclassified,pair_conf_min,1174,14.092169561447582,0.6628783144596189
+LeftHip,Baseline,stereo_quality_min,363,12.587474707878336,0.5394540458719937
+LeftHip,Occlusion,stereo_quality_min,370,19.28201455671725,0.36298184067710476
+LeftHip,Environmental Interference,stereo_quality_min,282,22.665477053219103,0.5754877535938566
+LeftHip,Unclassified,stereo_quality_min,1174,14.092169561447582,0.5282080743194788
+LeftHip,Baseline,reprojection_error_max,357,12.644535507765216,2.025733146200433
+LeftHip,Occlusion,reprojection_error_max,370,19.28201455671725,2.938664315765873
+LeftHip,Environmental Interference,reprojection_error_max,282,22.665477053219103,1.3690055297284955
+LeftHip,Unclassified,reprojection_error_max,1169,13.866250789340553,1.6733621294558374
+LeftHip,Baseline,epipolar_error_max,363,12.587474707878336,8.606473546432104
+LeftHip,Occlusion,epipolar_error_max,370,19.28201455671725,8.699112544993124
+LeftHip,Environmental Interference,epipolar_error_max,282,22.665477053219103,3.047087658865514
+LeftHip,Unclassified,epipolar_error_max,1174,14.092169561447582,4.591077838197001
+LeftHip,Baseline,detect_conf_min,358,12.459175649592613,0.9021973479675732
+LeftHip,Occlusion,detect_conf_min,360,19.355547251817548,0.6131225059481544
+LeftHip,Environmental Interference,detect_conf_min,280,22.669435281355543,0.8473532754927874
+LeftHip,Unclassified,detect_conf_min,1171,14.047442378450489,0.8781712267459962
+LeftHip,Baseline,temporal_rescue_fraction,364,12.58370467503322,0.08516483516483514
+LeftHip,Occlusion,temporal_rescue_fraction,370,19.28201455671725,0.20270270270270271
+LeftHip,Environmental Interference,temporal_rescue_fraction,282,22.665477053219103,0.0756501182033097
+LeftHip,Unclassified,temporal_rescue_fraction,1184,14.422303782764798,0.10078828828828827
+RightHip,Baseline,pair_conf_min,365,14.727425578725738,0.6810163108444781
+RightHip,Occlusion,pair_conf_min,370,16.951014008491104,0.4900222827720801
+RightHip,Environmental Interference,pair_conf_min,282,19.612634499391053,0.7122769984976125
+RightHip,Unclassified,pair_conf_min,1174,15.937545586739175,0.700677980541291
+RightHip,Baseline,stereo_quality_min,365,14.727425578725738,0.5410146506526343
+RightHip,Occlusion,stereo_quality_min,370,16.951014008491104,0.37753757070864513
+RightHip,Environmental Interference,stereo_quality_min,282,19.612634499391053,0.5881921063656221
+RightHip,Unclassified,stereo_quality_min,1174,15.937545586739175,0.5504998197722912
+RightHip,Baseline,reprojection_error_max,364,14.629854674133638,2.0598650369683833
+RightHip,Occlusion,reprojection_error_max,369,16.90504828764741,2.5424328922034696
+RightHip,Environmental Interference,reprojection_error_max,282,19.612634499391053,1.5298621493880131
+RightHip,Unclassified,reprojection_error_max,1173,15.939735985264194,1.7270139395926345
+RightHip,Baseline,epipolar_error_max,365,14.727425578725738,7.048008741737193
+RightHip,Occlusion,epipolar_error_max,370,16.951014008491104,8.486545364027894
+RightHip,Environmental Interference,epipolar_error_max,282,19.612634499391053,3.4802505479860955
+RightHip,Unclassified,epipolar_error_max,1174,15.937545586739175,4.1141914304192735
+RightHip,Baseline,detect_conf_min,359,14.151550421247027,0.8884163498359636
+RightHip,Occlusion,detect_conf_min,360,16.89877008875203,0.6241345920781087
+RightHip,Environmental Interference,detect_conf_min,280,19.6520354495263,0.9354836195707321
+RightHip,Unclassified,detect_conf_min,1171,15.905741393510217,0.9450640777644107
+RightHip,Baseline,temporal_rescue_fraction,366,14.89268399160107,0.08105646630236793
+RightHip,Occlusion,temporal_rescue_fraction,370,16.951014008491104,0.18018018018018014
+RightHip,Environmental Interference,temporal_rescue_fraction,282,19.612634499391053,0.07683215130023639
+RightHip,Unclassified,temporal_rescue_fraction,1184,16.05020585178065,0.06672297297297297
+LeftKnee,Baseline,pair_conf_min,363,14.002126080681164,0.6333926608770636
+LeftKnee,Occlusion,pair_conf_min,371,32.44652308735044,0.44668602262341933
+LeftKnee,Environmental Interference,pair_conf_min,282,21.75898235309163,0.6537122131808321
+LeftKnee,Unclassified,pair_conf_min,1173,13.668434852723752,0.6654359287795825
+LeftKnee,Baseline,stereo_quality_min,363,14.002126080681164,0.49043463130254983
+LeftKnee,Occlusion,stereo_quality_min,371,32.44652308735044,0.3183738891338774
+LeftKnee,Environmental Interference,stereo_quality_min,282,21.75898235309163,0.5518703756594628
+LeftKnee,Unclassified,stereo_quality_min,1173,13.668434852723752,0.5199474031046429
+LeftKnee,Baseline,reprojection_error_max,354,14.148284410943269,2.2902702925823744
+LeftKnee,Occlusion,reprojection_error_max,367,31.980169433595062,3.205155519912618
+LeftKnee,Environmental Interference,reprojection_error_max,281,21.812029910467924,1.579261010598949
+LeftKnee,Unclassified,reprojection_error_max,1166,13.59727296066668,1.911392138722445
+LeftKnee,Baseline,epipolar_error_max,363,14.002126080681164,13.634795834551507
+LeftKnee,Occlusion,epipolar_error_max,371,32.44652308735044,12.193692185335644
+LeftKnee,Environmental Interference,epipolar_error_max,282,21.75898235309163,4.868902723168784
+LeftKnee,Unclassified,epipolar_error_max,1173,13.668434852723752,5.179192095558804
+LeftKnee,Baseline,detect_conf_min,358,13.910936591775922,0.8220275609029519
+LeftKnee,Occlusion,detect_conf_min,361,32.224559885316026,0.5743358294912317
+LeftKnee,Environmental Interference,detect_conf_min,280,21.779888189985208,0.7978506992895356
+LeftKnee,Unclassified,detect_conf_min,1171,13.621950025423267,0.8751179976976232
+LeftKnee,Baseline,temporal_rescue_fraction,364,13.980319048575064,0.10164835164835165
+LeftKnee,Occlusion,temporal_rescue_fraction,371,32.44652308735044,0.21473495058400716
+LeftKnee,Environmental Interference,temporal_rescue_fraction,282,21.75898235309163,0.11820330969267137
+LeftKnee,Unclassified,temporal_rescue_fraction,1183,13.887322985198123,0.0994646379261764
+RightKnee,Baseline,pair_conf_min,363,17.950622552763697,0.6356581499450922
+RightKnee,Occlusion,pair_conf_min,333,25.794265417771285,0.5105329825685628
+RightKnee,Environmental Interference,pair_conf_min,282,20.18790774997788,0.6638124031472777
+RightKnee,Unclassified,pair_conf_min,1164,12.558466270261329,0.6697425014443972
+RightKnee,Baseline,stereo_quality_min,363,17.950622552763697,0.49877003990582314
+RightKnee,Occlusion,stereo_quality_min,333,25.794265417771285,0.3887915528661883
+RightKnee,Environmental Interference,stereo_quality_min,282,20.18790774997788,0.5510764802174535
+RightKnee,Unclassified,stereo_quality_min,1164,12.558466270261329,0.5190765192298233
+RightKnee,Baseline,reprojection_error_max,350,17.547363291989193,1.8750547846838337
+RightKnee,Occlusion,reprojection_error_max,326,24.96121520851809,2.740187263675335
+RightKnee,Environmental Interference,reprojection_error_max,281,20.17544448159266,1.7613913590288814
+RightKnee,Unclassified,reprojection_error_max,1161,12.494097504836537,2.0775610787213186
+RightKnee,Baseline,epipolar_error_max,363,17.950622552763697,10.952731874588851
+RightKnee,Occlusion,epipolar_error_max,333,25.794265417771285,11.162693417023409
+RightKnee,Environmental Interference,epipolar_error_max,282,20.18790774997788,5.537147660711819
+RightKnee,Unclassified,epipolar_error_max,1164,12.558466270261329,5.4585788724089
+RightKnee,Baseline,detect_conf_min,359,17.526937602226802,0.8072816320622993
+RightKnee,Occlusion,detect_conf_min,324,25.75857406117284,0.6483539809621253
+RightKnee,Environmental Interference,detect_conf_min,280,20.126214073804512,0.8405698001958496
+RightKnee,Unclassified,detect_conf_min,1162,12.538681633964378,0.8846295667086536
+RightKnee,Baseline,temporal_rescue_fraction,366,18.830622850523252,0.08652094717668486
+RightKnee,Occlusion,temporal_rescue_fraction,333,25.794265417771285,0.15115115115115116
+RightKnee,Environmental Interference,temporal_rescue_fraction,282,20.18790774997788,0.1193853427895981
+RightKnee,Unclassified,temporal_rescue_fraction,1174,12.79294600571518,0.09398069278818852

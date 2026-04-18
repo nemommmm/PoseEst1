@@ -1,0 +1,9 @@
+AngleName,BestSignal,Description,SpearmanRho,MAE_BadQuartile,MAE_GoodQuartile,MAE_Gap_BadMinusGood
+LeftShoulder,epipolar_error_max,Worst post-rectification epipolar mismatch among angle-defining joints,0.09527083505778873,25.138808316734575,16.66628057797208,8.472527738762494
+RightShoulder,pair_conf_min,Lowest stereo pair confidence among angle-defining joints,-0.23011132338815216,20.214188397740863,11.286980554228386,8.927207843512477
+LeftElbow,detect_conf_min,Lowest 2D detector confidence across both cameras,-0.3975421606701388,36.426874225751945,14.431200062431625,21.99567416332032
+RightElbow,detect_conf_min,Lowest 2D detector confidence across both cameras,-0.18031557258255684,28.466084726411825,18.421240128828916,10.044844597582909
+LeftHip,detect_conf_min,Lowest 2D detector confidence across both cameras,-0.19512824289572014,22.060697296493096,12.20187912847899,9.858818168014107
+RightHip,stereo_quality_min,Lowest fused stereo quality among angle-defining joints,-0.1695179808810538,20.899330406232046,13.36057684073058,7.538753565501466
+LeftKnee,detect_conf_min,Lowest 2D detector confidence across both cameras,-0.22852151405928606,28.803252592811187,13.797524145125777,15.00572844768541
+RightKnee,stereo_quality_min,Lowest fused stereo quality among angle-defining joints,-0.19092025791265962,25.377270731732434,13.405831288801691,11.971439442930743

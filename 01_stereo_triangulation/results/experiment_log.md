@@ -308,6 +308,55 @@
 - Therefore the next refinement should optimize either:
   - angle MAE as primary target, or
   - a mixed objective that protects elbow RULA while keeping the MAE gain.
+
+## 2026-04-19 - Selective Quality-Aware Calibration
+
+- Added subset-search script:
+  - `01_stereo_triangulation/src/14_selective_quality_calibration_search.py`
+- Added selective control in main evaluation:
+  - `POSE_QA_APPLY_ANGLES`
+
+### Selective search conclusion
+
+- Full quality-aware calibration gives the best MAE, but hurts elbow RULA:
+  - global: `12.96°`, elbow RULA `77.27%`
+  - full quality-aware: `12.54°`, elbow RULA `75.59%`
+- Best balanced family from subset search:
+  - keep elbows on **global**
+  - apply quality-aware only to:
+    - `LeftShoulder`
+    - `RightShoulder`
+    - `LeftHip`
+    - `RightHip`
+    - `LeftKnee`
+    - `RightKnee`
+
+### Main-script validation
+
+- Candidate `selective_v1`
+  - quality-aware on:
+    - `LeftElbow`, `LeftShoulder`, `LeftHip`, `LeftKnee`, `RightShoulder`, `RightHip`, `RightKnee`
+  - result:
+    - angle MAE `12.57°`
+    - fair GT MAE `13.14°`
+    - elbow RULA `76.23%`
+
+- Candidate `selective_v2` (best balanced)
+  - quality-aware on shoulders + hips + knees only
+  - elbows remain global-only
+  - result:
+    - angle MAE `12.71°`
+    - fair GT MAE `13.26°`
+    - elbow RULA `77.27%`
+
+### Interpretation
+
+- `selective_v2` is currently the best balanced improvement:
+  - preserves elbow RULA relative to global calibration,
+  - while still improving angle MAE (`12.96° -> 12.71°`)
+- This supports a strong thesis claim:
+  - quality-aware correction is useful,
+  - but elbows should stay conservative because aggressive elbow calibration helps MAE more than RULA.
   - old `08_ergonomic_scoring.py` on the same chain: Grand Score within ±1 `84.7%`
 
 ### Interpretation

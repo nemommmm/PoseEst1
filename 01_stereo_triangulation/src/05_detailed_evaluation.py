@@ -451,6 +451,10 @@ def main():
     CALIBRATION_MODE = os.environ.get("POSE_ANGLE_CALIBRATION_MODE", "global").strip().lower()
     QA_SPLIT_PERCENTILE = float(os.environ.get("POSE_QA_SPLIT_PERCENTILE", "35"))
     QA_MIN_FIT_SAMPLES = int(os.environ.get("POSE_QA_MIN_FIT_SAMPLES", "80"))
+    QA_APPLY_ANGLES_RAW = os.environ.get("POSE_QA_APPLY_ANGLES", "").strip()
+    qa_apply_angles = None
+    if QA_APPLY_ANGLES_RAW:
+        qa_apply_angles = {x.strip() for x in QA_APPLY_ANGLES_RAW.split(",") if x.strip()}
     if ENABLE_CALIBRATION:
         if CALIBRATION_MODE == "quality_aware":
             quality_lookup = build_quality_signal_lookup(pose_data, est_angle_names, valid_mask, uidx)
@@ -495,21 +499,28 @@ def main():
             cal = calibrations.get(angle_name)
             if CALIBRATION_MODE == "quality_aware":
                 model = qa_models.get(angle_name) if "qa_models" in locals() else None
+                use_quality_mode = qa_apply_angles is None or angle_name in qa_apply_angles
                 signal_name = None
                 signal_values = None
-                if model is not None:
+                if model is not None and use_quality_mode:
                     signal_name = model["signal_name"]
                     signal_values = quality_lookup.get(angle_name, {}).get(signal_name)
                 est_angle_vals_v[:, angle_idx] = apply_quality_aware_series(
                     est_angle_vals_v[:, angle_idx],
                     signal_values,
-                    model,
+                    model if use_quality_mode else None,
                     cal,
                 )
-                if model is not None:
+                if model is not None and use_quality_mode:
                     print(
                         f"  {angle_name}: quality-aware via {signal_name} "
                         f"(threshold={model['threshold']:.3f})"
+                    )
+                elif model is not None and not use_quality_mode and cal is not None:
+                    centers, corrections = cal
+                    print(
+                        f"  {angle_name}: forced global-only "
+                        f"range [{corrections.min():+.1f}, {corrections.max():+.1f}]°"
                     )
                 elif cal is not None:
                     centers, corrections = cal

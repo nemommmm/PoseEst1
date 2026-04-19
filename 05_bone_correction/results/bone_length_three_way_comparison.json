@@ -1,0 +1,84 @@
+{
+  "verdict": "mixed_or_inconclusive",
+  "definition": {
+    "shoulder_width": "dist(LeftUpperArm, RightUpperArm)",
+    "hip_width": "dist(LeftUpperLeg, RightUpperLeg)",
+    "torso": "dist(mid(UpperArms), mid(UpperLegs))",
+    "upper_arm": "dist(UpperArm, ForeArm)",
+    "forearm": "dist(ForeArm, Hand)",
+    "thigh": "dist(UpperLeg, LowerLeg)",
+    "shank": "dist(LowerLeg, Foot)"
+  },
+  "rows": [
+    {
+      "segment": "shoulder_width",
+      "xsens_cm": 33.810865350357474,
+      "stereo_cm": 30.266806524381487,
+      "easyergo_cm": 47.09532291333266,
+      "stereo_over_xsens": 0.8951798840623724,
+      "easyergo_over_xsens": 1.3929049855813505,
+      "stereo_minus_xsens_cm": -3.5440588259759878,
+      "easyergo_minus_xsens_cm": 13.284457562975184
+    },
+    {
+      "segment": "hip_width",
+      "xsens_cm": 15.949597467961347,
+      "stereo_cm": 23.0119487211809,
+      "easyergo_cm": 22.180727033413202,
+      "stereo_over_xsens": 1.4427918176246144,
+      "easyergo_over_xsens": 1.3906762899796434,
+      "stereo_minus_xsens_cm": 7.062351253219553,
+      "easyergo_minus_xsens_cm": 6.231129565451855
+    },
+    {
+      "segment": "torso",
+      "xsens_cm": 45.07378878367117,
+      "stereo_cm": 49.22033625612779,
+      "easyergo_cm": 68.98894376804041,
+      "stereo_over_xsens": 1.0919946510899652,
+      "easyergo_over_xsens": 1.5305778730771566,
+      "stereo_minus_xsens_cm": 4.146547472456618,
+      "easyergo_minus_xsens_cm": 23.915154984369245
+    },
+    {
+      "segment": "upper_arm",
+      "xsens_cm": 30.167881800268958,
+      "stereo_cm": 22.818005144284868,
+      "easyergo_cm": 36.92267176377356,
+      "stereo_over_xsens": 0.7563674935931841,
+      "easyergo_over_xsens": 1.2239066702868207,
+      "stereo_minus_xsens_cm": -7.34987665598409,
+      "easyergo_minus_xsens_cm": 6.754789963504599
+    },
+    {
+      "segment": "forearm",
+      "xsens_cm": 24.658789644972423,
+      "stereo_cm": 24.87484291989987,
+      "easyergo_cm": 33.58751624241113,
+      "stereo_over_xsens": 1.0087617145057846,
+      "easyergo_over_xsens": 1.3620910322846744,
+      "stereo_minus_xsens_cm": 0.21605327492744664,
+      "easyergo_minus_xsens_cm": 8.928726597438704
+    },
+    {
+      "segment": "thigh",
+      "xsens_cm": 41.114084566423244,
+      "stereo_cm": 31.801139752800154,
+      "easyergo_cm": 54.94560411114038,
+      "stereo_over_xsens": 0.7734852931341023,
+      "easyergo_over_xsens": 1.3364180350986816,
+      "stereo_minus_xsens_cm": -9.31294481362309,
+      "easyergo_minus_xsens_cm": 13.831519544717139
+    },
+    {
+      "segment": "shank",
+      "xsens_cm": 40.11084295399438,
+      "stereo_cm": 43.16788822472085,
+      "easyergo_cm": 51.403734851750926,
+      "stereo_over_xsens": 1.0762149345560448,
+      "easyergo_over_xsens": 1.2815421234280484,
+      "stereo_minus_xsens_cm": 3.0570452707264693,
+      "easyergo_minus_xsens_cm": 11.292891897756547
+    }
+  ]
+}

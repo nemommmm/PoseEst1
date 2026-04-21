@@ -11,7 +11,6 @@ from typing import Any
 
 import cv2
 import numpy as np
-import pandas as pd
 from scipy.optimize import least_squares
 
 
@@ -31,7 +30,6 @@ INPUT_POSE_PATH = (
     / "recovered_baseline"
     / "raw_pose.npz"
 )
-BONE_LENGTH_CSV = PROJECT_ROOT / "05_bone_correction" / "results" / "bone_length_three_way_comparison.csv"
 RESULTS_DIR = METHOD_DIR / "results" / "constrained_triangulation_v1"
 RESULTS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -54,6 +52,13 @@ LIMB_BONES = (
     ("shank", 13, 15),
     ("shank", 14, 16),
 )
+
+TARGET_LENGTHS_CM = {
+    "upper_arm": 30.167881800268958,
+    "forearm": 24.658789644972423,
+    "thigh": 41.114084566423244,
+    "shank": 40.11084295399438,
+}
 
 
 def load_image_size(video_path: Path) -> tuple[int, int]:
@@ -124,14 +129,9 @@ def weighted_dlt_triangulate(
     return homog[:3] / homog[3]
 
 
-def load_target_lengths(csv_path: Path) -> dict[str, float]:
-    """Load Xsens limb targets from the three-way comparison table."""
-    df = pd.read_csv(csv_path)
-    df = df.set_index("segment")
-    targets = {}
-    for segment in ["upper_arm", "forearm", "thigh", "shank"]:
-        targets[segment] = float(df.loc[segment, "xsens_cm"])
-    return targets
+def load_target_lengths() -> dict[str, float]:
+    """Return fixed Xsens limb targets used by constrained triangulation."""
+    return dict(TARGET_LENGTHS_CM)
 
 
 def ensure_initial_pose(
@@ -340,7 +340,7 @@ def write_markdown_summary(summary_rows: list[dict[str, Any]], path: Path) -> No
         "# Constrained Triangulation Summary",
         "",
         "- Constraint set: `upper_arm`, `forearm`, `thigh`, `shank` only",
-        "- Target source: Xsens column from `bone_length_three_way_comparison.csv`",
+        "- Target source: fixed Xsens limb-length constants embedded in this script",
         "",
         header.strip(),
         divider.strip(),
@@ -365,7 +365,7 @@ def main() -> None:
     conf_right = np.asarray(pose_data["triang_conf_right"], dtype=np.float64)
 
     p1, p2 = compute_projection_matrices()
-    target_lengths = load_target_lengths(BONE_LENGTH_CSV)
+    target_lengths = load_target_lengths()
     summary_rows: list[dict[str, Any]] = []
     full_summary: dict[str, Any] = {
         "input_pose_path": str(INPUT_POSE_PATH),

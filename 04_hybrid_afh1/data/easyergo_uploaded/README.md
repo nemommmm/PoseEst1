@@ -1,13 +1,23 @@
-# EasyErgo Input Drop Folder
+# EasyErgo Upload Folder
 
-Place the downloaded EasyErgo TRC file in this directory with the exact name:
+This folder stores the EasyErgo files for the retained Direction 04 branch.
 
-- `markers_easyergo.trc`
+## Active Input
 
-Expected source video:
+Current active evaluation input:
 
-- `2025_Ergonomics_Data/0_video_left.avi`
+- `*.mvnx`
 
-Expected upload setting:
+`src/01_evaluate_final_mvnx.py` and `src/03_render_final_mvnx_video.py` both read the final MVNX export from this folder automatically.
+
+## Legacy Downloads Kept As Raw Input
+
+These files may still exist here, but they are no longer part of the active Direction 04 pipeline:
+
+- `*.trc`
+- `*_ik.mot`
+- `*_model.osim`
+
+## EasyErgo Export Setting Used
 
 - Height: `1.69 m`

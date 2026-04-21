@@ -133,12 +133,13 @@ def collect_anchor_pairs(
     offset_s: float,
     anchor_mapping: dict[int, str],
     elite_indices: np.ndarray,
+    time_scale: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Collect subject/GT anchor pairs across elite frames for rigid alignment."""
     src_points: list[np.ndarray] = []
     tgt_points: list[np.ndarray] = []
     for idx in elite_indices:
-        target_t = float(subject_ts[idx] - offset_s)
+        target_t = float(time_scale * subject_ts[idx] - offset_s)
         xsens_pose = xsens_pose_at(xsens, target_t)
         if not xsens_pose:
             continue
@@ -163,6 +164,7 @@ def align_subject_points(
     offset_s: float,
     anchor_mapping: dict[int, str],
     top_k: int = 150,
+    time_scale: float = 1.0,
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Rigidly align a whole subject sequence to Xsens using elite frames."""
     errors = calculate_leg_limb_error(subject_points)
@@ -170,7 +172,15 @@ def align_subject_points(
     if finite_idx.size == 0:
         return subject_points.copy(), np.eye(3), np.zeros(3)
     elite = finite_idx[np.argsort(errors[finite_idx])[:top_k]]
-    src, tgt = collect_anchor_pairs(subject_points, subject_ts, xsens, offset_s, anchor_mapping, elite)
+    src, tgt = collect_anchor_pairs(
+        subject_points,
+        subject_ts,
+        xsens,
+        offset_s,
+        anchor_mapping,
+        elite,
+        time_scale=time_scale,
+    )
     rot, trans = kabsch_transform(src, tgt)
     flat = subject_points.reshape(-1, 3)
     aligned = (rot @ flat.T).T + trans
@@ -375,16 +385,24 @@ def render_comparison_video(
     snapshot_good_count: int = 2,
     snapshot_bad_count: int = 2,
     snapshot_min_gap_s: float = 15.0,
+    prealigned: bool = False,
+    time_scale: float = 1.0,
 ) -> dict:
     """Render an overlay video of subject skeleton and Xsens GT."""
     xsens = load_xsens_skeleton(mvnx_path)
-    aligned_points, rot, trans = align_subject_points(
-        subject_points,
-        subject_ts,
-        xsens,
-        offset_s,
-        anchor_mapping,
-    )
+    if prealigned:
+        aligned_points = np.asarray(subject_points, dtype=np.float64).copy()
+        rot = np.eye(3, dtype=np.float64)
+        trans = np.zeros(3, dtype=np.float64)
+    else:
+        aligned_points, rot, trans = align_subject_points(
+            subject_points,
+            subject_ts,
+            xsens,
+            offset_s,
+            anchor_mapping,
+            time_scale=time_scale,
+        )
 
     output_mp4 = Path(output_mp4)
     output_json = Path(output_json)
@@ -416,7 +434,7 @@ def render_comparison_video(
     for frame_idx in range(0, len(subject_ts), max(1, frame_step)):
         if max_frames is not None and collected >= max_frames:
             break
-        target_t = float(subject_ts[frame_idx] - offset_s)
+        target_t = float(time_scale * subject_ts[frame_idx] - offset_s)
         xsens_pose = xsens_pose_at(xsens, target_t)
         if "Pelvis" not in xsens_pose:
             continue
@@ -518,6 +536,8 @@ def render_comparison_video(
         "fps": fps,
         "frame_step": frame_step,
         "offset_seconds": offset_s,
+        "time_scale": time_scale,
+        "prealigned": bool(prealigned),
         "subject_label": subject_label,
         "mean_joint_distance_cm": float(np.nanmean(joint_distances)) if joint_distances else np.nan,
         "mean_pelvis_distance_cm": float(np.nanmean(pelvis_distances)) if pelvis_distances else np.nan,

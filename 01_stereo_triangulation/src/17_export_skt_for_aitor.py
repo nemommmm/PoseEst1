@@ -21,27 +21,25 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 METHOD_DIR = SCRIPT_DIR.parent
 PROJECT_ROOT = METHOD_DIR.parent
 
-DEFAULT_OPTIMIZED_POSE_NPZ = (
+DEFAULT_FINAL_POSE_NPZ = (
     METHOD_DIR
     / "results"
     / "historical_best_20260324"
     / "recovered_baseline"
     / "optimized_pose.npz"
 )
-DEFAULT_RAW_POSE_NPZ = (
-    METHOD_DIR
-    / "results"
-    / "historical_best_20260324"
-    / "recovered_baseline"
-    / "raw_pose.npz"
-)
 DEFAULT_CAMERA_PARAMS = PROJECT_ROOT / "shared" / "camera_params.npz"
 OUTPUT_DIR = METHOD_DIR / "results" / "skt_for_aitor"
-TRC_PRE_CORR_OUT = OUTPUT_DIR / "markers_skt_pre_correction_coco17_mm.trc"
-TRC_POST_CORR_OUT = OUTPUT_DIR / "markers_skt_post_correction_coco17_mm.trc"
+TRC_FINAL_OUT = OUTPUT_DIR / "markers_skt_coco17_mm.trc"
 SUMMARY_JSON = OUTPUT_DIR / "skt_coordinate_audit.json"
 SUMMARY_EN = OUTPUT_DIR / "README_for_Aitor_EN.md"
 SUMMARY_CN = OUTPUT_DIR / "README_for_Aitor_CN.md"
+STALE_TRC_FILES = [
+    OUTPUT_DIR / "markers_skt_pre_correction_coco17_mm.trc",
+    OUTPUT_DIR / "markers_skt_post_correction_coco17_mm.trc",
+    OUTPUT_DIR / "markers_skt_raw_coco17_mm.trc",
+    OUTPUT_DIR / "markers_skt_optimized_coco17_mm.trc",
+]
 
 COCO17_NAMES = [
     "Nose",
@@ -138,48 +136,32 @@ def write_trc(
 
 
 def build_summary(
-    raw_pose_npz_path: Path,
-    optimized_pose_npz_path: Path,
+    final_pose_npz_path: Path,
     camera_param_path: Path,
-    raw_timestamps_rel: np.ndarray,
-    raw_keypoints_cm: np.ndarray,
-    optimized_timestamps_rel: np.ndarray,
-    optimized_keypoints_cm: np.ndarray,
-    raw_variant: str,
-    optimized_variant: str,
+    timestamps_rel: np.ndarray,
+    keypoints_cm: np.ndarray,
+    postprocess_variant: str,
 ) -> dict[str, object]:
     """Build a machine-readable audit summary for the exported SKT skeleton."""
     cam = np.load(camera_param_path)
     translation = np.asarray(cam["T"], dtype=np.float64).reshape(-1)
     baseline_cm = float(np.linalg.norm(translation))
 
-    raw_finite_mask = np.isfinite(raw_keypoints_cm).all(axis=2)
-    optimized_finite_mask = np.isfinite(optimized_keypoints_cm).all(axis=2)
-    raw_joint_coverage = {
-        name: float(np.mean(raw_finite_mask[:, idx])) for idx, name in enumerate(COCO17_NAMES)
-    }
-    optimized_joint_coverage = {
-        name: float(np.mean(optimized_finite_mask[:, idx])) for idx, name in enumerate(COCO17_NAMES)
-    }
-    raw_pelvis = 0.5 * (raw_keypoints_cm[:, 11] + raw_keypoints_cm[:, 12])
-    valid_raw_pelvis = raw_pelvis[np.isfinite(raw_pelvis).all(axis=1)]
+    finite_mask = np.isfinite(keypoints_cm).all(axis=2)
+    joint_coverage = {name: float(np.mean(finite_mask[:, idx])) for idx, name in enumerate(COCO17_NAMES)}
+    pelvis = 0.5 * (keypoints_cm[:, 11] + keypoints_cm[:, 12])
+    valid_pelvis = pelvis[np.isfinite(pelvis).all(axis=1)]
 
     return {
-        "source_pose_npz_raw": str(raw_pose_npz_path),
-        "source_pose_npz_optimized": str(optimized_pose_npz_path),
-        "exported_trc_pre_correction": str(TRC_PRE_CORR_OUT),
-        "exported_trc_post_correction": str(TRC_POST_CORR_OUT),
+        "source_pose_npz": str(final_pose_npz_path),
+        "exported_trc": str(TRC_FINAL_OUT),
         "camera_params_path": str(camera_param_path),
         "source_units": "cm",
         "export_units": "mm",
-        "frame_count_raw": int(len(raw_timestamps_rel)),
-        "frame_count_optimized": int(len(optimized_timestamps_rel)),
-        "fps_inferred_raw": infer_fps(raw_timestamps_rel),
-        "fps_inferred_optimized": infer_fps(optimized_timestamps_rel),
-        "time_start_s_raw": float(raw_timestamps_rel[0]) if len(raw_timestamps_rel) else 0.0,
-        "time_end_s_raw": float(raw_timestamps_rel[-1]) if len(raw_timestamps_rel) else 0.0,
-        "time_start_s_optimized": float(optimized_timestamps_rel[0]) if len(optimized_timestamps_rel) else 0.0,
-        "time_end_s_optimized": float(optimized_timestamps_rel[-1]) if len(optimized_timestamps_rel) else 0.0,
+        "frame_count": int(len(timestamps_rel)),
+        "fps_inferred": infer_fps(timestamps_rel),
+        "time_start_s": float(timestamps_rel[0]) if len(timestamps_rel) else 0.0,
+        "time_end_s": float(timestamps_rel[-1]) if len(timestamps_rel) else 0.0,
         "baseline_cm": baseline_cm,
         "left_camera_intrinsics": {
             "fx": float(cam["mtx_l"][0, 0]),
@@ -212,50 +194,19 @@ def build_summary(
                 "3D points are triangulated from rectified 2D keypoints using rectified projection "
                 "matrices P1/P2."
             ),
-            "easyergo_upload_status": (
-                "The current EasyErgo upload in our workflow is an upright-only video. "
-                "There is no evidence in the current repo workflow that it was stereo-rectified "
-                "before upload."
-            ),
-            "rectified_easyergo_feasible": True,
         },
         "pose_extent_cm": {
-            "pelvis_min_raw": np.nanmin(valid_raw_pelvis, axis=0).tolist() if len(valid_raw_pelvis) else [np.nan] * 3,
-            "pelvis_max_raw": np.nanmax(valid_raw_pelvis, axis=0).tolist() if len(valid_raw_pelvis) else [np.nan] * 3,
+            "pelvis_min": np.nanmin(valid_pelvis, axis=0).tolist() if len(valid_pelvis) else [np.nan] * 3,
+            "pelvis_max": np.nanmax(valid_pelvis, axis=0).tolist() if len(valid_pelvis) else [np.nan] * 3,
         },
-        "pose_variants": {
-            "pre_correction": {
-                "postprocess_variant": raw_variant,
-                "interpretation": (
-                    "This is not sensor-raw. It is the retained SKT pose before the final pose-correction "
-                    "stage, but it already includes upstream inference-time steps "
-                    "such as tracked crop, 2D temporal smoothing, soft epipolar correction, and window retriangulation."
-                ),
-            },
-            "post_correction": {
-                "postprocess_variant": optimized_variant,
-                "interpretation": (
-                    "This is the retained SKT output after the final pose-correction stage "
-                    "(bone prior enforcement + OneEuro filtering)."
-                ),
-            },
-        },
-        "joint_coverage_ratio": {
-            "raw": raw_joint_coverage,
-            "optimized": optimized_joint_coverage,
-        },
-        "manual_pointcloud_overlay": {
-            "feasible": True,
-            "existing_scripts": [
-                "02_dense_stereo_sgbm/src/09_visualize_point_cloud.py",
-                "02_dense_stereo_sgbm/src/10_interactive_point_cloud.py",
-            ],
-            "note": (
-                "The repo already contains dense point-cloud visualizers with SKT and Xsens overlays. "
-                "To focus on the person only, we can crop the point cloud by the tracked bbox or by a "
-                "2D skeleton hull before rendering."
+        "pose_variant": {
+            "postprocess_variant": postprocess_variant,
+            "interpretation": (
+                "This file represents the retained final SKT output after the final pose-correction "
+                "stage (bone prior enforcement + OneEuro filtering)."
             ),
         },
+        "joint_coverage_ratio": joint_coverage,
     }
 
 
@@ -264,36 +215,28 @@ def render_english_summary(summary: dict[str, object]) -> str:
     intr = summary["left_camera_intrinsics"]
     coord = summary["coordinate_frame"]
     calib = summary["calibration_application"]
-    pre_info = summary["pose_variants"]["pre_correction"]
-    post_info = summary["pose_variants"]["post_correction"]
-    pre_name = Path(summary["exported_trc_pre_correction"]).name
-    post_name = Path(summary["exported_trc_post_correction"]).name
+    pose_variant = summary["pose_variant"]
+    trc_name = Path(summary["exported_trc"]).name
     return "\n".join(
         [
             "# SKT Export for Aitor",
             "",
-            "## Delivered files",
+            "## Orientation note",
             "",
-            f"- Recommended main file (post-correction): `{post_name}`",
-            f"- Reference file (pre-correction): `{pre_name}`",
+            "- The raw stereo videos are physically upside down.",
+            "- All image-direction references, axis interpretations, and processing steps in this note refer to the 180-degree-rotated upright frames used by our pipeline, not the original upside-down AVI frames.",
+            "",
+            "## Delivered file",
+            "",
+            f"- Final TRC: `{trc_name}`",
             f"- Units: `{summary['export_units']}`",
-            f"- Frames (raw / optimized): `{summary['frame_count_raw']} / {summary['frame_count_optimized']}`",
-            f"- FPS (raw / optimized): `{summary['fps_inferred_raw']:.4f} / {summary['fps_inferred_optimized']:.4f}`",
+            f"- Frames: `{summary['frame_count']}`",
+            f"- FPS: `{summary['fps_inferred']:.4f}`",
             "",
-            "## Historical evaluation note",
+            "## Processing note",
             "",
-            "- The reported `13.21° calibrated / 18.59° uncalibrated` joint-angle MAE refers to a downstream piecewise angle-calibration step used during evaluation.",
-            "- That calibration is applied after angle computation and does not modify the underlying 3D keypoint coordinates stored in TRC.",
-            "- Therefore, there is no separate `calibrated TRC` vs `uncalibrated TRC` in a strict geometric sense.",
-            f"- For geometry inspection, the recommended file is still `{post_name}`.",
-            "",
-            "## Important processing note",
-            "",
-            "- Here, 'correction' means the final 3D pose-space postprocess stage, not the later angle-calibration step used in evaluation.",
-            f"- Pre-correction variant tag: `{pre_info['postprocess_variant']}`",
-            f"- Pre-correction meaning: {pre_info['interpretation']}",
-            f"- Post-correction variant tag: `{post_info['postprocess_variant']}`",
-            f"- Post-correction meaning: {post_info['interpretation']}",
+            f"- Variant tag: `{pose_variant['postprocess_variant']}`",
+            f"- Meaning: {pose_variant['interpretation']}",
             "",
             "## SKT coordinate frame",
             "",
@@ -321,126 +264,100 @@ def render_chinese_summary(summary: dict[str, object]) -> str:
     intr = summary["left_camera_intrinsics"]
     coord = summary["coordinate_frame"]
     calib = summary["calibration_application"]
-    pre_info = summary["pose_variants"]["pre_correction"]
-    post_info = summary["pose_variants"]["post_correction"]
-    pre_name = Path(summary["exported_trc_pre_correction"]).name
-    post_name = Path(summary["exported_trc_post_correction"]).name
+    pose_variant = summary["pose_variant"]
+    trc_name = Path(summary["exported_trc"]).name
     return "\n".join(
         [
             "# SKT 导出给 Aitor 的说明",
             "",
+            "## 朝向说明",
+            "",
+            "- 原始双目视频本身是上下颠倒的。",
+            "- 本说明后续提到的图像方向、坐标轴方向和处理步骤，均以先旋转 180° 后的正常朝向视频为准，而不是原始倒置 AVI。",
+            "",
             "## 已导出文件",
             "",
-            f"- 推荐主文件（post-correction）: `{post_name}`",
-            f"- 参考文件（pre-correction）: `{pre_name}`",
+            f"- 最终 TRC: `{trc_name}`",
             f"- 导出单位: `{summary['export_units']}`",
-            f"- 帧数（raw / optimized）: `{summary['frame_count_raw']} / {summary['frame_count_optimized']}`",
-            f"- 按时间戳推断 FPS（raw / optimized）: `{summary['fps_inferred_raw']:.4f} / {summary['fps_inferred_optimized']:.4f}`",
+            f"- 帧数: `{summary['frame_count']}`",
+            f"- 按时间戳推断 FPS: `{summary['fps_inferred']:.4f}`",
             "",
-            "## 历史评估说明",
+            "## 处理说明",
             "",
-            "- 你记得的 `13.21° calibrated / 18.59° uncalibrated`，指的是评估阶段的分段 angle calibration。",
-            "- 这一步发生在角度计算之后，不会修改 TRC 中保存的 3D 关键点坐标。",
-            "- 所以严格来说，并不存在两份几何上不同的“calibrated TRC / uncalibrated TRC”。",
-            f"- 如果要给 Aitor 做几何和坐标系检查，仍然应该优先看 `{post_name}`。",
-            "",
-            "## 重要说明：这里的“矫正”指最终 3D 姿态后处理，不是后面的角度 calibration",
-            "",
-            "- 这两份都不是“传感器级完全原始数据”。",
-            f"- Pre-correction 版本标签: `{pre_info['postprocess_variant']}`",
-            f"- Pre-correction 版本含义: {pre_info['interpretation']}",
-            f"- Post-correction 版本标签: `{post_info['postprocess_variant']}`",
-            f"- Post-correction 版本含义: {post_info['interpretation']}",
+            f"- 版本标签: `{pose_variant['postprocess_variant']}`",
+            "- 含义: 该文件对应当前保留下来的最终 SKT 3D 输出，已经经过最终 3D 姿态后处理",
+            "  （bone prior enforcement + OneEuro filtering）。",
             "",
             "## SKT 坐标系",
             "",
             f"- 坐标系名称: `{coord['name']}`",
-            f"- 原点: {coord['origin']}",
-            f"- X 轴: {coord['x_axis']}",
-            f"- Y 轴: {coord['y_axis']}",
-            f"- Z 轴: {coord['z_axis']}",
-            f"- 备注: {coord['note']}",
+            "- 原点: 矫正后左相机的光心（P1 camera center）",
+            "- X 轴: 朝图像右侧为正",
+            "- Y 轴: 朝图像下方为正",
+            "- Z 轴: 朝相机前方、远离相机方向为正",
+            "- 备注: 这是以相机为中心的双目重建坐标系，不是地面/世界坐标系，也不是 OpenSim 坐标系。",
             "",
             "## 标定 / 矫正链路",
             "",
             f"- 基线长度: `{summary['baseline_cm']:.3f} cm`",
             f"- 左目内参: `fx={intr['fx']:.3f}`, `fy={intr['fy']:.3f}`, `cx={intr['cx']:.3f}`, `cy={intr['cy']:.3f}`",
-            f"- 翻正步骤: {calib['video_loading']}",
-            f"- 标定生效步骤: {calib['rectification_step']}",
-            f"- 三角化步骤: {calib['triangulation_step']}",
+            "- 翻正步骤: 原始左右视频会先在 `shared/utils.py` 中旋转 180°，再进入姿态估计。",
+            "- 标定生效步骤: `01_stereo_triangulation/src/02_batch_inference.py` 中通过 `cv2.stereoRectify` 和 `cv2.undistortPoints` 应用双目标定。",
+            "- 三角化步骤: 使用矫正后的 2D 关键点和矫正后的投影矩阵 `P1/P2` 完成三角化。",
             "",
         ]
     )
 
 
+def cleanup_stale_trc_files() -> None:
+    """Remove legacy multi-version TRC exports to keep one final deliverable."""
+    for path in STALE_TRC_FILES:
+        if path.exists():
+            path.unlink()
+
+
 def main() -> None:
     """Export the retained SKT skeleton and write audit notes."""
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    cleanup_stale_trc_files()
 
-    raw_pose_payload = np.load(DEFAULT_RAW_POSE_NPZ, allow_pickle=True)
-    optimized_pose_payload = np.load(DEFAULT_OPTIMIZED_POSE_NPZ, allow_pickle=True)
+    pose_payload = np.load(DEFAULT_FINAL_POSE_NPZ, allow_pickle=True)
 
-    raw_timestamps_abs = np.asarray(raw_pose_payload["timestamps"], dtype=np.float64)
-    raw_keypoints_cm = np.asarray(raw_pose_payload["keypoints"], dtype=np.float64)
-    optimized_timestamps_abs = np.asarray(optimized_pose_payload["timestamps"], dtype=np.float64)
-    optimized_keypoints_cm = np.asarray(optimized_pose_payload["keypoints"], dtype=np.float64)
+    timestamps_abs = np.asarray(pose_payload["timestamps"], dtype=np.float64)
+    keypoints_cm = np.asarray(pose_payload["keypoints"], dtype=np.float64)
 
-    for path, keypoints in [
-        (DEFAULT_RAW_POSE_NPZ, raw_keypoints_cm),
-        (DEFAULT_OPTIMIZED_POSE_NPZ, optimized_keypoints_cm),
-    ]:
-        if keypoints.ndim != 3 or keypoints.shape[1:] != (17, 3):
-            raise ValueError(f"Unexpected keypoint shape in {path}: {keypoints.shape}")
+    if keypoints_cm.ndim != 3 or keypoints_cm.shape[1:] != (17, 3):
+        raise ValueError(f"Unexpected keypoint shape in {DEFAULT_FINAL_POSE_NPZ}: {keypoints_cm.shape}")
 
-    raw_timestamps_rel = raw_timestamps_abs - raw_timestamps_abs[0] if len(raw_timestamps_abs) else raw_timestamps_abs
-    optimized_timestamps_rel = (
-        optimized_timestamps_abs - optimized_timestamps_abs[0]
-        if len(optimized_timestamps_abs)
-        else optimized_timestamps_abs
-    )
-    raw_fps = infer_fps(raw_timestamps_rel)
-    optimized_fps = infer_fps(optimized_timestamps_rel)
+    timestamps_rel = timestamps_abs - timestamps_abs[0] if len(timestamps_abs) else timestamps_abs
+    fps = infer_fps(timestamps_rel)
 
-    raw_keypoints_mm = raw_keypoints_cm * 10.0
-    optimized_keypoints_mm = optimized_keypoints_cm * 10.0
+    keypoints_mm = keypoints_cm * 10.0
     write_trc(
-        marker_positions=raw_keypoints_mm,
+        marker_positions=keypoints_mm,
         marker_names=COCO17_NAMES,
-        timestamps_rel=raw_timestamps_rel,
-        fps=raw_fps,
+        timestamps_rel=timestamps_rel,
+        fps=fps,
         units="mm",
-        output_path=TRC_PRE_CORR_OUT,
-    )
-    write_trc(
-        marker_positions=optimized_keypoints_mm,
-        marker_names=COCO17_NAMES,
-        timestamps_rel=optimized_timestamps_rel,
-        fps=optimized_fps,
-        units="mm",
-        output_path=TRC_POST_CORR_OUT,
+        output_path=TRC_FINAL_OUT,
     )
 
     summary = build_summary(
-        raw_pose_npz_path=DEFAULT_RAW_POSE_NPZ,
-        optimized_pose_npz_path=DEFAULT_OPTIMIZED_POSE_NPZ,
+        final_pose_npz_path=DEFAULT_FINAL_POSE_NPZ,
         camera_param_path=DEFAULT_CAMERA_PARAMS,
-        raw_timestamps_rel=raw_timestamps_rel,
-        raw_keypoints_cm=raw_keypoints_cm,
-        optimized_timestamps_rel=optimized_timestamps_rel,
-        optimized_keypoints_cm=optimized_keypoints_cm,
-        raw_variant=str(raw_pose_payload["postprocess_variant"]),
-        optimized_variant=str(optimized_pose_payload["postprocess_variant"]),
+        timestamps_rel=timestamps_rel,
+        keypoints_cm=keypoints_cm,
+        postprocess_variant=str(pose_payload["postprocess_variant"]),
     )
     SUMMARY_JSON.write_text(json.dumps(summary, indent=2), encoding="utf-8")
     SUMMARY_EN.write_text(render_english_summary(summary), encoding="utf-8")
     SUMMARY_CN.write_text(render_chinese_summary(summary), encoding="utf-8")
 
-    print(f"[saved] {TRC_PRE_CORR_OUT}")
-    print(f"[saved] {TRC_POST_CORR_OUT}")
+    print(f"[saved] {TRC_FINAL_OUT}")
     print(f"[saved] {SUMMARY_JSON}")
     print(f"[saved] {SUMMARY_EN}")
     print(f"[saved] {SUMMARY_CN}")
-    print(f"[info] inferred FPS raw={raw_fps:.4f}, optimized={optimized_fps:.4f}")
+    print(f"[info] inferred FPS={fps:.4f}")
 
 
 if __name__ == "__main__":

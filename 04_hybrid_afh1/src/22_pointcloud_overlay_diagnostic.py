@@ -32,6 +32,7 @@ from scipy.spatial import cKDTree
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib import colors as mcolors
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
@@ -385,17 +386,88 @@ def draw_skeleton(ax, pose: np.ndarray, color: str, label: str) -> None:
     for start_idx, end_idx in COCO_EDGES:
         if finite[start_idx] and finite[end_idx]:
             seg = display_all[[start_idx, end_idx]]
-            ax.plot(seg[:, 0], seg[:, 1], seg[:, 2], color=color, linewidth=2.2)
+            ax.plot(seg[:, 0], seg[:, 1], seg[:, 2], color=color, linewidth=2.6)
     if np.any(finite):
         ax.scatter(
             display[:, 0],
             display[:, 1],
             display[:, 2],
-            s=18,
+            s=26,
             c=color,
             depthshade=False,
             label=label,
         )
+
+
+def style_3d_axis(ax) -> None:
+    """Apply a higher-contrast dark theme to 3D diagnostic panels."""
+    ax.set_facecolor("#0b1220")
+    ax.grid(False)
+    pane_rgba = (0.07, 0.10, 0.16, 1.0)
+    ax.xaxis.set_pane_color(pane_rgba)
+    ax.yaxis.set_pane_color(pane_rgba)
+    ax.zaxis.set_pane_color(pane_rgba)
+    tick_color = "#d7dee9"
+    label_color = "#e5eef8"
+    ax.tick_params(colors=tick_color, labelsize=8)
+    ax.xaxis.label.set_color(label_color)
+    ax.yaxis.label.set_color(label_color)
+    ax.zaxis.label.set_color(label_color)
+    ax.title.set_color(label_color)
+
+
+def make_person_cloud_colors(person_cloud: np.ndarray) -> np.ndarray:
+    """Color the person cloud by height for higher visual contrast than raw RGB."""
+    if len(person_cloud) == 0:
+        return np.zeros((0, 4), dtype=np.float32)
+    disp_cloud = to_display_coords(person_cloud)
+    height_vals = disp_cloud[:, 2]
+    vmin = float(np.nanpercentile(height_vals, 5))
+    vmax = float(np.nanpercentile(height_vals, 95))
+    if not np.isfinite(vmin) or not np.isfinite(vmax) or vmax <= vmin:
+        vmin = float(np.nanmin(height_vals))
+        vmax = float(np.nanmax(height_vals) + 1e-6)
+    norm = mcolors.Normalize(vmin=vmin, vmax=vmax)
+    return plt.get_cmap("viridis")(norm(height_vals))
+
+
+def draw_person_cloud_panel(
+    ax,
+    person_cloud: np.ndarray,
+    person_colors: np.ndarray,
+    skt_pose: np.ndarray,
+    afh_pose: np.ndarray,
+    skt_label: str,
+    afh_label: str,
+    title: str,
+    elev: float,
+    azim: float,
+    show_legend: bool,
+) -> None:
+    """Draw a zoomed-in person-cloud panel from one camera view."""
+    style_3d_axis(ax)
+    if len(person_cloud) > 0:
+        disp_cloud = to_display_coords(person_cloud)
+        ax.scatter(
+            disp_cloud[:, 0],
+            disp_cloud[:, 1],
+            disp_cloud[:, 2],
+            s=4.6,
+            c=person_colors,
+            alpha=0.88,
+            linewidths=0,
+            depthshade=False,
+        )
+        set_axes_equal(ax, disp_cloud)
+    draw_skeleton(ax, skt_pose, color="#00d4ff", label=skt_label)
+    draw_skeleton(ax, afh_pose, color="#ff4fa3", label=afh_label)
+    ax.set_title(title)
+    ax.set_xlabel("X (cm)")
+    ax.set_ylabel("Depth Z (cm)")
+    ax.set_zlabel("Height (cm)")
+    ax.view_init(elev=elev, azim=azim)
+    if show_legend:
+        ax.legend(loc="upper left", fontsize=8, frameon=False, labelcolor="#e5eef8")
 
 
 def render_snapshot(
@@ -413,11 +485,14 @@ def render_snapshot(
     frame_info: dict[str, object],
 ) -> None:
     """Render a single diagnostic PNG snapshot."""
-    fig = plt.figure(figsize=(18, 9))
-    ax0 = fig.add_subplot(2, 2, 1)
-    ax1 = fig.add_subplot(2, 2, 2)
-    ax2 = fig.add_subplot(2, 2, 3, projection="3d")
-    ax3 = fig.add_subplot(2, 2, 4, projection="3d")
+    fig = plt.figure(figsize=(20, 11))
+    grid = fig.add_gridspec(2, 3, width_ratios=[1.0, 1.0, 1.15], height_ratios=[1.0, 1.05])
+    ax0 = fig.add_subplot(grid[0, 0])
+    ax1 = fig.add_subplot(grid[0, 1])
+    ax2 = fig.add_subplot(grid[0, 2], projection="3d")
+    ax3 = fig.add_subplot(grid[1, 0], projection="3d")
+    ax4 = fig.add_subplot(grid[1, 1], projection="3d")
+    ax5 = fig.add_subplot(grid[1, 2], projection="3d")
 
     ax0.imshow(cv2.cvtColor(left_rect, cv2.COLOR_BGR2RGB))
     ax0.set_title(f"Rectified left frame\nframe={frame_info['frame_idx']}")
@@ -433,52 +508,74 @@ def render_snapshot(
     ax1.set_title("SGBM disparity")
     ax1.axis("off")
 
+    style_3d_axis(ax2)
     if len(full_cloud) > 0:
         disp_cloud = to_display_coords(full_cloud)
         ax2.scatter(
             disp_cloud[:, 0],
             disp_cloud[:, 1],
             disp_cloud[:, 2],
-            s=0.35,
-            c=full_colors.astype(np.float32) / 255.0,
-            alpha=0.06,
+            s=0.28,
+            c="#93a4b8",
+            alpha=0.035,
             linewidths=0,
+            depthshade=False,
         )
     draw_skeleton(ax2, skt_pose, color="#00d4ff", label=skt_label)
     draw_skeleton(ax2, afh_pose, color="#ff4fa3", label=afh_label)
-    ax2.set_title("Full cloud + skeletons")
+    ax2.set_title("Full cloud context + skeletons")
     ax2.set_xlabel("X (cm)")
     ax2.set_ylabel("Depth Z (cm)")
     ax2.set_zlabel("Height (cm)")
     ax2.view_init(elev=16, azim=-68)
-    ax2.legend(loc="upper left", fontsize=8)
+    ax2.legend(loc="upper left", fontsize=8, frameon=False, labelcolor="#e5eef8")
 
-    if len(person_cloud) > 0:
-        disp_cloud = to_display_coords(person_cloud)
-        ax3.scatter(
-            disp_cloud[:, 0],
-            disp_cloud[:, 1],
-            disp_cloud[:, 2],
-            s=1.0,
-            c=person_colors.astype(np.float32) / 255.0,
-            alpha=0.35,
-            linewidths=0,
-        )
-        set_axes_equal(ax3, disp_cloud)
-    draw_skeleton(ax3, skt_pose, color="#00d4ff", label=skt_label)
-    draw_skeleton(ax3, afh_pose, color="#ff4fa3", label=afh_label)
-    ax3.set_title(
-        "Person-cropped cloud\n"
+    person_render_colors = make_person_cloud_colors(person_cloud)
+    cloud_metric_title = (
         f"SKT-cloud {frame_info['skt_cloud_nn_cm']:.1f} cm | "
         f"AFH-cloud {frame_info['afh_cloud_nn_cm']:.1f} cm"
         if frame_info["skt_cloud_nn_cm"] is not None and frame_info["afh_cloud_nn_cm"] is not None
-        else "Person-cropped cloud"
+        else "point-cloud distance unavailable"
     )
-    ax3.set_xlabel("X (cm)")
-    ax3.set_ylabel("Depth Z (cm)")
-    ax3.set_zlabel("Height (cm)")
-    ax3.view_init(elev=16, azim=-68)
-    ax3.legend(loc="upper left", fontsize=8)
+    draw_person_cloud_panel(
+        ax3,
+        person_cloud,
+        person_render_colors,
+        skt_pose,
+        afh_pose,
+        skt_label,
+        afh_label,
+        f"Person cloud (oblique)\n{cloud_metric_title}",
+        elev=18,
+        azim=-70,
+        show_legend=True,
+    )
+    draw_person_cloud_panel(
+        ax4,
+        person_cloud,
+        person_render_colors,
+        skt_pose,
+        afh_pose,
+        skt_label,
+        afh_label,
+        "Person cloud (front-ish)",
+        elev=6,
+        azim=-90,
+        show_legend=False,
+    )
+    draw_person_cloud_panel(
+        ax5,
+        person_cloud,
+        person_render_colors,
+        skt_pose,
+        afh_pose,
+        skt_label,
+        afh_label,
+        "Person cloud (side)",
+        elev=8,
+        azim=2,
+        show_legend=False,
+    )
 
     fig.suptitle(
         f"{frame_info['label']} | SKT-AFH overlap MPJPE {frame_info['skt_afh_overlap_cm']:.1f} cm "
@@ -526,14 +623,20 @@ def make_report_html(report_title: str, rows: list[dict[str, object]], zh: bool)
         intro = (
             "<p>该初版诊断把 SKT 与 AFH 骨架叠加到同一帧的 SGBM 稠密点云上。"
             "点云先按两套骨架的联合 3D 包围盒裁切，用于尽量去掉背景。"
-            "其中 skeleton-to-cloud 最近邻距离越小，通常表示骨架越贴近当前相机观测到的人体表面；"
+            "当前版本仍是“局部人体附近点云”，不是经过语义分割得到的纯人体表面；"
+            "因此它更适合做几何人工核查，而不是严格的自动定量评分。"
+            "</p>"
+            "<p>其中 skeleton-to-cloud 最近邻距离越小，通常表示骨架越贴近当前相机观测到的人体表面；"
             "但它仍然受 SGBM 质量影响，所以只能作为人工诊断辅助。</p>"
         )
     else:
         intro = (
             "<p>This first-pass diagnostic overlays SKT and AFH skeletons on the same-frame "
             "SGBM point cloud. The cloud is cropped by the union 3D bounding box of both skeletons "
-            "to suppress the background. Lower skeleton-to-cloud nearest-neighbour distance usually "
+            "to suppress the background. The current version is still a local person-neighbourhood "
+            "cloud rather than a clean person-only segmentation, so it should be used for geometric "
+            "manual inspection rather than strict automatic scoring.</p>"
+            "<p>Lower skeleton-to-cloud nearest-neighbour distance usually "
             "means better geometric agreement with the currently observed person surface, but the "
             "metric still depends on SGBM quality and should be treated as a manual diagnostic aid.</p>"
         )

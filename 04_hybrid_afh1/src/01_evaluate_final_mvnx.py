@@ -28,7 +28,12 @@ from pose_angle_utils import (  # noqa: E402
 from utils_mvnx import MvnxParser  # noqa: E402
 
 
-INPUT_DIR = AFH1_DIR / "data" / "easyergo_uploaded"
+INPUT_DIR = Path(
+    os.environ.get(
+        "POSE_EASYERGO_INPUT_DIR",
+        str(AFH1_DIR / "data" / "easyergo_uploaded"),
+    )
+).resolve()
 RESULTS_DIR = Path(
     os.environ.get(
         "POSE_RESULTS_DIR",
@@ -51,7 +56,12 @@ ALIGNMENT_JSON = (
     / "recovered_baseline"
     / "alignment.json"
 )
-TIMING_JSON = AFH1_DIR / "results" / "02_final_mvnx_timing" / "affine_fit.json"
+TIMING_JSON = Path(
+    os.environ.get(
+        "POSE_TIMING_JSON",
+        str(AFH1_DIR / "results" / "02_final_mvnx_timing" / "affine_fit.json"),
+    )
+).resolve()
 GT_MVNX_PATH = PROJECT_ROOT.parent / "Xsens_ground_truth" / "Aitor-001.mvnx"
 FAIR_GT_NPZ = PROJECT_ROOT / "shared" / "fair_gt_angles.npz"
 BEST_OFFSET_FALLBACK = 16.83

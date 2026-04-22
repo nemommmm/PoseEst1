@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -27,8 +28,18 @@ from pose_angle_utils import build_gt_angle_interpolators  # noqa: E402
 from utils_mvnx import MvnxParser  # noqa: E402
 
 
-INPUT_DIR = AFH1_DIR / "data" / "easyergo_uploaded"
-RESULTS_DIR = AFH1_DIR / "results" / "20_final_mot_timing"
+INPUT_DIR = Path(
+    os.environ.get(
+        "POSE_EASYERGO_INPUT_DIR",
+        str(AFH1_DIR / "data" / "easyergo_uploaded"),
+    )
+).resolve()
+RESULTS_DIR = Path(
+    os.environ.get(
+        "POSE_RESULTS_DIR",
+        str(AFH1_DIR / "results" / "20_final_mot_timing"),
+    )
+).resolve()
 GT_MVNX_PATH = PROJECT_ROOT.parent / "Xsens_ground_truth" / "Aitor-001.mvnx"
 WINDOW_SCAN_CSV = RESULTS_DIR / "window_offset_scan.csv"
 SUMMARY_MD = RESULTS_DIR / "timing_diagnosis_summary.md"

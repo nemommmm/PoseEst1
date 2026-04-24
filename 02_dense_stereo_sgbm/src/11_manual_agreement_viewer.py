@@ -111,23 +111,59 @@ def finite_joints(pose: np.ndarray) -> np.ndarray:
     return pose[np.isfinite(pose).all(axis=1)]
 
 # ---------------------------------------------------------------------------
-# Video & NPZ timestamps
+# Video / stereo synchronization metadata
 # ---------------------------------------------------------------------------
 
-def load_video_timestamps(txt_path: Path) -> np.ndarray:
-    """Load Unix timestamps from StereoDataLoader txt file."""
-    ts: list[float] = []
-    with open(txt_path) as fh:
+def parse_stereo_meta(txt_path: Path) -> List[Dict[str, float | int]]:
+    """Parse one stereo metadata txt file using the same convention as StereoDataLoader."""
+    rows: List[Dict[str, float | int]] = []
+    with open(txt_path, encoding="utf-8") as fh:
         for line in fh:
-            parts = line.split()
-            if len(parts) >= 3:
-                ts.append(int(parts[1]) + int(parts[2]) / 1e6)
-    return np.array(ts, dtype=np.float64)
+            parts = line.strip().split()
+            if len(parts) < 3:
+                continue
+            try:
+                frame_id = int(parts[0])
+                timestamp = float(f"{parts[1]}.{parts[2]}")
+            except ValueError:
+                continue
+            rows.append({"id": frame_id, "ts": timestamp})
+    return rows
 
 
-def npz_to_vid(npz_idx: int, vid_ts: np.ndarray, npz_ts: np.ndarray) -> int:
-    """Find the video frame whose timestamp is closest to a given NPZ frame."""
-    return int(np.argmin(np.abs(vid_ts - npz_ts[npz_idx])))
+def build_synced_pairs(left_txt: Path, right_txt: Path) -> List[Dict[str, float | int]]:
+    """Replicate StereoDataLoader hardware-ID sync without decoding the videos."""
+    left_rows = parse_stereo_meta(left_txt)
+    right_rows = parse_stereo_meta(right_txt)
+    synced: List[Dict[str, float | int]] = []
+    ptr_l = 0
+    ptr_r = 0
+    while ptr_l < len(left_rows) and ptr_r < len(right_rows):
+        meta_l = left_rows[ptr_l]
+        meta_r = right_rows[ptr_r]
+        id_l = int(meta_l["id"])
+        id_r = int(meta_r["id"])
+        if id_l == id_r:
+            synced.append(
+                {
+                    "left_idx": ptr_l,
+                    "right_idx": ptr_r,
+                    "frame_id": id_l,
+                    "ts": float(meta_l["ts"]),
+                }
+            )
+            ptr_l += 1
+            ptr_r += 1
+        elif id_l < id_r:
+            ptr_l += 1
+        else:
+            ptr_r += 1
+    return synced
+
+
+def npz_to_sync(npz_idx: int, sync_ts: np.ndarray, npz_ts: np.ndarray) -> int:
+    """Find the synchronized stereo pair whose timestamp is closest to one NPZ frame."""
+    return int(np.argmin(np.abs(sync_ts - npz_ts[npz_idx])))
 
 # ---------------------------------------------------------------------------
 # Xsens GT loading & alignment
@@ -205,13 +241,19 @@ def setup_rectification(param_path: Path, img_hw: Tuple[int, int]):
     return *ml1, *mr1, q_mat, p1
 
 
-def read_stereo_pair(vid_idx: int, cap_l: cv2.VideoCapture, cap_r: cv2.VideoCapture):
-    cap_l.set(cv2.CAP_PROP_POS_FRAMES, vid_idx)
-    cap_r.set(cv2.CAP_PROP_POS_FRAMES, vid_idx)
+def read_stereo_pair(
+    left_idx: int,
+    right_idx: int,
+    cap_l: cv2.VideoCapture,
+    cap_r: cv2.VideoCapture,
+):
+    """Read one hardware-synchronized stereo pair by original per-stream frame indices."""
+    cap_l.set(cv2.CAP_PROP_POS_FRAMES, left_idx)
+    cap_r.set(cv2.CAP_PROP_POS_FRAMES, right_idx)
     ok_l, fl = cap_l.read()
     ok_r, fr = cap_r.read()
     if not ok_l or not ok_r:
-        raise IndexError(f"Cannot read video frame {vid_idx}")
+        raise IndexError(f"Cannot read synchronized stereo pair L={left_idx}, R={right_idx}")
     return cv2.rotate(fl, cv2.ROTATE_180), cv2.rotate(fr, cv2.ROTATE_180)
 
 
@@ -289,22 +331,17 @@ def project_to_rect(pose: np.ndarray, p1_mat: np.ndarray, hw: Tuple[int, int]) -
 
 
 def build_person_mask(hw: Tuple[int, int], proj_list: List[np.ndarray]) -> np.ndarray:
-    """2D person mask from union of projected skeletons (convex hull + thick limbs)."""
+    """Build a tighter 2D person mask from camera-skeleton projections only."""
     h, w = hw
     mask = np.zeros((h, w), dtype=np.uint8)
-    all_pts: list[np.ndarray] = []
     for proj in proj_list:
         valid = np.isfinite(proj).all(axis=1)
         if not np.any(valid):
             continue
         pts = np.round(proj[valid]).astype(np.int32)
-        all_pts.append(pts.astype(np.float32))
         y_span = int(np.max(pts[:, 1]) - np.min(pts[:, 1])) if len(pts) > 1 else 160
-        lw = int(np.clip(round(y_span * 0.085), 16, 34))
-        jr = int(np.clip(round(y_span * 0.055), 10, 22))
-        hull = cv2.convexHull(pts)
-        if len(hull) >= 3:
-            cv2.fillConvexPoly(mask, hull, 255)
+        lw = int(np.clip(round(y_span * 0.055), 9, 22))
+        jr = int(np.clip(round(y_span * 0.032), 6, 14))
         torso_idx = [i for i in (5, 6, 11, 12) if valid[i]]
         if len(torso_idx) >= 3:
             tp = np.round(proj[torso_idx]).astype(np.int32)
@@ -315,15 +352,8 @@ def build_person_mask(hw: Tuple[int, int], proj_list: List[np.ndarray]) -> np.nd
                          tuple(np.round(proj[b]).astype(int)), 255, lw)
         for pt in pts:
             cv2.circle(mask, tuple(pt), jr, 255, -1)
-    if all_pts:
-        merged = np.concatenate(all_pts, axis=0)
-        x0 = max(int(np.floor(merged[:, 0].min())) - 24, 0)
-        x1 = min(int(np.ceil(merged[:, 0].max())) + 24, w - 1)
-        y0 = max(int(np.floor(merged[:, 1].min())) - 28, 0)
-        y1 = min(int(np.ceil(merged[:, 1].max())) + 28, h - 1)
-        cv2.rectangle(mask, (x0, y0), (x1, y1), 255, 2)
-    kern_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (19, 19))
-    kern_dil = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (17, 17))
+    kern_close = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (11, 11))
+    kern_dil = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
     mask = cv2.morphologyEx(mask, cv2.MORPH_CLOSE, kern_close)
     mask = cv2.dilate(mask, kern_dil, iterations=1)
     return mask
@@ -333,11 +363,11 @@ def crop_person_cloud(pts: np.ndarray, cols: np.ndarray, pixels: np.ndarray,
                       poses: List[np.ndarray], mask_2d: Optional[np.ndarray],
                       margin_xyz: Tuple[float, float, float],
                       disable_mask: bool = False,
-                      depth_margin_cm: float = 40.0) -> Tuple[np.ndarray, np.ndarray]:
-    """Crop cloud to person region using 3D bbox union + 2D mask + depth consistency.
+                      depth_margin_cm: float = 0.0) -> Tuple[np.ndarray, np.ndarray]:
+    """Crop cloud to person region using 3D bbox union + 2D mask.
 
-    depth_margin_cm: only keep points within ±N cm of the skeleton's median depth (Z axis).
-    This eliminates floor/wall points at different depths from the person.
+    A coarse global depth slice is disabled by default because it tends to keep
+    same-depth background strips while discarding valid limbs that move forward/backward.
     """
     all_finite = [finite_joints(p) for p in poses if len(finite_joints(p)) > 0]
     if not all_finite:
@@ -387,11 +417,11 @@ def compute_frame_mae(pose: np.ndarray, gt_t: float, fair_gt_interps: Dict) -> O
 
 
 def precompute_skt_maes(npz_kp: np.ndarray, npz_ts: np.ndarray,
-                        vid_start: float, offset_s: float,
+                        subject_start: float, offset_s: float,
                         fair_gt_interps: Dict) -> np.ndarray:
     maes = np.full(len(npz_kp), np.nan)
     for i, (pose, ts) in enumerate(zip(npz_kp, npz_ts)):
-        subject_t = ts - vid_start
+        subject_t = ts - subject_start
         mae = compute_frame_mae(pose, subject_t - offset_s, fair_gt_interps)
         if mae is not None:
             maes[i] = mae
@@ -577,7 +607,7 @@ def make_html(windows_payload: List[Dict], plotly_tag: str) -> str:
       <div class="sec-title" style="margin-top:10px">Note</div>
       <div style="font-size:0.76rem;color:#666;line-height:1.55">
         NN distance is a rough guide (depends on SGBM quality).<br>
-        Use your eyes: which skeleton fits the <b>orange silhouette</b>?
+        Use your eyes: which skeleton fits the <b>cyan person region</b>?
       </div>
     </div>
 
@@ -717,7 +747,7 @@ function render() {{
       }}
       document.getElementById('cloudLegend').innerHTML =
         '<span class="dot" style="background:#4a5568;opacity:0.5"></span>Background (dim grey)<br>'
-        + '<span class="dot" style="background:#00e5ff"></span><b>Person region (cyan)</b> — depth-filtered';
+        + '<span class="dot" style="background:#00e5ff"></span><b>Person region (cyan)</b> — camera-mask cropped';
     }} else {{
       // Person RGB mode: real camera texture, person region only
       const pc = frm.person_cloud;
@@ -728,7 +758,7 @@ function render() {{
           name:'Person (camera RGB)', hoverinfo:'skip' }});
       }}
       document.getElementById('cloudLegend').innerHTML =
-        'Person cloud with real camera RGB colours (depth-filtered)';
+        'Person cloud with real camera RGB colours (camera-mask cropped)';
     }}
 
     // ── Skeletons ─────────────────────────────────────────────────────────────
@@ -875,11 +905,14 @@ def main() -> None:
     if skt_kp.shape != afh_kp.shape:
         raise ValueError(f"SKT {skt_kp.shape} vs AFH {afh_kp.shape} shape mismatch.")
 
-    # ---- Video timestamps ----
-    print("Loading video timestamps...")
-    vid_ts = load_video_timestamps(DATA_DIR / "0_video_left.txt")
-    vid_start = float(vid_ts[0])
-    print(f"  Video: {len(vid_ts)} frames, NPZ: {len(skt_ts)} frames")
+    # ---- Synchronized stereo metadata ----
+    print("Building synchronized stereo-pair metadata...")
+    sync_pairs = build_synced_pairs(DATA_DIR / "0_video_left.txt", DATA_DIR / "1_video_right.txt")
+    if not sync_pairs:
+        raise RuntimeError("No synchronized stereo pairs found in metadata.")
+    sync_ts = np.array([float(row["ts"]) for row in sync_pairs], dtype=np.float64)
+    subject_start = float(skt_ts[0])
+    print(f"  Synced stereo pairs: {len(sync_pairs)}, NPZ frames: {len(skt_ts)}")
 
     # ---- Xsens GT + Kabsch ----
     print("Loading Xsens GT...")
@@ -919,7 +952,7 @@ def main() -> None:
     else:
         print("Computing SKT fair MAE per NPZ frame...")
         if fair_gt:
-            maes = precompute_skt_maes(skt_kp, skt_ts, vid_start, offset_s, fair_gt)
+            maes = precompute_skt_maes(skt_kp, skt_ts, subject_start, offset_s, fair_gt)
             valid_count = int(np.isfinite(maes).sum())
             print(f"  Valid MAE frames: {valid_count}/{len(maes)}, "
                   f"mean={np.nanmean(maes):.1f}°, min={np.nanmin(maes):.1f}°")
@@ -948,11 +981,17 @@ def main() -> None:
 
         for npz_idx in npz_indices:
             npz_idx = int(np.clip(npz_idx, 0, len(skt_kp) - 1))
-            vid_idx = npz_to_vid(npz_idx, vid_ts, skt_ts)
-            subject_t = float(skt_ts[npz_idx] - vid_start)
-            print(f"  NPZ {npz_idx} -> vid {vid_idx} -> subject_t={subject_t:.2f}s")
+            sync_idx = npz_to_sync(npz_idx, sync_ts, skt_ts)
+            pair_meta = sync_pairs[sync_idx]
+            left_idx = int(pair_meta["left_idx"])
+            right_idx = int(pair_meta["right_idx"])
+            subject_t = float(skt_ts[npz_idx] - subject_start)
+            print(
+                f"  NPZ {npz_idx} -> sync {sync_idx} "
+                f"(L={left_idx}, R={right_idx}) -> subject_t={subject_t:.2f}s"
+            )
 
-            fl, fr = read_stereo_pair(vid_idx, cap_l, cap_r)
+            fl, fr = read_stereo_pair(left_idx, right_idx, cap_l, cap_r)
             lr, disp = compute_disparity(fl, fr, m1l, m2l, m1r, m2r, sgbm)
 
             pts_all, cols_all, pix_all, total = build_cloud(disp, lr, q_mat, args.color_mode)
@@ -961,20 +1000,18 @@ def main() -> None:
             afh_pose = afh_kp[npz_idx].astype(np.float32)
             gt_info = gt_pose_in_cam(subject_t, gt, align) if gt and align else None
 
-            # -- Person cloud crop (union of all 3 skeletons) --
+            # -- Person cloud crop: use camera-method skeletons only.
+            #    GT remains an inspected hypothesis, not part of the crop prior.
             gt_cam_pose_list: List[np.ndarray] = []
             if gt_info:
                 gt_cam_arr = np.array([gt_info["_cam"].get(s, np.full(3, np.nan))
                                        for s in XSENS_SEGMENTS], dtype=np.float32)
                 gt_cam_pose_list.append(gt_cam_arr)
 
-            poses_for_mask = [skt_pose, afh_pose] + gt_cam_pose_list
+            poses_for_mask = [skt_pose, afh_pose]
             skt_proj = project_to_rect(skt_pose, p1_mat, img_hw)
             afh_proj = project_to_rect(afh_pose, p1_mat, img_hw)
             all_proj = [skt_proj, afh_proj]
-            if gt_cam_pose_list:
-                gt_proj = project_to_rect(gt_cam_pose_list[0], p1_mat, img_hw)
-                all_proj.append(gt_proj)
 
             mask_2d = None if args.disable_mask else build_person_mask(img_hw, all_proj)
             pers_pts, pers_cols = crop_person_cloud(
@@ -1024,7 +1061,9 @@ def main() -> None:
 
             frame_payloads.append({
                 "npz_idx": int(npz_idx),
-                "vid_idx": int(vid_idx),
+                "sync_idx": int(sync_idx),
+                "left_vid_idx": left_idx,
+                "right_vid_idx": right_idx,
                 "subject_time_s": round(subject_t, 3),
                 "skt_mae_deg": metrics["skt_mae_deg"],
                 "full_cloud": cloud_payload(full_pts_r, full_cols_r),

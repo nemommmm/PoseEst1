@@ -547,6 +547,14 @@ def make_person_cloud_colors(person_cloud: np.ndarray) -> np.ndarray:
     return plt.get_cmap("viridis")(norm(height_vals))
 
 
+def make_highlight_person_colors(person_cloud: np.ndarray) -> np.ndarray:
+    """Create a fixed highlight color so person cloud stands out from the environment."""
+    if len(person_cloud) == 0:
+        return np.zeros((0, 4), dtype=np.float32)
+    rgba = np.tile(np.array([[1.0, 0.67, 0.20, 0.95]], dtype=np.float32), (len(person_cloud), 1))
+    return rgba
+
+
 def draw_projected_skeleton_2d(
     image_rgb: np.ndarray,
     projected_pose: np.ndarray,
@@ -679,9 +687,22 @@ def render_snapshot(
             linewidths=0,
             depthshade=False,
         )
+    if len(person_cloud) > 0:
+        disp_person_context = to_display_coords(person_cloud)
+        context_highlight_colors = make_highlight_person_colors(person_cloud)
+        ax2.scatter(
+            disp_person_context[:, 0],
+            disp_person_context[:, 1],
+            disp_person_context[:, 2],
+            s=1.7,
+            c=context_highlight_colors,
+            alpha=0.92,
+            linewidths=0,
+            depthshade=False,
+        )
     draw_skeleton(ax2, skt_pose, color="#00d4ff", label=skt_label)
     draw_skeleton(ax2, afh_pose, color="#ff4fa3", label=afh_label)
-    ax2.set_title("Full cloud context + skeletons")
+    ax2.set_title("Full cloud context (env grey, person highlighted) + skeletons")
     ax2.set_xlabel("X (cm)")
     ax2.set_ylabel("Depth Z (cm)")
     ax2.set_zlabel("Height (cm)")

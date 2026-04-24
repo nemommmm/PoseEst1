@@ -614,6 +614,11 @@ def make_html(windows_payload: List[Dict], plotly_tag: str) -> str:
       <select id="winSelect"></select>
       <div class="sec-title">Frame</div>
       <select id="frmSelect"></select>
+      <div class="btn-row frame-controls">
+        <button onclick="stepFrame(-1)">Prev</button>
+        <button id="btnPlay" onclick="togglePlay()">Play</button>
+        <button onclick="stepFrame(1)">Next</button>
+      </div>
 
       <div class="sec-title">Point cloud mode</div>
       <div class="btn-row">
@@ -683,6 +688,8 @@ const wins = {data_json};
 let curWin = 0, curFrm = 0, curMode = 'focus';
 let showSKT = true, showAFH = true, showGT = true;
 let plotInited = false;
+let playTimer = null;
+const PLAY_MS = 450;
 
 // ── Selects ──────────────────────────────────────────────────────────────────
 const winSel = document.getElementById('winSelect');
@@ -709,10 +716,37 @@ function populateFrames(wi) {{
 populateFrames(0);
 
 winSel.addEventListener('change', e => {{
+  stopPlay();
   curWin = +e.target.value; curFrm = 0;
   frmSel.value = 0; populateFrames(curWin); render();
 }});
 frmSel.addEventListener('change', e => {{ curFrm = +e.target.value; render(); }});
+
+function stepFrame(delta) {{
+  const n = wins[curWin].frames.length;
+  if (!n) return;
+  curFrm = (curFrm + delta + n) % n;
+  frmSel.value = curFrm;
+  render();
+}}
+
+function stopPlay() {{
+  if (playTimer !== null) {{
+    clearInterval(playTimer);
+    playTimer = null;
+  }}
+  const btn = document.getElementById('btnPlay');
+  if (btn) btn.textContent = 'Play';
+}}
+
+function togglePlay() {{
+  if (playTimer !== null) {{
+    stopPlay();
+    return;
+  }}
+  document.getElementById('btnPlay').textContent = 'Pause';
+  playTimer = setInterval(() => stepFrame(1), PLAY_MS);
+}}
 
 // ── Cloud mode ────────────────────────────────────────────────────────────────
 function setMode(m) {{

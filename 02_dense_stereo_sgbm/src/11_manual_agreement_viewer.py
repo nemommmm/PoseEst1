@@ -307,6 +307,49 @@ def subsample(pts: np.ndarray, cols: np.ndarray, max_pts: int, seed: int = 0):
     idx = rng.choice(len(pts), size=max_pts, replace=False)
     return pts[idx], cols[idx]
 
+
+def crop_context_cloud(
+    pts: np.ndarray,
+    cols: np.ndarray,
+    poses: List[np.ndarray],
+    margin_xyz: Tuple[float, float, float],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Crop a loose near-person environment cloud around camera-method skeletons."""
+    all_finite = [finite_joints(pose) for pose in poses if len(finite_joints(pose)) > 0]
+    if not all_finite:
+        return pts, cols
+    joint_union = np.concatenate(all_finite, axis=0)
+    mx, my, mz = margin_xyz
+    lo = np.nanmin(joint_union, axis=0) - [mx, my, mz]
+    hi = np.nanmax(joint_union, axis=0) + [mx, my, mz]
+    sel = np.all((pts >= lo) & (pts <= hi), axis=1)
+    return pts[sel], cols[sel]
+
+
+def display_bounds_payload(
+    point_sets_cam: List[np.ndarray],
+    margin_cm: float = 30.0,
+) -> Optional[Dict[str, List[float]]]:
+    """Build display-coordinate bounds for front-end focus framing."""
+    finite_sets = []
+    for pts in point_sets_cam:
+        arr = np.asarray(pts, dtype=np.float32)
+        if arr.size == 0:
+            continue
+        arr = arr.reshape(-1, 3)
+        arr = arr[np.isfinite(arr).all(axis=1)]
+        if len(arr) > 0:
+            finite_sets.append(arr)
+    if not finite_sets:
+        return None
+    disp = to_display(np.concatenate(finite_sets, axis=0))
+    lo = np.nanmin(disp, axis=0) - margin_cm
+    hi = np.nanmax(disp, axis=0) + margin_cm
+    return {
+        "min": [round(float(v), 3) for v in lo],
+        "max": [round(float(v), 3) for v in hi],
+    }
+
 # ---------------------------------------------------------------------------
 # Person cloud crop
 # ---------------------------------------------------------------------------
@@ -574,7 +617,8 @@ def make_html(windows_payload: List[Dict], plotly_tag: str) -> str:
 
       <div class="sec-title">Point cloud mode</div>
       <div class="btn-row">
-        <button id="btnCtx"  class="active" onclick="setMode('ctx')">Context&nbsp;+&nbsp;Highlight</button>
+        <button id="btnFocus" class="active" onclick="setMode('focus')">Focus</button>
+        <button id="btnCtx" onclick="setMode('ctx')">Full&nbsp;room</button>
         <button id="btnRGB"  onclick="setMode('rgb')">Person&nbsp;RGB</button>
       </div>
       <div class="cloud-legend" id="cloudLegend"></div>
@@ -636,7 +680,7 @@ def make_html(windows_payload: List[Dict], plotly_tag: str) -> str:
 
 // ── State ────────────────────────────────────────────────────────────────────
 const wins = {data_json};
-let curWin = 0, curFrm = 0, curMode = 'ctx';
+let curWin = 0, curFrm = 0, curMode = 'focus';
 let showSKT = true, showAFH = true, showGT = true;
 let plotInited = false;
 
@@ -673,6 +717,7 @@ frmSel.addEventListener('change', e => {{ curFrm = +e.target.value; render(); }}
 // ── Cloud mode ────────────────────────────────────────────────────────────────
 function setMode(m) {{
   curMode = m;
+  document.getElementById('btnFocus').className = m === 'focus' ? 'active' : '';
   document.getElementById('btnCtx').className = m === 'ctx' ? 'active' : '';
   document.getElementById('btnRGB').className = m === 'rgb' ? 'active' : '';
   render();
@@ -696,6 +741,48 @@ function mClass(k, v) {{
 
 function ok(p) {{
   return p != null && p[0] != null && isFinite(p[0]) && isFinite(p[1]) && isFinite(p[2]);
+}}
+
+function rgb(c) {{
+  return `rgb(${{c[0]}},${{c[1]}},${{c[2]}})`;
+}}
+
+function addCloudTrace(traces, cloud, opts) {{
+  if (!cloud || !cloud.pts || !cloud.pts.length) return;
+  const marker = {{
+    size: opts.size,
+    opacity: opts.opacity,
+  }};
+  marker.color = opts.rgb ? cloud.cols.map(rgb) : opts.color;
+  traces.push({{ type:'scatter3d', mode:'markers',
+    x:cloud.pts.map(p=>p[0]), y:cloud.pts.map(p=>p[1]), z:cloud.pts.map(p=>p[2]),
+    marker, name:opts.name, hoverinfo:'skip', showlegend:opts.showlegend !== false }});
+}}
+
+function addBoundsBox(traces, bounds) {{
+  if (!bounds || !bounds.min || !bounds.max) return;
+  const mn = bounds.min, mx = bounds.max;
+  const c = [
+    [mn[0],mn[1],mn[2]], [mx[0],mn[1],mn[2]], [mx[0],mx[1],mn[2]], [mn[0],mx[1],mn[2]],
+    [mn[0],mn[1],mx[2]], [mx[0],mn[1],mx[2]], [mx[0],mx[1],mx[2]], [mn[0],mx[1],mx[2]],
+  ];
+  const edges = [[0,1],[1,2],[2,3],[3,0],[4,5],[5,6],[6,7],[7,4],[0,4],[1,5],[2,6],[3,7]];
+  const x = [], y = [], z = [];
+  edges.forEach(([a,b]) => {{
+    x.push(c[a][0], c[b][0], null);
+    y.push(c[a][1], c[b][1], null);
+    z.push(c[a][2], c[b][2], null);
+  }});
+  traces.push({{ type:'scatter3d', mode:'lines',
+    x, y, z, line:{{color:'#00e5ff', width:5}},
+    name:'Person bounds', hoverinfo:'skip', showlegend:true }});
+}}
+
+function applyFocusRanges(scene, bounds, pad) {{
+  if (!bounds || !bounds.min || !bounds.max) return;
+  scene.xaxis.range = [bounds.min[0] - pad, bounds.max[0] + pad];
+  scene.yaxis.range = [bounds.min[1] - pad, bounds.max[1] + pad];
+  scene.zaxis.range = [bounds.min[2] - pad, bounds.max[2] + pad];
 }}
 
 // ── Render ────────────────────────────────────────────────────────────────────
@@ -728,35 +815,37 @@ function render() {{
     // ── Build traces ──────────────────────────────────────────────────────────
     const traces = [];
 
-    if (curMode === 'ctx') {{
-      // Background: full cloud, dim grey, very small points
-      const fc = frm.full_cloud;
-      if (fc && fc.pts.length) {{
-        traces.push({{ type:'scatter3d', mode:'markers',
-          x:fc.pts.map(p=>p[0]), y:fc.pts.map(p=>p[1]), z:fc.pts.map(p=>p[2]),
-          marker:{{ size:0.8, color:'#4a5568', opacity:0.12 }},
-          name:'Background', hoverinfo:'skip' }});
-      }}
-      // Person: depth-filtered, bright cyan so it stands out from all skeleton colours
-      const pc = frm.person_cloud;
-      if (pc && pc.pts.length) {{
-        traces.push({{ type:'scatter3d', mode:'markers',
-          x:pc.pts.map(p=>p[0]), y:pc.pts.map(p=>p[1]), z:pc.pts.map(p=>p[2]),
-          marker:{{ size:3.5, color:'#00e5ff', opacity:0.95 }},
-          name:'Person (cyan highlight)', hoverinfo:'skip' }});
-      }}
+    if (curMode === 'focus') {{
+      const cc = frm.context_cloud || frm.full_cloud;
+      addCloudTrace(traces, cc, {{
+        size:1.1, color:'#6b7788', opacity:0.18, name:'Near-person context'
+      }});
+      addCloudTrace(traces, frm.person_cloud, {{
+        size:6.0, color:'#00e5ff', opacity:0.22, name:'Person halo', showlegend:false
+      }});
+      addCloudTrace(traces, frm.person_cloud, {{
+        size:3.2, opacity:0.97, rgb:true, name:'Person (camera RGB)'
+      }});
+      addBoundsBox(traces, frm.focus_bounds);
       document.getElementById('cloudLegend').innerHTML =
-        '<span class="dot" style="background:#4a5568;opacity:0.5"></span>Background (dim grey)<br>'
-        + '<span class="dot" style="background:#00e5ff"></span><b>Person region (cyan)</b> — camera-mask cropped';
+        '<span class="dot" style="background:#6b7788;opacity:0.7"></span>Near-person context<br>'
+        + '<span class="dot" style="background:#00e5ff"></span><b>Person box + halo</b><br>'
+        + '<span class="dot" style="background:#ddd"></span>Person points use camera RGB';
+    }} else if (curMode === 'ctx') {{
+      addCloudTrace(traces, frm.full_cloud, {{
+        size:0.75, color:'#4a5568', opacity:0.055, name:'Full room cloud'
+      }});
+      addCloudTrace(traces, frm.person_cloud, {{
+        size:4.4, color:'#00e5ff', opacity:0.90, name:'Person (cyan highlight)'
+      }});
+      addBoundsBox(traces, frm.focus_bounds);
+      document.getElementById('cloudLegend').innerHTML =
+        '<span class="dot" style="background:#4a5568;opacity:0.5"></span>Full room cloud (very dim)<br>'
+        + '<span class="dot" style="background:#00e5ff"></span><b>Person region + box</b>';
     }} else {{
-      // Person RGB mode: real camera texture, person region only
-      const pc = frm.person_cloud;
-      if (pc && pc.pts.length) {{
-        traces.push({{ type:'scatter3d', mode:'markers',
-          x:pc.pts.map(p=>p[0]), y:pc.pts.map(p=>p[1]), z:pc.pts.map(p=>p[2]),
-          marker:{{ size:3.0, color:pc.cols.map(c=>`rgb(${{c[0]}},${{c[1]}},${{c[2]}})`), opacity:0.95 }},
-          name:'Person (camera RGB)', hoverinfo:'skip' }});
-      }}
+      addCloudTrace(traces, frm.person_cloud, {{
+        size:3.2, opacity:0.97, rgb:true, name:'Person (camera RGB)'
+      }});
       document.getElementById('cloudLegend').innerHTML =
         'Person cloud with real camera RGB colours (camera-mask cropped)';
     }}
@@ -806,27 +895,31 @@ function render() {{
     // ── Layout ────────────────────────────────────────────────────────────────
     const maeS = frm.skt_mae_deg!=null ? frm.skt_mae_deg.toFixed(1)+'°' : 'n/a';
     const tS   = frm.subject_time_s!=null ? frm.subject_time_s.toFixed(2)+'s' : '?';
-    const modeLabel = curMode==='ctx' ? 'Context+Highlight' : 'Person RGB';
+    const modeLabel = curMode==='focus' ? 'Focus' : (curMode==='ctx' ? 'Full room' : 'Person RGB');
     const skelOn = [showSKT?'SKT':'',showAFH?'AFH':'',showGT?'GT':''].filter(Boolean).join('+');
     const title = `Win${{curWin+1}} · t=${{tS}} · SKT-MAE=${{maeS}} · ${{modeLabel}} · ${{skelOn||'(no skeleton)'}}`;
 
+    const scene = {{
+      xaxis:{{title:'X (cm, right)', backgroundcolor:'#0d1117', gridcolor:'#2a3a4a', showbackground:true}},
+      yaxis:{{title:'Y (cm, depth)', backgroundcolor:'#0d1117', gridcolor:'#2a3a4a', showbackground:true}},
+      zaxis:{{title:'Z (cm, up)',    backgroundcolor:'#0d1117', gridcolor:'#2a3a4a', showbackground:true}},
+      bgcolor:'#0d1117',
+      aspectmode:'manual',
+      aspectratio:{{x:1, y:1.6, z:0.9}},
+      // Front view (matches camera image): looking from in front of the scene along +Y depth axis
+      camera:{{eye:{{x:0.05, y:-2.5, z:0.2}}, up:{{x:0,y:0,z:1}}}}
+    }};
+    if (curMode === 'focus') applyFocusRanges(scene, frm.focus_bounds, 80);
+    if (curMode === 'rgb') applyFocusRanges(scene, frm.focus_bounds, 45);
+
     const layout = {{
-      scene: {{
-        xaxis:{{title:'X (cm, right)', backgroundcolor:'#0d1117', gridcolor:'#2a3a4a', showbackground:true}},
-        yaxis:{{title:'Y (cm, depth)', backgroundcolor:'#0d1117', gridcolor:'#2a3a4a', showbackground:true}},
-        zaxis:{{title:'Z (cm, up)',    backgroundcolor:'#0d1117', gridcolor:'#2a3a4a', showbackground:true}},
-        bgcolor:'#0d1117',
-        aspectmode:'manual',
-        aspectratio:{{x:1, y:1.6, z:0.9}},
-        // Front view (matches camera image): looking from in front of the scene along +Y depth axis
-        camera:{{eye:{{x:0.05, y:-2.5, z:0.2}}, up:{{x:0,y:0,z:1}}}}
-      }},
+      scene,
       paper_bgcolor:'#0d1117',
       font:{{color:'#bbb'}},
       legend:{{bgcolor:'rgba(20,28,40,0.85)', font:{{color:'#ddd'}}, x:0.01, y:0.99}},
       margin:{{l:0,r:0,b:0,t:36}},
       title:{{text:title, font:{{size:12, color:'#aaa'}}}},
-      uirevision: 'fixed'
+      uirevision: `win${{curWin}}-frm${{curFrm}}-mode${{curMode}}`
     }};
 
     if (!plotInited) {{
@@ -870,10 +963,14 @@ def parse_args() -> argparse.Namespace:
                    help="Number of evenly-spaced frames to render per window.")
     p.add_argument("--max-full-pts", type=int, default=30000,
                    help="Max points in full cloud for HTML rendering.")
+    p.add_argument("--max-context-pts", type=int, default=12000,
+                   help="Max near-person context points in focus mode.")
     p.add_argument("--max-person-pts", type=int, default=15000,
                    help="Max points in person-cropped cloud.")
     p.add_argument("--bbox-margin", type=float, default=30.0,
                    help="3D bbox margin around skeleton union (cm).")
+    p.add_argument("--context-margin", type=float, default=140.0,
+                   help="Loose 3D margin around camera-method skeletons for focus context (cm).")
     p.add_argument("--disable-mask", action="store_true",
                    help="Skip 2D skeleton mask; use only 3D bbox for person crop.")
     p.add_argument("--color-mode", choices=["rgb", "height"], default="rgb",
@@ -1017,9 +1114,20 @@ def main() -> None:
             pers_pts, pers_cols = crop_person_cloud(
                 pts_all, cols_all, pix_all, poses_for_mask, mask_2d, margin, args.disable_mask
             )
+            ctx_pts, ctx_cols = crop_context_cloud(
+                pts_all,
+                cols_all,
+                poses_for_mask,
+                (args.context_margin, args.context_margin, args.context_margin),
+            )
+            focus_bounds = display_bounds_payload(
+                [pers_pts, skt_pose, afh_pose] + gt_cam_pose_list,
+                margin_cm=25.0,
+            )
 
             # subsample for rendering
             full_pts_r, full_cols_r = subsample(pts_all, cols_all, args.max_full_pts)
+            ctx_pts_r, ctx_cols_r = subsample(ctx_pts, ctx_cols, args.max_context_pts, seed=2)
             pers_pts_r, pers_cols_r = subsample(pers_pts, pers_cols, args.max_person_pts, seed=1)
 
             # NN distances (computed on full person cloud, not subsampled)
@@ -1067,7 +1175,9 @@ def main() -> None:
                 "subject_time_s": round(subject_t, 3),
                 "skt_mae_deg": metrics["skt_mae_deg"],
                 "full_cloud": cloud_payload(full_pts_r, full_cols_r),
+                "context_cloud": cloud_payload(ctx_pts_r, ctx_cols_r),
                 "person_cloud": cloud_payload(pers_pts_r, pers_cols_r),
+                "focus_bounds": focus_bounds,
                 "skt_skel": display_skel(skt_pose),
                 "afh_skel": display_skel(afh_pose),
                 "gt_skel": gt_payload,
@@ -1096,8 +1206,8 @@ def main() -> None:
             "window_mae_deg": w["window_mae_deg"],
             "frames": [
                 {k: v for k, v in f.items()
-                 if k not in ("full_cloud", "person_cloud", "skt_skel", "afh_skel",
-                              "gt_skel", "frame_image")}
+                 if k not in ("full_cloud", "context_cloud", "person_cloud", "skt_skel",
+                              "afh_skel", "gt_skel", "frame_image")}
                 for f in w["frames"]
             ],
         }

@@ -243,6 +243,7 @@ HTML_TEMPLATE = """<!DOCTYPE html>
         <div class="mode-grid">
           <button class="mode active" data-mode="compare">Compare</button>
           <button class="mode" data-mode="original">Original</button>
+          <button class="mode" data-mode="both">Both</button>
           <button class="mode" data-mode="xsens">Xsens</button>
           <button class="mode" data-mode="skt">SKT</button>
         </div>

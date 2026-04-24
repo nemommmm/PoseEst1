@@ -443,11 +443,16 @@ def nn_distance(pose_cam: np.ndarray, cloud_cam: np.ndarray) -> Optional[float]:
 # Per-frame fair MAE computation
 # ---------------------------------------------------------------------------
 
-def compute_frame_mae(pose: np.ndarray, gt_t: float, fair_gt_interps: Dict) -> Optional[float]:
+def compute_frame_angle_errors(
+    pose: np.ndarray,
+    gt_t: float,
+    fair_gt_interps: Dict,
+) -> Dict[str, float]:
+    """Compute per-semantic-angle absolute errors against Fair GT for one frame."""
     if gt_t < 0 or not fair_gt_interps:
-        return None
+        return {}
     est = compute_semantic_joint_angles(pose)
-    errors = []
+    errors: Dict[str, float] = {}
     for name in SEMANTIC_ANGLE_NAMES:
         ev = est.get(name, np.nan)
         fn = fair_gt_interps.get(name)
@@ -455,8 +460,14 @@ def compute_frame_mae(pose: np.ndarray, gt_t: float, fair_gt_interps: Dict) -> O
             continue
         gv = float(fn(gt_t))
         if np.isfinite(ev) and np.isfinite(gv):
-            errors.append(abs(ev - gv))
-    return float(np.mean(errors)) if errors else None
+            errors[name] = float(abs(ev - gv))
+    return errors
+
+
+def compute_frame_mae(pose: np.ndarray, gt_t: float, fair_gt_interps: Dict) -> Optional[float]:
+    """Compute mean Fair-GT semantic-angle error for one frame."""
+    errors = compute_frame_angle_errors(pose, gt_t, fair_gt_interps)
+    return float(np.mean(list(errors.values()))) if errors else None
 
 
 def precompute_skt_maes(npz_kp: np.ndarray, npz_ts: np.ndarray,
@@ -604,14 +615,12 @@ def make_html(windows_payload: List[Dict], plotly_tag: str) -> str:
 <div class="wrap">
   <h1>Manual Agreement Viewer: SKT / AFH / Xsens GT on SGBM Point Cloud</h1>
   <p class="sub">
-    Frames from lowest-SKT-MAE windows · Left-drag to orbit · Right-drag to pan · Scroll to zoom
+    Selected diagnostic frames · Left-drag to orbit · Right-drag to pan · Scroll to zoom
   </p>
   <div id="errBox"></div>
   <div class="row">
     <!-- ── Left sidebar ── -->
     <div class="card">
-      <div class="sec-title">Window (by SKT MAE)</div>
-      <select id="winSelect"></select>
       <div class="sec-title">Frame</div>
       <select id="frmSelect"></select>
       <div class="btn-row frame-controls">
@@ -622,9 +631,15 @@ def make_html(windows_payload: List[Dict], plotly_tag: str) -> str:
 
       <div class="sec-title">Point cloud mode</div>
       <div class="btn-row">
-        <button id="btnFocus" class="active" onclick="setMode('focus')">Focus</button>
-        <button id="btnCtx" onclick="setMode('ctx')">Full&nbsp;room</button>
-        <button id="btnRGB"  onclick="setMode('rgb')">Person&nbsp;RGB</button>
+        <button id="btnRGB" class="active" onclick="setMode('rgb')">Person&nbsp;RGB</button>
+        <button id="btnFocus" onclick="setMode('focus')">Focus</button>
+      </div>
+      <div class="skel-toggles">
+        <label class="skel-toggle">
+          <input type="checkbox" id="chkCloud" checked onchange="toggleCloud(this.checked)">
+          <span class="dot" style="background:#8a94a6"></span>
+          <span style="font-weight:600">Point cloud</span> show / hide
+        </label>
       </div>
       <div class="cloud-legend" id="cloudLegend"></div>
 
@@ -656,7 +671,7 @@ def make_html(windows_payload: List[Dict], plotly_tag: str) -> str:
       <div class="sec-title" style="margin-top:10px">Note</div>
       <div style="font-size:0.76rem;color:#666;line-height:1.55">
         NN distance is a rough guide (depends on SGBM quality).<br>
-        Use your eyes: which skeleton fits the <b>cyan person region</b>?
+        Person RGB shows the cropped person cloud; Focus adds local context.
       </div>
     </div>
 
@@ -685,45 +700,41 @@ def make_html(windows_payload: List[Dict], plotly_tag: str) -> str:
 
 // ── State ────────────────────────────────────────────────────────────────────
 const wins = {data_json};
-let curWin = 0, curFrm = 0, curMode = 'focus';
+const frames = wins.flatMap((w, wi) => w.frames.map((f, fi) => ({{
+  ...f,
+  window_idx: w.window_idx ?? wi + 1,
+  window_frame_idx: fi,
+  window_mae_deg: w.window_mae_deg,
+}})));
+let curFrm = 0, curMode = 'rgb';
+let showCloud = true;
 let showSKT = true, showAFH = true, showGT = true;
 let plotInited = false;
+let lastRenderedFrame = null;
 let playTimer = null;
 const PLAY_MS = 450;
 
-// ── Selects ──────────────────────────────────────────────────────────────────
-const winSel = document.getElementById('winSelect');
+// ── Frame selector ────────────────────────────────────────────────────────────
 const frmSel = document.getElementById('frmSelect');
 
-wins.forEach((w, wi) => {{
-  const o = document.createElement('option'); o.value = wi;
-  const s = (w.window_mae_deg != null && isFinite(w.window_mae_deg))
-    ? w.window_mae_deg.toFixed(1) + '°' : 'n/a';
-  o.textContent = `Window ${{wi+1}}  —  mean SKT MAE ${{s}}`;
-  winSel.appendChild(o);
-}});
-
-function populateFrames(wi) {{
+function populateFrames() {{
   frmSel.innerHTML = '';
-  wins[wi].frames.forEach((f, fi) => {{
+  const multiWindow = wins.length > 1;
+  frames.forEach((f, fi) => {{
     const o = document.createElement('option'); o.value = fi;
     const t = f.subject_time_s != null ? f.subject_time_s.toFixed(1) + 's' : '?';
     const m = f.skt_mae_deg != null ? f.skt_mae_deg.toFixed(1) + '°' : 'n/a';
-    o.textContent = `t = ${{t}}    SKT-MAE = ${{m}}`;
+    const prefix = multiWindow ? `W${{f.window_idx}} · ` : '';
+    o.textContent = `${{prefix}}t = ${{t}}    SKT-MAE = ${{m}}`;
     frmSel.appendChild(o);
   }});
 }}
-populateFrames(0);
+populateFrames();
 
-winSel.addEventListener('change', e => {{
-  stopPlay();
-  curWin = +e.target.value; curFrm = 0;
-  frmSel.value = 0; populateFrames(curWin); render();
-}});
 frmSel.addEventListener('change', e => {{ curFrm = +e.target.value; render(); }});
 
 function stepFrame(delta) {{
-  const n = wins[curWin].frames.length;
+  const n = frames.length;
   if (!n) return;
   curFrm = (curFrm + delta + n) % n;
   frmSel.value = curFrm;
@@ -751,9 +762,13 @@ function togglePlay() {{
 // ── Cloud mode ────────────────────────────────────────────────────────────────
 function setMode(m) {{
   curMode = m;
-  document.getElementById('btnFocus').className = m === 'focus' ? 'active' : '';
-  document.getElementById('btnCtx').className = m === 'ctx' ? 'active' : '';
   document.getElementById('btnRGB').className = m === 'rgb' ? 'active' : '';
+  document.getElementById('btnFocus').className = m === 'focus' ? 'active' : '';
+  render();
+}}
+
+function toggleCloud(checked) {{
+  showCloud = checked;
   render();
 }}
 
@@ -769,6 +784,7 @@ function toggleSkel(name, checked) {{
 function mClass(k, v) {{
   if (v == null || !isFinite(v)) return '';
   if (k === 'skt_mae_deg') return v <= 15 ? 'good' : v <= 25 ? 'warn' : 'bad';
+  if (k.endsWith('_err_deg')) return v <= 15 ? 'good' : v <= 30 ? 'warn' : 'bad';
   if (k.endsWith('_nn_cm')) return v <= 15 ? 'good' : v <= 30 ? 'warn' : 'bad';
   return '';
 }}
@@ -822,7 +838,7 @@ function applyFocusRanges(scene, bounds, pad) {{
 // ── Render ────────────────────────────────────────────────────────────────────
 function render() {{
   try {{
-    const frm = wins[curWin].frames[curFrm];
+    const frm = frames[curFrm];
 
     // Camera image
     const img = document.getElementById('frameImg');
@@ -833,6 +849,9 @@ function render() {{
     const mdefs = [
       ['subject_time_s','Subject time',' s'],
       ['skt_mae_deg','SKT fair MAE','°'],
+      ['elbow_mean_err_deg','Elbow mean error','°'],
+      ['left_elbow_err_deg','Left elbow error','°'],
+      ['right_elbow_err_deg','Right elbow error','°'],
       ['skt_nn_cm','SKT→cloud NN',' cm'],
       ['afh_nn_cm','AFH→cloud NN',' cm'],
       ['gt_nn_cm','GT→cloud NN',' cm'],
@@ -849,7 +868,16 @@ function render() {{
     // ── Build traces ──────────────────────────────────────────────────────────
     const traces = [];
 
-    if (curMode === 'focus') {{
+    if (!showCloud) {{
+      document.getElementById('cloudLegend').innerHTML =
+        'Point cloud hidden; skeleton overlays stay visible.';
+    }} else if (curMode === 'rgb') {{
+      addCloudTrace(traces, frm.person_cloud, {{
+        size:3.2, opacity:0.97, rgb:true, name:'Person (camera RGB)'
+      }});
+      document.getElementById('cloudLegend').innerHTML =
+        'Person cloud with real camera RGB colours (camera-mask cropped)';
+    }} else {{
       const cc = frm.context_cloud || frm.full_cloud;
       addCloudTrace(traces, cc, {{
         size:1.1, color:'#6b7788', opacity:0.18, name:'Near-person context'
@@ -865,23 +893,6 @@ function render() {{
         '<span class="dot" style="background:#6b7788;opacity:0.7"></span>Near-person context<br>'
         + '<span class="dot" style="background:#00e5ff"></span><b>Person box + halo</b><br>'
         + '<span class="dot" style="background:#ddd"></span>Person points use camera RGB';
-    }} else if (curMode === 'ctx') {{
-      addCloudTrace(traces, frm.full_cloud, {{
-        size:0.75, color:'#4a5568', opacity:0.055, name:'Full room cloud'
-      }});
-      addCloudTrace(traces, frm.person_cloud, {{
-        size:4.4, color:'#00e5ff', opacity:0.90, name:'Person (cyan highlight)'
-      }});
-      addBoundsBox(traces, frm.focus_bounds);
-      document.getElementById('cloudLegend').innerHTML =
-        '<span class="dot" style="background:#4a5568;opacity:0.5"></span>Full room cloud (very dim)<br>'
-        + '<span class="dot" style="background:#00e5ff"></span><b>Person region + box</b>';
-    }} else {{
-      addCloudTrace(traces, frm.person_cloud, {{
-        size:3.2, opacity:0.97, rgb:true, name:'Person (camera RGB)'
-      }});
-      document.getElementById('cloudLegend').innerHTML =
-        'Person cloud with real camera RGB colours (camera-mask cropped)';
     }}
 
     // ── Skeletons ─────────────────────────────────────────────────────────────
@@ -928,10 +939,11 @@ function render() {{
 
     // ── Layout ────────────────────────────────────────────────────────────────
     const maeS = frm.skt_mae_deg!=null ? frm.skt_mae_deg.toFixed(1)+'°' : 'n/a';
+    const elbowS = frm.metrics.elbow_mean_err_deg!=null ? frm.metrics.elbow_mean_err_deg.toFixed(1)+'°' : 'n/a';
     const tS   = frm.subject_time_s!=null ? frm.subject_time_s.toFixed(2)+'s' : '?';
-    const modeLabel = curMode==='focus' ? 'Focus' : (curMode==='ctx' ? 'Full room' : 'Person RGB');
+    const modeLabel = curMode==='rgb' ? 'Person RGB' : 'Focus';
     const skelOn = [showSKT?'SKT':'',showAFH?'AFH':'',showGT?'GT':''].filter(Boolean).join('+');
-    const title = `Win${{curWin+1}} · t=${{tS}} · SKT-MAE=${{maeS}} · ${{modeLabel}} · ${{skelOn||'(no skeleton)'}}`;
+    const title = `t=${{tS}} · SKT-MAE=${{maeS}} · elbow=${{elbowS}} · ${{modeLabel}} · ${{skelOn||'(no skeleton)'}}`;
 
     const scene = {{
       xaxis:{{title:'X (cm, right)', backgroundcolor:'#0d1117', gridcolor:'#2a3a4a', showbackground:true}},
@@ -943,8 +955,8 @@ function render() {{
       // Front view (matches camera image): looking from in front of the scene along +Y depth axis
       camera:{{eye:{{x:0.05, y:-2.5, z:0.2}}, up:{{x:0,y:0,z:1}}}}
     }};
-    if (curMode === 'focus') applyFocusRanges(scene, frm.focus_bounds, 80);
     if (curMode === 'rgb') applyFocusRanges(scene, frm.focus_bounds, 45);
+    if (curMode === 'focus') applyFocusRanges(scene, frm.focus_bounds, 80);
 
     const layout = {{
       scene,
@@ -953,8 +965,15 @@ function render() {{
       legend:{{bgcolor:'rgba(20,28,40,0.85)', font:{{color:'#ddd'}}, x:0.01, y:0.99}},
       margin:{{l:0,r:0,b:0,t:36}},
       title:{{text:title, font:{{size:12, color:'#aaa'}}}},
-      uirevision: `win${{curWin}}-frm${{curFrm}}-mode${{curMode}}`
+      uirevision: `frm${{curFrm}}`
     }};
+
+    const plotEl = document.getElementById('plot');
+    const keepCamera = plotInited && lastRenderedFrame === curFrm
+      && plotEl.layout && plotEl.layout.scene && plotEl.layout.scene.camera;
+    if (keepCamera) {{
+      layout.scene.camera = plotEl.layout.scene.camera;
+    }}
 
     if (!plotInited) {{
       Plotly.newPlot('plot', traces, layout, {{responsive:true}});
@@ -962,6 +981,7 @@ function render() {{
     }} else {{
       Plotly.react('plot', traces, layout, {{responsive:true}});
     }}
+    lastRenderedFrame = curFrm;
     document.getElementById('loadMsg').style.display = 'none';
 
   }} catch(err) {{
@@ -1171,8 +1191,13 @@ def main() -> None:
             if gt_cam_pose_list:
                 gt_nn = nn_distance(gt_cam_pose_list[0], pers_pts)
 
-            # fair MAE
-            skt_mae_val = compute_frame_mae(skt_pose, subject_t - offset_s, fair_gt)
+            # Fair-GT semantic angle errors.
+            angle_errors = compute_frame_angle_errors(skt_pose, subject_t - offset_s, fair_gt)
+            skt_mae_val = float(np.mean(list(angle_errors.values()))) if angle_errors else None
+            left_elbow_err = angle_errors.get("LeftElbow")
+            right_elbow_err = angle_errors.get("RightElbow")
+            elbow_vals = [v for v in (left_elbow_err, right_elbow_err) if v is not None]
+            elbow_mean_err = float(np.mean(elbow_vals)) if elbow_vals else None
 
             def display_skel(pose: np.ndarray) -> Dict:
                 disp = to_display(pose)
@@ -1191,6 +1216,9 @@ def main() -> None:
             metrics = {
                 "subject_time_s": round(subject_t, 3),
                 "skt_mae_deg": round(skt_mae_val, 2) if skt_mae_val is not None else None,
+                "elbow_mean_err_deg": round(elbow_mean_err, 2) if elbow_mean_err is not None else None,
+                "left_elbow_err_deg": round(left_elbow_err, 2) if left_elbow_err is not None else None,
+                "right_elbow_err_deg": round(right_elbow_err, 2) if right_elbow_err is not None else None,
                 "skt_nn_cm": round(skt_nn, 2) if skt_nn is not None else None,
                 "afh_nn_cm": round(afh_nn, 2) if afh_nn is not None else None,
                 "gt_nn_cm": round(gt_nn, 2) if gt_nn is not None else None,
@@ -1252,7 +1280,7 @@ def main() -> None:
     print(f"\n[saved] {html_path}")
     print(f"[saved] {json_path}")
     print(
-        f"\nOpen {html_path.name} in a browser, select a window, "
+        f"\nOpen {html_path.name} in a browser, select a frame, "
         "then orbit the 3D cloud to see which skeleton fits best."
     )
 

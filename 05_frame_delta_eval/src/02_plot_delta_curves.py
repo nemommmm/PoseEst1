@@ -1,0 +1,257 @@
+#!/opt/anaconda3/envs/pose/bin/python
+"""Plot elbow motion-delta comparison curves from combined CSV output."""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import json
+from pathlib import Path
+from typing import Dict, Tuple
+
+import matplotlib.pyplot as plt
+import numpy as np
+
+SIDES = ("LeftElbow", "RightElbow")
+SYSTEMS = ("SKT", "AFH", "XsensFair", "XsensNative")
+COLORS = {
+    "SKT": "#ff7a18",
+    "AFH": "#2196F3",
+    "XsensFair": "#43a047",
+    "XsensNative": "#70757f",
+}
+LABELS = {
+    "SKT": "SKT stereo",
+    "AFH": "AFH hybrid",
+    "XsensFair": "Xsens-derived geometric",
+    "XsensNative": "Xsens native",
+}
+LINESTYLES = {
+    "SKT": "-",
+    "AFH": "-",
+    "XsensFair": "-",
+    "XsensNative": "--",
+}
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line arguments."""
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--combined-csv", required=True)
+    parser.add_argument("--summary-json", required=True)
+    parser.add_argument("--out-dir", required=True)
+    return parser.parse_args()
+
+
+def as_float(value: str) -> float:
+    """Convert CSV string to float with blanks as NaN."""
+    if value is None or value == "":
+        return np.nan
+    return float(value)
+
+
+def load_combined_csv(path: Path) -> Dict[str, np.ndarray]:
+    """Read combined CSV into column arrays."""
+    with path.open(newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+    if not rows:
+        raise RuntimeError(f"No rows in {path}")
+    columns: Dict[str, list] = {key: [] for key in rows[0].keys()}
+    for row in rows:
+        for key, value in row.items():
+            columns[key].append(value)
+
+    data: Dict[str, np.ndarray] = {}
+    for key, values in columns.items():
+        if key.endswith("_valid") or key.endswith("_interpolated") or key.endswith("_delta_anomaly_flag"):
+            data[key] = np.array([v == "True" for v in values], dtype=bool)
+        elif key in {"Frame", "StereoFrameId", "LeftVideoFrame", "RightVideoFrame"}:
+            data[key] = np.array([int(v) for v in values], dtype=np.int64)
+        else:
+            data[key] = np.array([as_float(v) for v in values], dtype=np.float64)
+    return data
+
+
+def finite_plot(x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
+    """Mask non-finite plot points."""
+    mask = np.isfinite(x) & np.isfinite(y)
+    return x[mask], y[mask]
+
+
+def title_side(side: str) -> str:
+    """Human-readable side title."""
+    return "Left elbow" if side == "LeftElbow" else "Right elbow"
+
+
+def setup_axes(ax, title: str, ylabel: str) -> None:
+    """Apply shared plot styling."""
+    ax.set_title(title, fontsize=12, weight="bold")
+    ax.set_xlabel("Time (s)")
+    ax.set_ylabel(ylabel)
+    ax.grid(True, alpha=0.25)
+    ax.spines["top"].set_visible(False)
+    ax.spines["right"].set_visible(False)
+
+
+def plot_delta(data: Dict[str, np.ndarray], side: str, out_dir: Path) -> None:
+    """Plot frame-to-frame signed elbow deltas."""
+    time = data["Time_s"]
+    fig, ax = plt.subplots(figsize=(11, 4.8))
+    for system in SYSTEMS:
+        y = data[f"{system}_{side}_delta_deg"]
+        x_f, y_f = finite_plot(time, y)
+        ax.plot(
+            x_f,
+            y_f,
+            color=COLORS[system],
+            linestyle=LINESTYLES[system],
+            linewidth=1.2 if system != "XsensNative" else 1.0,
+            alpha=0.95 if system != "XsensNative" else 0.75,
+            label=LABELS[system],
+        )
+    setup_axes(ax, f"{title_side(side)} frame-to-frame angle delta", "Delta angle (deg/frame)")
+    ax.axhline(0, color="#333333", linewidth=0.8, alpha=0.45)
+    ax.legend(loc="upper right", ncol=2, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_dir / f"plot_delta_{side.lower()}.png", dpi=160)
+    plt.close(fig)
+
+
+def cumulative_abs_path(delta: np.ndarray) -> np.ndarray:
+    """Cumulative angular path, holding value steady over invalid samples."""
+    out = np.zeros_like(delta, dtype=np.float64)
+    total = 0.0
+    for idx, value in enumerate(delta):
+        if np.isfinite(value):
+            total += abs(float(value))
+        out[idx] = total
+    return out
+
+
+def plot_cumulative(data: Dict[str, np.ndarray], side: str, out_dir: Path) -> None:
+    """Plot cumulative angular path."""
+    time = data["Time_s"]
+    fig, ax = plt.subplots(figsize=(11, 4.8))
+    for system in SYSTEMS:
+        path = cumulative_abs_path(data[f"{system}_{side}_delta_deg"])
+        ax.plot(
+            time,
+            path,
+            color=COLORS[system],
+            linestyle=LINESTYLES[system],
+            linewidth=1.5 if system != "XsensNative" else 1.0,
+            alpha=0.95 if system != "XsensNative" else 0.75,
+            label=LABELS[system],
+        )
+    setup_axes(ax, f"{title_side(side)} cumulative angular path", "Cumulative |delta| (deg)")
+    ax.legend(loc="upper left", ncol=2, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_dir / f"plot_cumdelta_{side.lower()}.png", dpi=160)
+    plt.close(fig)
+
+
+def zeroed_angle(angle: np.ndarray) -> np.ndarray:
+    """Subtract first finite angle to remove absolute offset."""
+    out = angle.copy()
+    finite = np.where(np.isfinite(out))[0]
+    if finite.size == 0:
+        return out
+    return out - out[finite[0]]
+
+
+def plot_zeroed(data: Dict[str, np.ndarray], side: str, out_dir: Path) -> None:
+    """Plot angles after removing each system's initial offset."""
+    time = data["Time_s"]
+    fig, ax = plt.subplots(figsize=(11, 4.8))
+    for system in SYSTEMS:
+        y = zeroed_angle(data[f"{system}_{side}_deg"])
+        x_f, y_f = finite_plot(time, y)
+        ax.plot(
+            x_f,
+            y_f,
+            color=COLORS[system],
+            linestyle=LINESTYLES[system],
+            linewidth=1.25 if system != "XsensNative" else 1.0,
+            alpha=0.95 if system != "XsensNative" else 0.75,
+            label=LABELS[system],
+        )
+    setup_axes(ax, f"{title_side(side)} zeroed elbow angle", "Angle change from first finite frame (deg)")
+    ax.axhline(0, color="#333333", linewidth=0.8, alpha=0.45)
+    ax.legend(loc="upper right", ncol=2, fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_dir / f"plot_zeroed_{side.lower()}.png", dpi=160)
+    plt.close(fig)
+
+
+def plot_scatter(data: Dict[str, np.ndarray], side: str, system: str, out_dir: Path) -> None:
+    """Plot target delta vs XsensFair reference delta."""
+    ref = data[f"XsensFair_{side}_delta_deg"]
+    target = data[f"{system}_{side}_delta_deg"]
+    x, y = finite_plot(ref, target)
+    fig, ax = plt.subplots(figsize=(5.8, 5.6))
+    ax.scatter(x, y, s=10, alpha=0.35, color=COLORS[system], edgecolors="none")
+    if len(x) and len(y):
+        lim = float(np.nanmax(np.abs(np.concatenate([x, y]))))
+        lim = max(lim, 5.0)
+        ax.plot([-lim, lim], [-lim, lim], color="#333333", linewidth=1.0, alpha=0.55, label="ideal y=x")
+        ax.set_xlim(-lim, lim)
+        ax.set_ylim(-lim, lim)
+    ax.set_aspect("equal", adjustable="box")
+    ax.set_title(f"{title_side(side)} delta scatter: {LABELS[system]} vs Xsens-derived", fontsize=11, weight="bold")
+    ax.set_xlabel("Xsens-derived geometric delta (deg/frame)")
+    ax.set_ylabel(f"{LABELS[system]} delta (deg/frame)")
+    ax.grid(True, alpha=0.25)
+    ax.legend(loc="upper left", fontsize=8)
+    fig.tight_layout()
+    fig.savefig(out_dir / f"plot_scatter_{system.lower()}_vs_xsensfair_{side.lower()}.png", dpi=160)
+    plt.close(fig)
+
+
+def write_plot_index(out_dir: Path, summary: Dict) -> None:
+    """Write a compact Markdown index of generated figures and headline metrics."""
+    lines = ["# Frame-Delta Elbow Motion Evaluation", ""]
+    lines.append("## Headline Metrics")
+    for side in SIDES:
+        lines.append(f"### {title_side(side)}")
+        for pair_name, metrics in summary["motion_agreement"][side].items():
+            pearson = metrics.get("pearson_delta")
+            slope = metrics.get("slope_target_vs_reference")
+            ratio = metrics.get("path_ratio_target_reference")
+            lines.append(
+                f"- {pair_name}: pearson={pearson}, slope={slope}, path_ratio={ratio}"
+            )
+        lines.append("")
+    lines.append("## Figures")
+    for side in SIDES:
+        side_l = side.lower()
+        lines.extend([
+            f"- `plot_delta_{side_l}.png`",
+            f"- `plot_cumdelta_{side_l}.png`",
+            f"- `plot_zeroed_{side_l}.png`",
+            f"- `plot_scatter_skt_vs_xsensfair_{side_l}.png`",
+            f"- `plot_scatter_afh_vs_xsensfair_{side_l}.png`",
+        ])
+    (out_dir / "plot_index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def main() -> None:
+    """CLI entry point."""
+    args = parse_args()
+    out_dir = Path(args.out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    data = load_combined_csv(Path(args.combined_csv))
+    summary = json.loads(Path(args.summary_json).read_text(encoding="utf-8"))
+    plt.style.use("seaborn-v0_8-whitegrid")
+    for side in SIDES:
+        plot_delta(data, side, out_dir)
+        plot_cumulative(data, side, out_dir)
+        plot_zeroed(data, side, out_dir)
+        plot_scatter(data, side, "SKT", out_dir)
+        plot_scatter(data, side, "AFH", out_dir)
+    write_plot_index(out_dir, summary)
+    print("[saved plots]", out_dir)
+
+
+if __name__ == "__main__":
+    main()

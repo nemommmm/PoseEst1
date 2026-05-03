@@ -39,6 +39,10 @@ from utils_mvnx import MvnxParser  # noqa: E402
 SIDES = ("LeftElbow", "RightElbow")
 SYSTEMS = ("SKT", "AFH", "XsensFair", "XsensNative")
 ANGLE_COLUMNS = ("LeftElbow_deg", "RightElbow_deg")
+ELBOW_JOINT_INDICES = {
+    "LeftElbow": (5, 7, 9),    # shoulder, elbow, wrist in COCO-17
+    "RightElbow": (6, 8, 10),
+}
 
 DEFAULT_SKT_NPZ = (
     PROJECT_ROOT
@@ -84,12 +88,28 @@ def parse_args() -> argparse.Namespace:
                         help="Override Xsens temporal offset in seconds.")
     parser.add_argument("--offset-source", choices=("position", "angle", "best"), default="position",
                         help="Which alignment_summary offset to use when --xsens-offset is not set.")
-    parser.add_argument("--smooth-radius", type=int, default=2,
+    parser.add_argument("--smooth-radius", type=int, default=4,
                         help="Median smoothing radius on the shared video timeline; 0 disables smoothing.")
+    parser.add_argument("--wrist-smooth-radius", type=int, default=3,
+                        help="Median smoothing radius for wrist 3D keypoints before elbow-angle calculation.")
     parser.add_argument("--max-gap-frames", type=int, default=5,
                         help="Maximum NaN run length to fill by linear interpolation before smoothing.")
-    parser.add_argument("--anomaly-delta-deg", type=float, default=60.0,
+    parser.add_argument("--anomaly-delta-deg", type=float, default=30.0,
                         help="Flag one-frame delta magnitudes above this threshold.")
+    parser.add_argument("--active-delta-threshold", type=float, default=1.0,
+                        help="Reference |delta| threshold for active-motion agreement metrics.")
+    parser.add_argument("--noise-floor-threshold", type=float, default=0.5,
+                        help="Reference |delta| threshold for quiet-frame noise-floor metrics.")
+    parser.add_argument("--lag-window-frames", type=int, default=10,
+                        help="Search +/- this many frames for residual lag diagnostics.")
+    parser.add_argument("--enable-quality-filter", action="store_true",
+                        help="Mask SKT elbow-chain joints with poor triangulation quality before angle calculation.")
+    parser.add_argument("--quality-min-triang-conf", type=float, default=0.20,
+                        help="Minimum left/right triangulation confidence for SKT quality filtering.")
+    parser.add_argument("--quality-max-epipolar-px", type=float, default=10.0,
+                        help="Maximum epipolar error for SKT quality filtering.")
+    parser.add_argument("--quality-max-reprojection-px", type=float, default=10.0,
+                        help="Maximum reprojection error for SKT quality filtering.")
     parser.add_argument("--start-time", type=float, default=None,
                         help="Optional start time on the corrected video timeline.")
     parser.add_argument("--end-time", type=float, default=None,
@@ -225,9 +245,53 @@ def apply_time_window(
     return filtered_time, filtered_synced, filtered_arrays, indices
 
 
-def compute_pose_elbow_angles(keypoints: np.ndarray) -> Dict[str, np.ndarray]:
+def apply_skt_quality_filter(
+    keypoints: np.ndarray,
+    payload: np.lib.npyio.NpzFile,
+    selected_indices: np.ndarray,
+    min_triang_conf: float,
+    max_epipolar_px: float,
+    max_reprojection_px: float,
+) -> Tuple[np.ndarray, Dict[str, int]]:
+    """Mask elbow-chain joints whose stereo quality is too poor for delta analysis."""
+    required = {"triang_conf_left", "triang_conf_right", "epipolar_error", "reprojection_error"}
+    if not required.issubset(set(payload.files)):
+        missing = sorted(required.difference(payload.files))
+        raise RuntimeError(f"Cannot enable quality filter; missing SKT arrays: {missing}")
+
+    filtered = np.array(keypoints, dtype=np.float64, copy=True)
+    idx = np.asarray(selected_indices, dtype=np.int64)
+    triang_left = np.asarray(payload["triang_conf_left"], dtype=np.float64)[idx]
+    triang_right = np.asarray(payload["triang_conf_right"], dtype=np.float64)[idx]
+    epipolar = np.asarray(payload["epipolar_error"], dtype=np.float64)[idx]
+    reproj = np.asarray(payload["reprojection_error"], dtype=np.float64)[idx]
+
+    stats: Dict[str, int] = {}
+    for side, joint_ids in ELBOW_JOINT_INDICES.items():
+        side_mask = np.zeros(len(filtered), dtype=bool)
+        for joint_idx in joint_ids:
+            conf = np.minimum(triang_left[:, joint_idx], triang_right[:, joint_idx])
+            bad = (
+                ~np.isfinite(conf)
+                | (conf < min_triang_conf)
+                | ~np.isfinite(epipolar[:, joint_idx])
+                | (epipolar[:, joint_idx] > max_epipolar_px)
+                | ~np.isfinite(reproj[:, joint_idx])
+                | (reproj[:, joint_idx] > max_reprojection_px)
+            )
+            filtered[bad, joint_idx, :] = np.nan
+            side_mask |= bad
+            stats[f"joint_{joint_idx}_masked_frames"] = int(np.sum(bad))
+        stats[f"{side}_chain_masked_frames"] = int(np.sum(side_mask))
+    return filtered, stats
+
+
+def compute_pose_elbow_angles(keypoints: np.ndarray, wrist_smooth_radius: int) -> Dict[str, np.ndarray]:
     """Compute geometric elbow flexion angles for one 3D keypoint sequence."""
-    names, values = compute_semantic_angle_sequence(keypoints, wrist_smooth_radius=0)
+    names, values = compute_semantic_angle_sequence(
+        keypoints,
+        wrist_smooth_radius=max(0, int(wrist_smooth_radius)),
+    )
     name_to_idx = {name: i for i, name in enumerate(names)}
     return {side: values[:, name_to_idx[side]].astype(np.float64) for side in SIDES}
 
@@ -389,6 +453,72 @@ def regression_slope(reference: np.ndarray, target: np.ndarray) -> Optional[floa
     return float(np.cov(x, y, bias=True)[0, 1] / np.var(x))
 
 
+def lagged_arrays(
+    target: np.ndarray,
+    reference: np.ndarray,
+    target_valid: np.ndarray,
+    reference_valid: np.ndarray,
+    lag: int,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Return paired target/reference deltas for one target lag in frames."""
+    if lag > 0:
+        target_slice = slice(lag, None)
+        ref_slice = slice(None, -lag)
+    elif lag < 0:
+        target_slice = slice(None, lag)
+        ref_slice = slice(-lag, None)
+    else:
+        target_slice = slice(None)
+        ref_slice = slice(None)
+
+    td = target[target_slice]
+    rd = reference[ref_slice]
+    mask = (
+        target_valid[target_slice]
+        & reference_valid[ref_slice]
+        & np.isfinite(td)
+        & np.isfinite(rd)
+    )
+    return td[mask], rd[mask]
+
+
+def best_lag_summary(
+    target: SystemSeries,
+    reference: SystemSeries,
+    side: str,
+    lag_window_frames: int,
+) -> Dict[str, Optional[float] | int]:
+    """Find the target lag that maximizes delta Pearson within a small window."""
+    best: Dict[str, Optional[float] | int] = {
+        "lag_window_frames": int(max(0, lag_window_frames)),
+        "best_lag_frames": None,
+        "best_pearson_delta": None,
+        "best_slope_target_vs_reference": None,
+        "best_pair_count": 0,
+    }
+    for lag in range(-max(0, lag_window_frames), max(0, lag_window_frames) + 1):
+        td, rd = lagged_arrays(
+            target.deltas[side],
+            reference.deltas[side],
+            target.delta_valid[side],
+            reference.delta_valid[side],
+            lag,
+        )
+        score = pearson(rd, td)
+        if score is None:
+            continue
+        current_best = best["best_pearson_delta"]
+        if current_best is None or score > float(current_best):
+            best = {
+                "lag_window_frames": int(max(0, lag_window_frames)),
+                "best_lag_frames": int(lag),
+                "best_pearson_delta": score,
+                "best_slope_target_vs_reference": regression_slope(rd, td),
+                "best_pair_count": int(len(td)),
+            }
+    return best
+
+
 def mean_abs(values: np.ndarray) -> Optional[float]:
     """Finite mean absolute value."""
     finite = values[np.isfinite(values)]
@@ -423,7 +553,14 @@ def side_system_summary(series: SystemSeries, side: str) -> Dict[str, Optional[f
     }
 
 
-def pair_summary(target: SystemSeries, reference: SystemSeries, side: str) -> Dict[str, Optional[float] | int]:
+def pair_summary(
+    target: SystemSeries,
+    reference: SystemSeries,
+    side: str,
+    active_delta_threshold: float,
+    noise_floor_threshold: float,
+    lag_window_frames: int,
+) -> Dict[str, Optional[float] | int | Dict[str, Optional[float] | int]]:
     """Summarize motion agreement between one target and one reference."""
     target_delta = target.deltas[side].copy()
     ref_delta = reference.deltas[side].copy()
@@ -440,6 +577,12 @@ def pair_summary(target: SystemSeries, reference: SystemSeries, side: str) -> Di
     ref_path = float(np.sum(np.abs(rd))) if len(rd) else None
     target_rom = side_system_summary(target, side)["rom_deg"]
     ref_rom = side_system_summary(reference, side)["rom_deg"]
+    active_mask = mask & (np.abs(ref_delta) > active_delta_threshold)
+    quiet_mask = mask & (np.abs(ref_delta) < noise_floor_threshold)
+    active_td = target_delta[active_mask]
+    active_rd = ref_delta[active_mask]
+    active_diff = active_td - active_rd
+    quiet_td = target_delta[quiet_mask]
     if target_path is None or ref_path is None or ref_path <= 1e-9:
         path_ratio = None
     else:
@@ -454,6 +597,17 @@ def pair_summary(target: SystemSeries, reference: SystemSeries, side: str) -> Di
         "slope_target_vs_reference": regression_slope(rd, td),
         "delta_mae_deg": mean_abs(diff),
         "delta_rmse_deg": rmse(diff),
+        "active_delta_threshold_deg": float(active_delta_threshold),
+        "active_pair_count": int(active_mask.sum()),
+        "active_pearson_delta": pearson(active_rd, active_td),
+        "active_slope_target_vs_reference": regression_slope(active_rd, active_td),
+        "active_delta_mae_deg": mean_abs(active_diff),
+        "active_delta_rmse_deg": rmse(active_diff),
+        "noise_floor_threshold_deg": float(noise_floor_threshold),
+        "quiet_pair_count": int(quiet_mask.sum()),
+        "target_quiet_delta_std_deg": float(np.nanstd(quiet_td)) if len(quiet_td) else None,
+        "target_quiet_delta_mae_deg": mean_abs(quiet_td),
+        "lag_sweep": best_lag_summary(target, reference, side, lag_window_frames),
         "target_path_deg": target_path,
         "reference_path_deg": ref_path,
         "path_ratio_target_reference": path_ratio,
@@ -572,8 +726,16 @@ def build_summary(
             "xsens_offset_s": float(xsens_offset_s),
             "offset_source": args.offset_source if args.xsens_offset is None else "override",
             "smooth_radius_frames": int(args.smooth_radius),
+            "wrist_smooth_radius_frames": int(args.wrist_smooth_radius),
             "max_gap_frames": int(args.max_gap_frames),
             "anomaly_delta_deg": float(args.anomaly_delta_deg),
+            "active_delta_threshold_deg": float(args.active_delta_threshold),
+            "noise_floor_threshold_deg": float(args.noise_floor_threshold),
+            "lag_window_frames": int(args.lag_window_frames),
+            "quality_filter_enabled": bool(args.enable_quality_filter),
+            "quality_min_triang_conf": float(args.quality_min_triang_conf),
+            "quality_max_epipolar_px": float(args.quality_max_epipolar_px),
+            "quality_max_reprojection_px": float(args.quality_max_reprojection_px),
             "start_time_s": args.start_time,
             "end_time_s": args.end_time,
         },
@@ -592,16 +754,30 @@ def build_summary(
         "systems": {},
         "motion_agreement": {},
     }
+    if hasattr(args, "quality_filter_stats"):
+        summary["quality_filter_stats"] = args.quality_filter_stats
     for side in SIDES:
         summary["systems"][side] = {
             system: side_system_summary(series, side)
             for system, series in series_by_name.items()
         }
         summary["motion_agreement"][side] = {
-            "SKT_vs_XsensFair": pair_summary(series_by_name["SKT"], series_by_name["XsensFair"], side),
-            "AFH_vs_XsensFair": pair_summary(series_by_name["AFH"], series_by_name["XsensFair"], side),
-            "SKT_vs_AFH": pair_summary(series_by_name["SKT"], series_by_name["AFH"], side),
-            "XsensNative_vs_XsensFair": pair_summary(series_by_name["XsensNative"], series_by_name["XsensFair"], side),
+            "SKT_vs_XsensFair": pair_summary(
+                series_by_name["SKT"], series_by_name["XsensFair"], side,
+                args.active_delta_threshold, args.noise_floor_threshold, args.lag_window_frames,
+            ),
+            "AFH_vs_XsensFair": pair_summary(
+                series_by_name["AFH"], series_by_name["XsensFair"], side,
+                args.active_delta_threshold, args.noise_floor_threshold, args.lag_window_frames,
+            ),
+            "SKT_vs_AFH": pair_summary(
+                series_by_name["SKT"], series_by_name["AFH"], side,
+                args.active_delta_threshold, args.noise_floor_threshold, args.lag_window_frames,
+            ),
+            "XsensNative_vs_XsensFair": pair_summary(
+                series_by_name["XsensNative"], series_by_name["XsensFair"], side,
+                args.active_delta_threshold, args.noise_floor_threshold, args.lag_window_frames,
+            ),
         }
     return round_jsonable(summary)
 
@@ -649,6 +825,19 @@ def main() -> None:
         args.end_time,
     )
     skt_kp, afh_kp = filtered_arrays
+    if args.enable_quality_filter:
+        skt_kp, quality_stats = apply_skt_quality_filter(
+            skt_kp,
+            skt_payload,
+            selected_indices=selected_indices,
+            min_triang_conf=args.quality_min_triang_conf,
+            max_epipolar_px=args.quality_max_epipolar_px,
+            max_reprojection_px=args.quality_max_reprojection_px,
+        )
+        args.quality_filter_stats = quality_stats
+        print(f"[quality] SKT elbow-chain masked frames: {quality_stats}")
+    else:
+        args.quality_filter_stats = {}
     xsens_offset_s = load_offset(Path(args.alignment_summary), args.offset_source, args.xsens_offset)
 
     duration = float(corrected_time[-1] - corrected_time[0]) if len(corrected_time) else 0.0
@@ -657,8 +846,8 @@ def main() -> None:
     print(f"[xsens] offset={xsens_offset_s:.3f}s ({args.offset_source if args.xsens_offset is None else 'override'})")
 
     raw_angles = {
-        "SKT": compute_pose_elbow_angles(skt_kp),
-        "AFH": compute_pose_elbow_angles(afh_kp),
+        "SKT": compute_pose_elbow_angles(skt_kp, wrist_smooth_radius=args.wrist_smooth_radius),
+        "AFH": compute_pose_elbow_angles(afh_kp, wrist_smooth_radius=args.wrist_smooth_radius),
         "XsensFair": build_xsens_fair_angles(Path(args.xsens_fair), corrected_time, xsens_offset_s),
         "XsensNative": build_xsens_native_angles(Path(args.xsens_mvnx), corrected_time, xsens_offset_s),
     }

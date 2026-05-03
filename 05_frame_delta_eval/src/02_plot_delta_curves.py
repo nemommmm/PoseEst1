@@ -184,11 +184,21 @@ def plot_zeroed(data: Dict[str, np.ndarray], side: str, out_dir: Path) -> None:
     plt.close(fig)
 
 
-def plot_scatter(data: Dict[str, np.ndarray], side: str, system: str, out_dir: Path) -> None:
+def plot_scatter(
+    data: Dict[str, np.ndarray],
+    side: str,
+    system: str,
+    out_dir: Path,
+    active_threshold: float | None = None,
+) -> None:
     """Plot target delta vs XsensFair reference delta."""
     ref = data[f"XsensFair_{side}_delta_deg"]
     target = data[f"{system}_{side}_delta_deg"]
-    x, y = finite_plot(ref, target)
+    if active_threshold is not None:
+        active = np.abs(ref) > float(active_threshold)
+        x, y = finite_plot(ref[active], target[active])
+    else:
+        x, y = finite_plot(ref, target)
     fig, ax = plt.subplots(figsize=(5.8, 5.6))
     ax.scatter(x, y, s=10, alpha=0.35, color=COLORS[system], edgecolors="none")
     if len(x) and len(y):
@@ -198,13 +208,19 @@ def plot_scatter(data: Dict[str, np.ndarray], side: str, system: str, out_dir: P
         ax.set_xlim(-lim, lim)
         ax.set_ylim(-lim, lim)
     ax.set_aspect("equal", adjustable="box")
-    ax.set_title(f"{title_side(side)} delta scatter: {LABELS[system]} vs Xsens-derived", fontsize=11, weight="bold")
+    suffix = "" if active_threshold is None else f" active |ref|>{active_threshold:g}"
+    ax.set_title(
+        f"{title_side(side)} delta scatter{suffix}: {LABELS[system]} vs Xsens-derived",
+        fontsize=11,
+        weight="bold",
+    )
     ax.set_xlabel("Xsens-derived geometric delta (deg/frame)")
     ax.set_ylabel(f"{LABELS[system]} delta (deg/frame)")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="upper left", fontsize=8)
     fig.tight_layout()
-    fig.savefig(out_dir / f"plot_scatter_{system.lower()}_vs_xsensfair_{side.lower()}.png", dpi=160)
+    name_prefix = "plot_scatter" if active_threshold is None else "plot_scatter_active"
+    fig.savefig(out_dir / f"{name_prefix}_{system.lower()}_vs_xsensfair_{side.lower()}.png", dpi=160)
     plt.close(fig)
 
 
@@ -216,10 +232,14 @@ def write_plot_index(out_dir: Path, summary: Dict) -> None:
         lines.append(f"### {title_side(side)}")
         for pair_name, metrics in summary["motion_agreement"][side].items():
             pearson = metrics.get("pearson_delta")
+            active = metrics.get("active_pearson_delta")
             slope = metrics.get("slope_target_vs_reference")
             ratio = metrics.get("path_ratio_target_reference")
+            lag = metrics.get("lag_sweep", {}).get("best_lag_frames")
+            lag_r = metrics.get("lag_sweep", {}).get("best_pearson_delta")
             lines.append(
-                f"- {pair_name}: pearson={pearson}, slope={slope}, path_ratio={ratio}"
+                f"- {pair_name}: pearson={pearson}, active_pearson={active}, "
+                f"slope={slope}, path_ratio={ratio}, best_lag={lag}, lag_pearson={lag_r}"
             )
         lines.append("")
     lines.append("## Figures")
@@ -231,6 +251,8 @@ def write_plot_index(out_dir: Path, summary: Dict) -> None:
             f"- `plot_zeroed_{side_l}.png`",
             f"- `plot_scatter_skt_vs_xsensfair_{side_l}.png`",
             f"- `plot_scatter_afh_vs_xsensfair_{side_l}.png`",
+            f"- `plot_scatter_active_skt_vs_xsensfair_{side_l}.png`",
+            f"- `plot_scatter_active_afh_vs_xsensfair_{side_l}.png`",
         ])
     (out_dir / "plot_index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -243,12 +265,15 @@ def main() -> None:
     data = load_combined_csv(Path(args.combined_csv))
     summary = json.loads(Path(args.summary_json).read_text(encoding="utf-8"))
     plt.style.use("seaborn-v0_8-whitegrid")
+    active_threshold = float(summary.get("config", {}).get("active_delta_threshold_deg", 1.0))
     for side in SIDES:
         plot_delta(data, side, out_dir)
         plot_cumulative(data, side, out_dir)
         plot_zeroed(data, side, out_dir)
         plot_scatter(data, side, "SKT", out_dir)
         plot_scatter(data, side, "AFH", out_dir)
+        plot_scatter(data, side, "SKT", out_dir, active_threshold=active_threshold)
+        plot_scatter(data, side, "AFH", out_dir, active_threshold=active_threshold)
     write_plot_index(out_dir, summary)
     print("[saved plots]", out_dir)
 

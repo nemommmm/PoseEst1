@@ -39,6 +39,13 @@ from utils_mvnx import MvnxParser  # noqa: E402
 SIDES = ("LeftElbow", "RightElbow")
 SYSTEMS = ("SKT", "AFH", "XsensFair", "XsensNative")
 ANGLE_COLUMNS = ("LeftElbow_deg", "RightElbow_deg")
+DEFAULT_K_FRAME_LIST = (1, 6, 12, 25)
+K_THRESHOLD_FACTORS = {
+    1: {"anomaly": 1.0, "active": 1.0, "noise": 1.0},
+    6: {"anomaly": 2.0, "active": 5.0, "noise": 4.0},
+    12: {"anomaly": 3.0, "active": 10.0, "noise": 10.0},
+    25: {"anomaly": 4.0, "active": 20.0, "noise": 20.0},
+}
 ELBOW_JOINT_INDICES = {
     "LeftElbow": (5, 7, 9),    # shoulder, elbow, wrist in COCO-17
     "RightElbow": (6, 8, 10),
@@ -67,11 +74,11 @@ class SystemSeries:
 
     name: str
     angles: Dict[str, np.ndarray]
-    deltas: Dict[str, np.ndarray]
+    deltas: Dict[int, Dict[str, np.ndarray]]
     valid_angles: Dict[str, np.ndarray]
     interpolated: Dict[str, np.ndarray]
-    delta_valid: Dict[str, np.ndarray]
-    delta_anomaly: Dict[str, np.ndarray]
+    delta_valid: Dict[int, Dict[str, np.ndarray]]
+    delta_anomaly: Dict[int, Dict[str, np.ndarray]]
 
 
 def parse_args() -> argparse.Namespace:
@@ -102,6 +109,8 @@ def parse_args() -> argparse.Namespace:
                         help="Reference |delta| threshold for quiet-frame noise-floor metrics.")
     parser.add_argument("--lag-window-frames", type=int, default=10,
                         help="Search +/- this many frames for residual lag diagnostics.")
+    parser.add_argument("--k-frame-list", default=",".join(str(k) for k in DEFAULT_K_FRAME_LIST),
+                        help="Comma-separated K-frame delta spacings, e.g. 1,6,12,25.")
     parser.add_argument("--enable-quality-filter", action="store_true",
                         help="Mask SKT elbow-chain joints with poor triangulation quality before angle calculation.")
     parser.add_argument("--quality-min-triang-conf", type=float, default=0.20,
@@ -118,6 +127,53 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--skip-plots", action="store_true",
                         help="Only write CSV/JSON; do not invoke 02_plot_delta_curves.py.")
     return parser.parse_args()
+
+
+def parse_k_frame_list(value: str) -> List[int]:
+    """Parse and validate the comma-separated K-frame list."""
+    out: List[int] = []
+    for raw in str(value).split(","):
+        raw = raw.strip()
+        if not raw:
+            continue
+        try:
+            k = int(raw)
+        except ValueError as exc:
+            raise ValueError(f"Invalid K-frame value {raw!r}") from exc
+        if k <= 0:
+            raise ValueError(f"K-frame values must be positive; got {k}")
+        out.append(k)
+    if not out:
+        raise ValueError("At least one K-frame value is required.")
+    return sorted(set(out))
+
+
+def threshold_factor(k: int, key: str) -> float:
+    """Return threshold scaling for known K values, with interpolation fallback."""
+    if k in K_THRESHOLD_FACTORS:
+        return float(K_THRESHOLD_FACTORS[k][key])
+    known = sorted(K_THRESHOLD_FACTORS)
+    if k <= known[0]:
+        return float(K_THRESHOLD_FACTORS[known[0]][key])
+    if k >= known[-1]:
+        return float(K_THRESHOLD_FACTORS[known[-1]][key])
+    lo = max(v for v in known if v < k)
+    hi = min(v for v in known if v > k)
+    frac = (k - lo) / (hi - lo)
+    return float(K_THRESHOLD_FACTORS[lo][key] + frac * (K_THRESHOLD_FACTORS[hi][key] - K_THRESHOLD_FACTORS[lo][key]))
+
+
+def build_threshold_maps(args: argparse.Namespace, k_list: List[int]) -> Tuple[Dict[int, float], Dict[int, float], Dict[int, float]]:
+    """Build anomaly, active-motion, and quiet-frame thresholds for every K."""
+    anomaly = {k: float(args.anomaly_delta_deg) * threshold_factor(k, "anomaly") for k in k_list}
+    active = {k: float(args.active_delta_threshold) * threshold_factor(k, "active") for k in k_list}
+    noise = {k: float(args.noise_floor_threshold) * threshold_factor(k, "noise") for k in k_list}
+    return anomaly, active, noise
+
+
+def k_key(k: int) -> str:
+    """JSON key for one K-frame delta spacing."""
+    return f"k{int(k)}"
 
 
 def parse_meta_timestamp(parts: List[str]) -> float:
@@ -382,9 +438,10 @@ def build_system_series(
     time_s: np.ndarray,
     smooth_radius: int,
     max_gap_frames: int,
-    anomaly_delta_deg: float,
+    k_list: List[int],
+    anomaly_thresholds: Dict[int, float],
 ) -> SystemSeries:
-    """Interpolate short gaps, smooth, and difference one system's elbow angles."""
+    """Interpolate short gaps, smooth, and compute K-frame elbow angle differences."""
     filled_angles: Dict[str, np.ndarray] = {}
     interpolated: Dict[str, np.ndarray] = {}
     original_valid: Dict[str, np.ndarray] = {}
@@ -400,25 +457,26 @@ def build_system_series(
         original_valid[side] = np.isfinite(clean)
 
     smoothed_angles = smooth_angles_on_shared_timeline(filled_angles, smooth_radius)
-    deltas: Dict[str, np.ndarray] = {}
-    delta_valid: Dict[str, np.ndarray] = {}
-    delta_anomaly: Dict[str, np.ndarray] = {}
+    deltas: Dict[int, Dict[str, np.ndarray]] = {k: {} for k in k_list}
+    delta_valid: Dict[int, Dict[str, np.ndarray]] = {k: {} for k in k_list}
+    delta_anomaly: Dict[int, Dict[str, np.ndarray]] = {k: {} for k in k_list}
     valid_angles: Dict[str, np.ndarray] = {}
     for side in SIDES:
         angle = smoothed_angles[side].copy()
         angle[~np.isfinite(filled_angles[side])] = np.nan
         valid = np.isfinite(angle)
-        delta = np.full_like(angle, np.nan, dtype=np.float64)
-        valid_delta = valid.copy()
-        valid_delta[0] = False
-        valid_delta[1:] = valid[1:] & valid[:-1]
-        delta[1:] = angle[1:] - angle[:-1]
-        anomaly = np.zeros(len(angle), dtype=bool)
-        anomaly[valid_delta] = np.abs(delta[valid_delta]) > anomaly_delta_deg
-        deltas[side] = delta
-        delta_valid[side] = valid_delta
-        delta_anomaly[side] = anomaly
         valid_angles[side] = valid
+        for k in k_list:
+            delta = np.full_like(angle, np.nan, dtype=np.float64)
+            valid_delta = np.zeros(len(angle), dtype=bool)
+            if len(angle) > k:
+                valid_delta[k:] = valid[k:] & valid[:-k]
+                delta[k:] = angle[k:] - angle[:-k]
+            anomaly = np.zeros(len(angle), dtype=bool)
+            anomaly[valid_delta] = np.abs(delta[valid_delta]) > anomaly_thresholds[k]
+            deltas[k][side] = delta
+            delta_valid[k][side] = valid_delta
+            delta_anomaly[k][side] = anomaly
 
     return SystemSeries(
         name=name,
@@ -486,6 +544,7 @@ def best_lag_summary(
     target: SystemSeries,
     reference: SystemSeries,
     side: str,
+    k: int,
     lag_window_frames: int,
 ) -> Dict[str, Optional[float] | int]:
     """Find the target lag that maximizes delta Pearson within a small window."""
@@ -498,10 +557,10 @@ def best_lag_summary(
     }
     for lag in range(-max(0, lag_window_frames), max(0, lag_window_frames) + 1):
         td, rd = lagged_arrays(
-            target.deltas[side],
-            reference.deltas[side],
-            target.delta_valid[side],
-            reference.delta_valid[side],
+            target.deltas[k][side],
+            reference.deltas[k][side],
+            target.delta_valid[k][side],
+            reference.delta_valid[k][side],
             lag,
         )
         score = pearson(rd, td)
@@ -535,18 +594,18 @@ def rmse(values: np.ndarray) -> Optional[float]:
     return float(np.sqrt(np.mean(finite**2)))
 
 
-def side_system_summary(series: SystemSeries, side: str) -> Dict[str, Optional[float] | int]:
+def side_system_summary(series: SystemSeries, side: str, k: int) -> Dict[str, Optional[float] | int]:
     """Summarize one system for one elbow."""
     angle = series.angles[side]
-    delta = series.deltas[side]
-    valid_delta = series.delta_valid[side]
+    delta = series.deltas[k][side]
+    valid_delta = series.delta_valid[k][side]
     finite_angle = angle[np.isfinite(angle)]
     finite_delta = delta[valid_delta & np.isfinite(delta)]
     return {
         "valid_angle_ratio": float(np.isfinite(angle).mean()) if len(angle) else None,
         "valid_delta_ratio": float((valid_delta & np.isfinite(delta)).mean()) if len(delta) else None,
         "interpolated_frame_count": int(series.interpolated[side].sum()),
-        "delta_anomaly_count": int(series.delta_anomaly[side].sum()),
+        "delta_anomaly_count": int(series.delta_anomaly[k][side].sum()),
         "rom_deg": float(np.nanmax(finite_angle) - np.nanmin(finite_angle)) if len(finite_angle) else None,
         "total_path_deg": float(np.sum(np.abs(finite_delta))) if len(finite_delta) else None,
         "signed_net_change_deg": float(np.sum(finite_delta)) if len(finite_delta) else None,
@@ -557,16 +616,17 @@ def pair_summary(
     target: SystemSeries,
     reference: SystemSeries,
     side: str,
+    k: int,
     active_delta_threshold: float,
     noise_floor_threshold: float,
     lag_window_frames: int,
 ) -> Dict[str, Optional[float] | int | Dict[str, Optional[float] | int]]:
     """Summarize motion agreement between one target and one reference."""
-    target_delta = target.deltas[side].copy()
-    ref_delta = reference.deltas[side].copy()
+    target_delta = target.deltas[k][side].copy()
+    ref_delta = reference.deltas[k][side].copy()
     mask = (
-        target.delta_valid[side]
-        & reference.delta_valid[side]
+        target.delta_valid[k][side]
+        & reference.delta_valid[k][side]
         & np.isfinite(target_delta)
         & np.isfinite(ref_delta)
     )
@@ -575,8 +635,8 @@ def pair_summary(
     diff = td - rd
     target_path = float(np.sum(np.abs(td))) if len(td) else None
     ref_path = float(np.sum(np.abs(rd))) if len(rd) else None
-    target_rom = side_system_summary(target, side)["rom_deg"]
-    ref_rom = side_system_summary(reference, side)["rom_deg"]
+    target_rom = side_system_summary(target, side, k)["rom_deg"]
+    ref_rom = side_system_summary(reference, side, k)["rom_deg"]
     active_mask = mask & (np.abs(ref_delta) > active_delta_threshold)
     quiet_mask = mask & (np.abs(ref_delta) < noise_floor_threshold)
     active_td = target_delta[active_mask]
@@ -607,7 +667,7 @@ def pair_summary(
         "quiet_pair_count": int(quiet_mask.sum()),
         "target_quiet_delta_std_deg": float(np.nanstd(quiet_td)) if len(quiet_td) else None,
         "target_quiet_delta_mae_deg": mean_abs(quiet_td),
-        "lag_sweep": best_lag_summary(target, reference, side, lag_window_frames),
+        "lag_sweep": best_lag_summary(target, reference, side, k, lag_window_frames),
         "target_path_deg": target_path,
         "reference_path_deg": ref_path,
         "path_ratio_target_reference": path_ratio,
@@ -642,29 +702,36 @@ def write_single_system_csv(out_path: Path, time_s: np.ndarray, series: SystemSe
     fieldnames = [
         "Frame", "Time_s",
         "LeftElbow_deg", "RightElbow_deg",
-        "LeftElbow_delta_deg", "RightElbow_delta_deg",
         "LeftElbow_valid", "RightElbow_valid",
         "LeftElbow_interpolated", "RightElbow_interpolated",
-        "LeftElbow_delta_anomaly_flag", "RightElbow_delta_anomaly_flag",
     ]
+    for k in sorted(series.deltas):
+        for side in SIDES:
+            fieldnames.extend([
+                f"{side}_delta_k{k}_deg",
+                f"{side}_delta_valid_k{k}",
+                f"{side}_delta_anomaly_flag_k{k}",
+            ])
     with out_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
         for idx, t in enumerate(time_s):
-            writer.writerow({
+            row = {
                 "Frame": idx,
                 "Time_s": maybe_float(t),
                 "LeftElbow_deg": maybe_float(series.angles["LeftElbow"][idx]),
                 "RightElbow_deg": maybe_float(series.angles["RightElbow"][idx]),
-                "LeftElbow_delta_deg": maybe_float(series.deltas["LeftElbow"][idx]),
-                "RightElbow_delta_deg": maybe_float(series.deltas["RightElbow"][idx]),
                 "LeftElbow_valid": bool(series.valid_angles["LeftElbow"][idx]),
                 "RightElbow_valid": bool(series.valid_angles["RightElbow"][idx]),
                 "LeftElbow_interpolated": bool(series.interpolated["LeftElbow"][idx]),
                 "RightElbow_interpolated": bool(series.interpolated["RightElbow"][idx]),
-                "LeftElbow_delta_anomaly_flag": bool(series.delta_anomaly["LeftElbow"][idx]),
-                "RightElbow_delta_anomaly_flag": bool(series.delta_anomaly["RightElbow"][idx]),
-            })
+            }
+            for k in sorted(series.deltas):
+                for side in SIDES:
+                    row[f"{side}_delta_k{k}_deg"] = maybe_float(series.deltas[k][side][idx])
+                    row[f"{side}_delta_valid_k{k}"] = bool(series.delta_valid[k][side][idx])
+                    row[f"{side}_delta_anomaly_flag_k{k}"] = bool(series.delta_anomaly[k][side][idx])
+            writer.writerow(row)
 
 
 def write_combined_csv(
@@ -679,11 +746,15 @@ def write_combined_csv(
         for side in SIDES:
             fieldnames.extend([
                 f"{system}_{side}_deg",
-                f"{system}_{side}_delta_deg",
                 f"{system}_{side}_valid",
                 f"{system}_{side}_interpolated",
-                f"{system}_{side}_delta_anomaly_flag",
             ])
+            for k in sorted(series_by_name[system].deltas):
+                fieldnames.extend([
+                    f"{system}_{side}_delta_k{k}_deg",
+                    f"{system}_{side}_delta_valid_k{k}",
+                    f"{system}_{side}_delta_anomaly_flag_k{k}",
+                ])
     with out_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -699,10 +770,12 @@ def write_combined_csv(
             for system, series in series_by_name.items():
                 for side in SIDES:
                     row[f"{system}_{side}_deg"] = maybe_float(series.angles[side][idx])
-                    row[f"{system}_{side}_delta_deg"] = maybe_float(series.deltas[side][idx])
                     row[f"{system}_{side}_valid"] = bool(series.valid_angles[side][idx])
                     row[f"{system}_{side}_interpolated"] = bool(series.interpolated[side][idx])
-                    row[f"{system}_{side}_delta_anomaly_flag"] = bool(series.delta_anomaly[side][idx])
+                    for k in sorted(series.deltas):
+                        row[f"{system}_{side}_delta_k{k}_deg"] = maybe_float(series.deltas[k][side][idx])
+                        row[f"{system}_{side}_delta_valid_k{k}"] = bool(series.delta_valid[k][side][idx])
+                        row[f"{system}_{side}_delta_anomaly_flag_k{k}"] = bool(series.delta_anomaly[k][side][idx])
             writer.writerow(row)
 
 
@@ -731,6 +804,15 @@ def build_summary(
             "anomaly_delta_deg": float(args.anomaly_delta_deg),
             "active_delta_threshold_deg": float(args.active_delta_threshold),
             "noise_floor_threshold_deg": float(args.noise_floor_threshold),
+            "k_frame_list": [int(k) for k in args.k_list],
+            "thresholds_by_k": {
+                k_key(k): {
+                    "anomaly_delta_deg": float(args.anomaly_thresholds[k]),
+                    "active_delta_threshold_deg": float(args.active_thresholds[k]),
+                    "noise_floor_threshold_deg": float(args.noise_thresholds[k]),
+                }
+                for k in args.k_list
+            },
             "lag_window_frames": int(args.lag_window_frames),
             "quality_filter_enabled": bool(args.enable_quality_filter),
             "quality_min_triang_conf": float(args.quality_min_triang_conf),
@@ -758,27 +840,32 @@ def build_summary(
         summary["quality_filter_stats"] = args.quality_filter_stats
     for side in SIDES:
         summary["systems"][side] = {
-            system: side_system_summary(series, side)
+            system: {
+                k_key(k): side_system_summary(series, side, k)
+                for k in args.k_list
+            }
             for system, series in series_by_name.items()
         }
-        summary["motion_agreement"][side] = {
-            "SKT_vs_XsensFair": pair_summary(
-                series_by_name["SKT"], series_by_name["XsensFair"], side,
-                args.active_delta_threshold, args.noise_floor_threshold, args.lag_window_frames,
-            ),
-            "AFH_vs_XsensFair": pair_summary(
-                series_by_name["AFH"], series_by_name["XsensFair"], side,
-                args.active_delta_threshold, args.noise_floor_threshold, args.lag_window_frames,
-            ),
-            "SKT_vs_AFH": pair_summary(
-                series_by_name["SKT"], series_by_name["AFH"], side,
-                args.active_delta_threshold, args.noise_floor_threshold, args.lag_window_frames,
-            ),
-            "XsensNative_vs_XsensFair": pair_summary(
-                series_by_name["XsensNative"], series_by_name["XsensFair"], side,
-                args.active_delta_threshold, args.noise_floor_threshold, args.lag_window_frames,
-            ),
+        pairs = {
+            "SKT_vs_XsensFair": (series_by_name["SKT"], series_by_name["XsensFair"]),
+            "AFH_vs_XsensFair": (series_by_name["AFH"], series_by_name["XsensFair"]),
+            "SKT_vs_AFH": (series_by_name["SKT"], series_by_name["AFH"]),
+            "XsensNative_vs_XsensFair": (series_by_name["XsensNative"], series_by_name["XsensFair"]),
         }
+        summary["motion_agreement"][side] = {}
+        for pair_name, (target, reference) in pairs.items():
+            summary["motion_agreement"][side][pair_name] = {
+                k_key(k): pair_summary(
+                    target,
+                    reference,
+                    side,
+                    k,
+                    args.active_thresholds[k],
+                    args.noise_thresholds[k],
+                    args.lag_window_frames,
+                )
+                for k in args.k_list
+            }
     return round_jsonable(summary)
 
 
@@ -805,6 +892,8 @@ def run_plot_script(out_dir: Path) -> None:
 def main() -> None:
     """Run elbow motion-delta evaluation."""
     args = parse_args()
+    args.k_list = parse_k_frame_list(args.k_frame_list)
+    args.anomaly_thresholds, args.active_thresholds, args.noise_thresholds = build_threshold_maps(args, args.k_list)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
@@ -858,7 +947,8 @@ def main() -> None:
             time_s=corrected_time,
             smooth_radius=args.smooth_radius,
             max_gap_frames=args.max_gap_frames,
-            anomaly_delta_deg=args.anomaly_delta_deg,
+            k_list=args.k_list,
+            anomaly_thresholds=args.anomaly_thresholds,
         )
         for name, angles in raw_angles.items()
     }
@@ -887,13 +977,15 @@ def main() -> None:
     print("[saved]", out_dir / "elbow_delta_combined.csv")
     print("[saved]", out_dir / "elbow_delta_summary.json")
     for side in SIDES:
-        skt_pair = summary["motion_agreement"][side]["SKT_vs_XsensFair"]
-        afh_pair = summary["motion_agreement"][side]["AFH_vs_XsensFair"]
-        print(
-            f"[{side}] SKT Pearson={skt_pair['pearson_delta']} "
-            f"slope={skt_pair['slope_target_vs_reference']} path_ratio={skt_pair['path_ratio_target_reference']}; "
-            f"AFH Pearson={afh_pair['pearson_delta']} slope={afh_pair['slope_target_vs_reference']}"
-        )
+        for k in args.k_list:
+            key = k_key(k)
+            skt_pair = summary["motion_agreement"][side]["SKT_vs_XsensFair"][key]
+            afh_pair = summary["motion_agreement"][side]["AFH_vs_XsensFair"][key]
+            print(
+                f"[{side} {key}] SKT Pearson={skt_pair['pearson_delta']} "
+                f"slope={skt_pair['slope_target_vs_reference']} path_ratio={skt_pair['path_ratio_target_reference']}; "
+                f"AFH Pearson={afh_pair['pearson_delta']} slope={afh_pair['slope_target_vs_reference']}"
+            )
 
     if not args.skip_plots:
         run_plot_script(out_dir)

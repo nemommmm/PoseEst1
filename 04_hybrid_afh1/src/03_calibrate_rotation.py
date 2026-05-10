@@ -29,6 +29,9 @@ EXPERIMENT_LOG = RESULTS_DIR / "experiment_log.md"
 CALIB_JOINTS = [5, 6, 11, 12]
 CALIB_JOINT_NAMES = ["LShoulder", "RShoulder", "LHip", "RHip"]
 CALIB_WINDOW_SEC = 5.0
+DEFAULT_EASYERGO_TO_XSENS_SCALE = 1.0102
+DEFAULT_EASYERGO_TO_XSENS_OFFSET_S = 16.83
+DEFAULT_STEREO_TO_XSENS_OFFSET_S = 17.25
 
 
 def append_experiment_log(message: str) -> None:
@@ -45,6 +48,17 @@ def pelvis_center(points: np.ndarray) -> np.ndarray:
     valid = np.isfinite(left).all(axis=1) & np.isfinite(right).all(axis=1)
     pelvis[valid] = 0.5 * (left[valid] + right[valid])
     return pelvis
+
+
+def stereo_time_to_easyergo_time(
+    stereo_time_s: np.ndarray,
+    easyergo_to_xsens_scale: float,
+    easyergo_to_xsens_offset_s: float,
+    stereo_to_xsens_offset_s: float,
+) -> np.ndarray:
+    """Map stereo-video relative time to EasyErgo time via the Xsens clock."""
+    xsens_time_s = stereo_time_s - stereo_to_xsens_offset_s
+    return (xsens_time_s + easyergo_to_xsens_offset_s) / easyergo_to_xsens_scale
 
 
 def kabsch_rotation(src: np.ndarray, tgt: np.ndarray) -> np.ndarray:
@@ -71,6 +85,12 @@ def main() -> None:
 
     easy_ts = easy["timestamps"].astype(np.float64)
     easy_kpts = easy["keypoints_3d"].astype(np.float64)
+    easy_query_ts = stereo_time_to_easyergo_time(
+        stereo_ts_rel,
+        easyergo_to_xsens_scale=DEFAULT_EASYERGO_TO_XSENS_SCALE,
+        easyergo_to_xsens_offset_s=DEFAULT_EASYERGO_TO_XSENS_OFFSET_S,
+        stereo_to_xsens_offset_s=DEFAULT_STEREO_TO_XSENS_OFFSET_S,
+    )
 
     easy_interp = interp1d(
         easy_ts,
@@ -79,7 +99,7 @@ def main() -> None:
         kind="linear",
         bounds_error=False,
         fill_value=np.nan,
-    )(stereo_ts_rel)
+    )(easy_query_ts)
 
     stereo_pelvis = pelvis_center(stereo_kpts)
     easy_pelvis = pelvis_center(easy_interp)
@@ -116,6 +136,17 @@ def main() -> None:
         "rotation_3x3": rotation.tolist(),
         "det_rotation": float(np.linalg.det(rotation)),
         "calibration_window_seconds": CALIB_WINDOW_SEC,
+        "time_mapping": {
+            "formula": (
+                "xsens_t = scale * easyergo_t - easyergo_offset; "
+                "xsens_t = stereo_t - stereo_offset"
+            ),
+            "easyergo_to_xsens_scale": DEFAULT_EASYERGO_TO_XSENS_SCALE,
+            "easyergo_to_xsens_offset_s": DEFAULT_EASYERGO_TO_XSENS_OFFSET_S,
+            "stereo_to_xsens_offset_s": DEFAULT_STEREO_TO_XSENS_OFFSET_S,
+            "easyergo_query_start_s": float(np.nanmin(easy_query_ts)),
+            "easyergo_query_end_s": float(np.nanmax(easy_query_ts)),
+        },
         "calibration_frame_indices": frame_indices.tolist(),
         "calibration_joint_indices": CALIB_JOINTS,
         "calibration_joint_names": CALIB_JOINT_NAMES,

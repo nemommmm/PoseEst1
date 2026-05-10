@@ -20,6 +20,9 @@ ROTATION_JSON = RESULTS_DIR / "coordinate_alignment.json"
 HYBRID_NPZ = RESULTS_DIR / "hybrid_skeleton_afh1_v1.npz"
 HYBRID_SUMMARY_JSON = RESULTS_DIR / "hybrid_skeleton_afh1_v1_summary.json"
 EXPERIMENT_LOG = RESULTS_DIR / "experiment_log.md"
+DEFAULT_EASYERGO_TO_XSENS_SCALE = 1.0102
+DEFAULT_EASYERGO_TO_XSENS_OFFSET_S = 16.83
+DEFAULT_STEREO_TO_XSENS_OFFSET_S = 17.25
 
 
 def append_experiment_log(message: str) -> None:
@@ -38,6 +41,17 @@ def pelvis_center(points: np.ndarray) -> np.ndarray:
     return pelvis
 
 
+def stereo_time_to_easyergo_time(
+    stereo_time_s: np.ndarray,
+    easyergo_to_xsens_scale: float,
+    easyergo_to_xsens_offset_s: float,
+    stereo_to_xsens_offset_s: float,
+) -> np.ndarray:
+    """Map stereo-video relative time to EasyErgo time via the Xsens clock."""
+    xsens_time_s = stereo_time_s - stereo_to_xsens_offset_s
+    return (xsens_time_s + easyergo_to_xsens_offset_s) / easyergo_to_xsens_scale
+
+
 def main() -> None:
     """Create AFH1 v1 skeletons in stereo coordinates."""
     easy = np.load(EASYERGO_NPZ, allow_pickle=True)
@@ -53,6 +67,12 @@ def main() -> None:
 
     easy_ts = easy["timestamps"].astype(np.float64)
     easy_kpts = easy["keypoints_3d"].astype(np.float64)
+    easy_query_ts = stereo_time_to_easyergo_time(
+        stereo_ts_rel,
+        easyergo_to_xsens_scale=DEFAULT_EASYERGO_TO_XSENS_SCALE,
+        easyergo_to_xsens_offset_s=DEFAULT_EASYERGO_TO_XSENS_OFFSET_S,
+        stereo_to_xsens_offset_s=DEFAULT_STEREO_TO_XSENS_OFFSET_S,
+    )
     easy_interp = interp1d(
         easy_ts,
         easy_kpts,
@@ -60,7 +80,7 @@ def main() -> None:
         kind="linear",
         bounds_error=False,
         fill_value=np.nan,
-    )(stereo_ts_rel)
+    )(easy_query_ts)
 
     easy_pelvis = pelvis_center(easy_interp)
     easy_rel = easy_interp - easy_pelvis[:, None, :]
@@ -80,9 +100,13 @@ def main() -> None:
         HYBRID_NPZ,
         timestamps=stereo_ts_abs,
         keypoints=hybrid,
-        source_method="AFH1_v1",
+        source_method="AFH1_v1_time_aligned",
         units="cm",
         rotation_3x3=rotation,
+        easyergo_query_timestamps=easy_query_ts,
+        easyergo_to_xsens_scale=DEFAULT_EASYERGO_TO_XSENS_SCALE,
+        easyergo_to_xsens_offset_s=DEFAULT_EASYERGO_TO_XSENS_OFFSET_S,
+        stereo_to_xsens_offset_s=DEFAULT_STEREO_TO_XSENS_OFFSET_S,
         stereo_anchor_path=str(STEREO_ANCHOR_NPZ),
         easyergo_source_path=str(EASYERGO_NPZ),
     )
@@ -96,6 +120,23 @@ def main() -> None:
         "num_frames": int(len(stereo_ts_abs)),
         "num_valid_pelvis_frames": int(np.count_nonzero(pelvis_valid)),
         "frame_valid_any_joint_ratio": float(np.mean(np.any(valid_joint_mask, axis=1))),
+        "time_mapping": {
+            "formula": (
+                "xsens_t = scale * easyergo_t - easyergo_offset; "
+                "xsens_t = stereo_t - stereo_offset"
+            ),
+            "easyergo_to_xsens_scale": DEFAULT_EASYERGO_TO_XSENS_SCALE,
+            "easyergo_to_xsens_offset_s": DEFAULT_EASYERGO_TO_XSENS_OFFSET_S,
+            "stereo_to_xsens_offset_s": DEFAULT_STEREO_TO_XSENS_OFFSET_S,
+            "easyergo_query_start_s": float(np.nanmin(easy_query_ts)),
+            "easyergo_query_end_s": float(np.nanmax(easy_query_ts)),
+            "query_out_of_bounds_frame_count": int(
+                np.sum(
+                    (easy_query_ts < float(np.nanmin(easy_ts)))
+                    | (easy_query_ts > float(np.nanmax(easy_ts)))
+                )
+            ),
+        },
         "joint_coverage": joint_coverage,
         "median_bone_lengths_cm": {
             "shoulder_width": float(
@@ -117,7 +158,7 @@ def main() -> None:
         json.dump(summary, handle, indent=2)
 
     append_experiment_log(
-        "Combined stereo pelvis anchor with EasyErgo relative skeleton and saved "
+        "Combined stereo pelvis anchor with time-aligned EasyErgo relative skeleton and saved "
         f"AFH1 v1 hybrid NPZ ({summary['num_frames']} frames)."
     )
 

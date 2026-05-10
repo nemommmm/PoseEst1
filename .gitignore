@@ -1,5 +1,6 @@
 CLAUDE.md
 AGENTS.md
+.DS_Store
 
 # Byte-compiled / optimized / DLL files
 __pycache__/
@@ -217,6 +218,9 @@ __marimo__/
 *.avi
 *.mp4
 *.mov
+
+# Ignore large generated pose output artifacts
+03_mono_motionbert/results_mono/video_outputs.json
 
 # Ignore confidential data folders
 2025_Ergonomics_Data/

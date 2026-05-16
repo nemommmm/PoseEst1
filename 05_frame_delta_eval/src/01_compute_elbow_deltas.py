@@ -38,6 +38,7 @@ from utils_mvnx import MvnxParser  # noqa: E402
 
 SIDES = ("LeftElbow", "RightElbow")
 SYSTEMS = ("SKT", "AFH", "XsensFair", "XsensNative")
+XSENS_SYSTEMS = ("XsensFair", "XsensNative")
 ANGLE_COLUMNS = ("LeftElbow_deg", "RightElbow_deg")
 DEFAULT_K_FRAME_LIST = (1, 6, 12, 25)
 K_THRESHOLD_FACTORS = {
@@ -79,6 +80,7 @@ class SystemSeries:
     interpolated: Dict[str, np.ndarray]
     delta_valid: Dict[int, Dict[str, np.ndarray]]
     delta_anomaly: Dict[int, Dict[str, np.ndarray]]
+    smoothing: Dict[str, object]
 
 
 def parse_args() -> argparse.Namespace:
@@ -86,6 +88,10 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skt-npz", default=str(DEFAULT_SKT_NPZ))
     parser.add_argument("--afh-npz", default=str(DEFAULT_AFH_NPZ))
+    parser.add_argument("--afh-filter-status",
+                        choices=("unknown_butterworth", "unfiltered", "not_included"),
+                        default="unknown_butterworth",
+                        help="Document whether the AFH NPZ is still pre-filtered upstream.")
     parser.add_argument("--xsens-fair", default=str(DEFAULT_FAIR_GT))
     parser.add_argument("--xsens-mvnx", default=str(DEFAULT_MVNX))
     parser.add_argument("--alignment-summary", default=str(DEFAULT_ALIGNMENT_SUMMARY))
@@ -95,10 +101,14 @@ def parse_args() -> argparse.Namespace:
                         help="Override Xsens temporal offset in seconds.")
     parser.add_argument("--offset-source", choices=("position", "angle", "best"), default="position",
                         help="Which alignment_summary offset to use when --xsens-offset is not set.")
-    parser.add_argument("--smooth-radius", type=int, default=4,
-                        help="Median smoothing radius on the shared video timeline; 0 disables smoothing.")
-    parser.add_argument("--wrist-smooth-radius", type=int, default=3,
-                        help="Median smoothing radius for wrist 3D keypoints before elbow-angle calculation.")
+    parser.add_argument("--smooth-method", choices=("moving_average", "median", "none"), default="moving_average",
+                        help="Shared-timeline angle smoothing applied to camera systems before delta calculation.")
+    parser.add_argument("--smooth-window-ms", type=float, default=200.0,
+                        help="Moving-average window in milliseconds for camera systems.")
+    parser.add_argument("--smooth-radius", type=int, default=None,
+                        help="Legacy median smoothing radius; default is 4 only when --smooth-method median.")
+    parser.add_argument("--wrist-smooth-radius", type=int, default=0,
+                        help="Legacy wrist-keypoint median radius before angle calculation; default 0 for Phase 4.")
     parser.add_argument("--max-gap-frames", type=int, default=5,
                         help="Maximum NaN run length to fill by linear interpolation before smoothing.")
     parser.add_argument("--anomaly-delta-deg", type=float, default=30.0,
@@ -169,6 +179,54 @@ def build_threshold_maps(args: argparse.Namespace, k_list: List[int]) -> Tuple[D
     active = {k: float(args.active_delta_threshold) * threshold_factor(k, "active") for k in k_list}
     noise = {k: float(args.noise_floor_threshold) * threshold_factor(k, "noise") for k in k_list}
     return anomaly, active, noise
+
+
+def odd_window_frames_from_ms(time_s: np.ndarray, window_ms: float) -> Tuple[int, float, float]:
+    """Convert a requested time window to the nearest odd frame count."""
+    diffs = np.diff(np.asarray(time_s, dtype=np.float64))
+    finite_dt = diffs[np.isfinite(diffs) & (diffs > 0)]
+    if finite_dt.size == 0:
+        return 1, 0.0, 0.0
+    median_dt_s = float(np.nanmedian(finite_dt))
+    target_frames = max(1.0, float(window_ms) / (median_dt_s * 1000.0))
+    rounded = max(1, int(round(target_frames)))
+    if rounded % 2 == 0:
+        lower = max(1, rounded - 1)
+        upper = rounded + 1
+        lower_err = abs(lower - target_frames)
+        upper_err = abs(upper - target_frames)
+        rounded = lower if lower_err <= upper_err else upper
+    actual_ms = rounded * median_dt_s * 1000.0
+    return int(rounded), float(actual_ms), float(median_dt_s * 1000.0)
+
+
+def resolve_angle_smoothing_config(args: argparse.Namespace, time_s: np.ndarray) -> None:
+    """Resolve effective smoothing settings once the target timeline is known."""
+    if args.smooth_method == "moving_average":
+        if float(args.smooth_window_ms) <= 0:
+            window_frames, actual_ms, median_dt_ms = 1, 0.0, 0.0
+        else:
+            window_frames, actual_ms, median_dt_ms = odd_window_frames_from_ms(time_s, args.smooth_window_ms)
+        radius = max(0, (window_frames - 1) // 2)
+    elif args.smooth_method == "median":
+        radius = max(0, int(args.smooth_radius) if args.smooth_radius is not None else 4)
+        window_frames = 2 * radius + 1
+        diffs = np.diff(np.asarray(time_s, dtype=np.float64))
+        finite_dt = diffs[np.isfinite(diffs) & (diffs > 0)]
+        median_dt_ms = float(np.nanmedian(finite_dt) * 1000.0) if finite_dt.size else 0.0
+        actual_ms = window_frames * median_dt_ms
+    else:
+        radius = 0
+        window_frames = 1
+        diffs = np.diff(np.asarray(time_s, dtype=np.float64))
+        finite_dt = diffs[np.isfinite(diffs) & (diffs > 0)]
+        median_dt_ms = float(np.nanmedian(finite_dt) * 1000.0) if finite_dt.size else 0.0
+        actual_ms = 0.0
+
+    args.smooth_radius_effective = int(radius)
+    args.smooth_window_frames_effective = int(window_frames)
+    args.smooth_window_actual_ms = float(actual_ms)
+    args.smooth_median_dt_ms = float(median_dt_ms)
 
 
 def k_key(k: int) -> str:
@@ -422,21 +480,104 @@ def interpolate_short_gaps(
     return filled, flags
 
 
-def smooth_angles_on_shared_timeline(angles: Dict[str, np.ndarray], radius: int) -> Dict[str, np.ndarray]:
-    """Apply the project's median angle filter after common-timeline resampling."""
+def moving_average_angle_sequence(values: np.ndarray, radius: int) -> np.ndarray:
+    """Apply centered moving average to one angle sequence with NaN support."""
+    values = np.asarray(values, dtype=np.float64)
+    if radius <= 0 or values.size == 0:
+        return values.copy()
+    window = 2 * int(radius) + 1
+    kernel = np.ones(window, dtype=np.float64)
+    finite = np.isfinite(values)
+    numerator = np.convolve(np.where(finite, values, 0.0), kernel, mode="same")
+    denominator = np.convolve(finite.astype(np.float64), kernel, mode="same")
+    out = np.full_like(values, np.nan, dtype=np.float64)
+    valid = denominator > 0
+    out[valid] = numerator[valid] / denominator[valid]
+    return out
+
+
+def smooth_angles_on_shared_timeline(
+    angles: Dict[str, np.ndarray],
+    system_name: str,
+    method: str,
+    radius: int,
+    requested_window_ms: float,
+    effective_window_ms: float,
+    effective_window_frames: int,
+) -> Tuple[Dict[str, np.ndarray], Dict[str, object]]:
+    """Apply Phase 4 per-system smoothing policy before delta calculation."""
+    if system_name in XSENS_SYSTEMS:
+        return (
+            {side: np.asarray(angles[side], dtype=np.float64).copy() for side in SIDES},
+            {
+                "method": "none",
+                "reason": "Xsens already contains internal filtering; no extra project smoothing is applied.",
+                "radius_frames": 0,
+                "window_frames": 1,
+                "requested_window_ms": None,
+                "effective_window_ms": 0.0,
+            },
+        )
+
+    if method == "none" or radius <= 0:
+        return (
+            {side: np.asarray(angles[side], dtype=np.float64).copy() for side in SIDES},
+            {
+                "method": "none",
+                "reason": "Camera-system smoothing disabled by CLI.",
+                "radius_frames": 0,
+                "window_frames": 1,
+                "requested_window_ms": float(requested_window_ms),
+                "effective_window_ms": 0.0,
+            },
+        )
+
+    if method == "moving_average":
+        smoothed = {
+            side: moving_average_angle_sequence(np.asarray(angles[side], dtype=np.float64), radius)
+            for side in SIDES
+        }
+        return (
+            smoothed,
+            {
+                "method": "moving_average",
+                "reason": "Phase 4 camera-system policy: simple 200 ms rule-of-thumb smoothing before delta.",
+                "radius_frames": int(radius),
+                "window_frames": int(effective_window_frames),
+                "requested_window_ms": float(requested_window_ms),
+                "effective_window_ms": float(effective_window_ms),
+            },
+        )
+
+    if method != "median":
+        raise ValueError(f"Unsupported smoothing method: {method}")
     matrix = np.full((len(next(iter(angles.values()))), len(SEMANTIC_ANGLE_NAMES)), np.nan, dtype=np.float64)
     name_to_idx = {name: i for i, name in enumerate(SEMANTIC_ANGLE_NAMES)}
     for side in SIDES:
         matrix[:, name_to_idx[side]] = angles[side]
     smoothed = median_filter_angle_sequence(matrix, radius=max(0, radius))
-    return {side: smoothed[:, name_to_idx[side]] for side in SIDES}
+    return (
+        {side: smoothed[:, name_to_idx[side]] for side in SIDES},
+        {
+            "method": "median",
+            "reason": "Legacy smoothing mode for reproducibility.",
+            "radius_frames": int(radius),
+            "window_frames": int(2 * radius + 1),
+            "requested_window_ms": None,
+            "effective_window_ms": float(effective_window_ms),
+        },
+    )
 
 
 def build_system_series(
     name: str,
     raw_angles: Dict[str, np.ndarray],
     time_s: np.ndarray,
+    smooth_method: str,
     smooth_radius: int,
+    smooth_window_ms: float,
+    smooth_window_actual_ms: float,
+    smooth_window_frames: int,
     max_gap_frames: int,
     k_list: List[int],
     anomaly_thresholds: Dict[int, float],
@@ -456,7 +597,15 @@ def build_system_series(
         interpolated[side] = flags
         original_valid[side] = np.isfinite(clean)
 
-    smoothed_angles = smooth_angles_on_shared_timeline(filled_angles, smooth_radius)
+    smoothed_angles, smoothing_config = smooth_angles_on_shared_timeline(
+        filled_angles,
+        system_name=name,
+        method=smooth_method,
+        radius=smooth_radius,
+        requested_window_ms=smooth_window_ms,
+        effective_window_ms=smooth_window_actual_ms,
+        effective_window_frames=smooth_window_frames,
+    )
     deltas: Dict[int, Dict[str, np.ndarray]] = {k: {} for k in k_list}
     delta_valid: Dict[int, Dict[str, np.ndarray]] = {k: {} for k in k_list}
     delta_anomaly: Dict[int, Dict[str, np.ndarray]] = {k: {} for k in k_list}
@@ -486,6 +635,7 @@ def build_system_series(
         interpolated=interpolated,
         delta_valid=delta_valid,
         delta_anomaly=delta_anomaly,
+        smoothing=smoothing_config,
     )
 
 
@@ -794,12 +944,30 @@ def build_summary(
         "config": {
             "skt_npz": str(Path(args.skt_npz)),
             "afh_npz": str(Path(args.afh_npz)),
+            "afh_filter_status": args.afh_filter_status,
+            "afh_blocker_note": (
+                "Do not use AFH headline metrics as final Phase 4 numbers until an unfiltered AFH NPZ is available."
+                if args.afh_filter_status != "unfiltered" else None
+            ),
             "xsens_fair": str(Path(args.xsens_fair)),
             "xsens_mvnx": str(Path(args.xsens_mvnx)),
             "xsens_offset_s": float(xsens_offset_s),
             "offset_source": args.offset_source if args.xsens_offset is None else "override",
-            "smooth_radius_frames": int(args.smooth_radius),
+            "smooth_method": args.smooth_method,
+            "smooth_window_ms_requested": float(args.smooth_window_ms),
+            "smooth_window_ms_effective": float(args.smooth_window_actual_ms),
+            "smooth_window_frames_effective": int(args.smooth_window_frames_effective),
+            "smooth_radius_frames_effective": int(args.smooth_radius_effective),
+            "smooth_radius_legacy_arg": args.smooth_radius,
             "wrist_smooth_radius_frames": int(args.wrist_smooth_radius),
+            "filter_policy": (
+                "XsensFair/XsensNative: no extra project smoothing after interpolation; "
+                "SKT/AFH: smooth angle sequence before delta calculation."
+            ),
+            "per_system_smoothing": {
+                system: series.smoothing
+                for system, series in series_by_name.items()
+            },
             "max_gap_frames": int(args.max_gap_frames),
             "anomaly_delta_deg": float(args.anomaly_delta_deg),
             "active_delta_threshold_deg": float(args.active_delta_threshold),
@@ -914,6 +1082,7 @@ def main() -> None:
         args.end_time,
     )
     skt_kp, afh_kp = filtered_arrays
+    resolve_angle_smoothing_config(args, corrected_time)
     if args.enable_quality_filter:
         skt_kp, quality_stats = apply_skt_quality_filter(
             skt_kp,
@@ -933,6 +1102,14 @@ def main() -> None:
     print(f"[timeline] frames={len(corrected_time)}, duration={duration:.3f}s, "
           f"median dt={np.median(np.diff(corrected_time)):.4f}s")
     print(f"[xsens] offset={xsens_offset_s:.3f}s ({args.offset_source if args.xsens_offset is None else 'override'})")
+    print(
+        f"[smoothing] method={args.smooth_method}, camera radius={args.smooth_radius_effective} frame(s), "
+        f"window={args.smooth_window_frames_effective} frame(s) "
+        f"({args.smooth_window_actual_ms:.1f} ms); Xsens extra smoothing=off; "
+        f"wrist median radius={args.wrist_smooth_radius}"
+    )
+    if args.afh_filter_status != "unfiltered":
+        print(f"[warning] AFH filter status is {args.afh_filter_status}; exclude AFH from final Phase 4 headline claims.")
 
     raw_angles = {
         "SKT": compute_pose_elbow_angles(skt_kp, wrist_smooth_radius=args.wrist_smooth_radius),
@@ -945,7 +1122,11 @@ def main() -> None:
             name=name,
             raw_angles=angles,
             time_s=corrected_time,
-            smooth_radius=args.smooth_radius,
+            smooth_method=args.smooth_method,
+            smooth_radius=args.smooth_radius_effective,
+            smooth_window_ms=args.smooth_window_ms,
+            smooth_window_actual_ms=args.smooth_window_actual_ms,
+            smooth_window_frames=args.smooth_window_frames_effective,
             max_gap_frames=args.max_gap_frames,
             k_list=args.k_list,
             anomaly_thresholds=args.anomaly_thresholds,

@@ -47,6 +47,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--min-valid-ratio", type=float, default=0.5)
     parser.add_argument("--rula-bins", default="60,100",
                         help="Comma-separated elbow-angle bin thresholds.")
+    parser.add_argument("--dtw-preprocess", choices=("mean_l2", "mean", "none"), default="mean_l2",
+                        help="Preprocessing before DTW shape comparison.")
+    parser.add_argument("--skip-plots", action="store_true",
+                        help="Only write CSV/JSON/Markdown tables; do not render PNG figures.")
     parser.add_argument("--out-dir", required=True)
     return parser.parse_args()
 
@@ -115,6 +119,102 @@ def mean_abs_diff(x: np.ndarray, y: np.ndarray) -> Optional[float]:
     if len(x_f) == 0:
         return None
     return float(np.mean(np.abs(x_f - y_f)))
+
+
+def prepare_dtw_sequence(values: np.ndarray, preprocess: str) -> Optional[np.ndarray]:
+    """Prepare one segment sequence for DTW shape comparison."""
+    finite = np.asarray(values, dtype=np.float64)
+    finite = finite[np.isfinite(finite)]
+    if finite.size < 3:
+        return None
+    seq = finite.astype(np.float64)
+    if preprocess in {"mean_l2", "mean"}:
+        seq = seq - float(np.mean(seq))
+    if preprocess == "mean_l2":
+        norm = float(np.linalg.norm(seq))
+        if norm < 1e-9:
+            return None
+        seq = seq / norm
+    elif preprocess not in {"mean", "none"}:
+        raise ValueError(f"Unsupported DTW preprocess mode: {preprocess}")
+    return seq
+
+
+def dtw_distance(target: np.ndarray, reference: np.ndarray) -> Dict[str, float | int | List[List[int]]]:
+    """Compute absolute-cost DTW distance and warping path."""
+    target = np.asarray(target, dtype=np.float64)
+    reference = np.asarray(reference, dtype=np.float64)
+    n = int(target.size)
+    m = int(reference.size)
+    if n == 0 or m == 0:
+        return {
+            "dtw_distance": math.nan,
+            "dtw_distance_normalized": math.nan,
+            "warping_path_length": 0,
+            "warping_path": [],
+        }
+
+    cost = np.full((n + 1, m + 1), np.inf, dtype=np.float64)
+    cost[0, 0] = 0.0
+    for i in range(1, n + 1):
+        for j in range(1, m + 1):
+            step_cost = abs(float(target[i - 1] - reference[j - 1]))
+            cost[i, j] = step_cost + min(cost[i - 1, j], cost[i, j - 1], cost[i - 1, j - 1])
+
+    i = n
+    j = m
+    path: List[List[int]] = []
+    while i > 0 and j > 0:
+        path.append([i - 1, j - 1])
+        choices = (
+            cost[i - 1, j - 1],
+            cost[i - 1, j],
+            cost[i, j - 1],
+        )
+        move = int(np.argmin(choices))
+        if move == 0:
+            i -= 1
+            j -= 1
+        elif move == 1:
+            i -= 1
+        else:
+            j -= 1
+    while i > 0:
+        path.append([i - 1, 0])
+        i -= 1
+    while j > 0:
+        path.append([0, j - 1])
+        j -= 1
+    path.reverse()
+    path_len = len(path)
+    total = float(cost[n, m])
+    return {
+        "dtw_distance": total,
+        "dtw_distance_normalized": total / path_len if path_len else math.nan,
+        "warping_path_length": int(path_len),
+        "warping_path": path,
+    }
+
+
+def summarize_values(values: np.ndarray) -> Dict[str, Optional[float] | int | List[float]]:
+    """Summarize finite values for JSON output."""
+    finite = values[np.isfinite(values)]
+    if finite.size == 0:
+        return {
+            "valid_segment_count": 0,
+            "mean": None,
+            "median": None,
+            "iqr": None,
+        }
+    return {
+        "valid_segment_count": int(finite.size),
+        "mean": float(np.mean(finite)),
+        "median": float(np.median(finite)),
+        "iqr": [
+            float(np.percentile(finite, 25)),
+            float(np.percentile(finite, 75)),
+        ],
+    }
 
 
 def rounded(value):
@@ -287,6 +387,93 @@ def write_segment_csv(path: Path, rows: List[Dict[str, object]]) -> None:
             writer.writerow(out)
 
 
+def build_segment_dtw_rows(
+    data: Dict[str, np.ndarray],
+    segment_rows: List[Dict[str, object]],
+    preprocess: str,
+) -> List[Dict[str, object]]:
+    """Compute per-segment DTW shape distances against XsensFair."""
+    frame_to_idx = {int(frame): idx for idx, frame in enumerate(data["Frame"])}
+    dtw_rows: List[Dict[str, object]] = []
+    for segment in segment_rows:
+        side = str(segment["Side"])
+        start_idx = frame_to_idx.get(int(segment["StartFrame"]))
+        end_idx = frame_to_idx.get(int(segment["EndFrame"]))
+        if start_idx is None or end_idx is None or end_idx < start_idx:
+            continue
+        reference_raw = data[f"XsensFair_{side}_deg"][start_idx:end_idx + 1]
+        reference_seq = prepare_dtw_sequence(reference_raw, preprocess)
+        reference_valid = int(np.sum(np.isfinite(reference_raw)))
+        for system in TARGET_SYSTEMS:
+            target_raw = data[f"{system}_{side}_deg"][start_idx:end_idx + 1]
+            target_seq = prepare_dtw_sequence(target_raw, preprocess)
+            target_valid = int(np.sum(np.isfinite(target_raw)))
+            if target_seq is None or reference_seq is None:
+                dtw = {
+                    "dtw_distance": math.nan,
+                    "dtw_distance_normalized": math.nan,
+                    "warping_path_length": 0,
+                    "warping_path": [],
+                }
+            else:
+                dtw = dtw_distance(target_seq, reference_seq)
+            dtw_rows.append({
+                "SegmentID": segment["SegmentID"],
+                "Side": side,
+                "Pair": f"{system}_vs_XsensFair",
+                "TargetSystem": system,
+                "ReferenceSystem": "XsensFair",
+                "StartFrame": int(segment["StartFrame"]),
+                "EndFrame": int(segment["EndFrame"]),
+                "Start_s": float(segment["Start_s"]),
+                "End_s": float(segment["End_s"]),
+                "Preprocess": preprocess,
+                "TargetValidCount": target_valid,
+                "ReferenceValidCount": reference_valid,
+                "TargetDtwLength": int(target_seq.size) if target_seq is not None else 0,
+                "ReferenceDtwLength": int(reference_seq.size) if reference_seq is not None else 0,
+                "DTWDistance": float(dtw["dtw_distance"]),
+                "DTWDistanceNormalized": float(dtw["dtw_distance_normalized"]),
+                "WarpingPathLength": int(dtw["warping_path_length"]),
+            })
+    return dtw_rows
+
+
+def write_segment_dtw_csv(path: Path, rows: List[Dict[str, object]]) -> None:
+    """Write per-segment DTW rows to CSV."""
+    fieldnames = [
+        "SegmentID",
+        "Side",
+        "Pair",
+        "TargetSystem",
+        "ReferenceSystem",
+        "StartFrame",
+        "EndFrame",
+        "Start_s",
+        "End_s",
+        "Preprocess",
+        "TargetValidCount",
+        "ReferenceValidCount",
+        "TargetDtwLength",
+        "ReferenceDtwLength",
+        "DTWDistance",
+        "DTWDistanceNormalized",
+        "WarpingPathLength",
+    ]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in rows:
+            out = {}
+            for key in fieldnames:
+                value = row.get(key, "")
+                if isinstance(value, float):
+                    out[key] = "" if not math.isfinite(value) else f"{value:.6f}"
+                else:
+                    out[key] = value
+            writer.writerow(out)
+
+
 def row_values(rows: List[Dict[str, object]], side: str, system: str, metric: str) -> np.ndarray:
     """Extract one metric vector for side/system from segment rows."""
     return np.asarray(
@@ -330,7 +517,41 @@ def confusion_summary(target: np.ndarray, reference: np.ndarray, bins: List[floa
     }
 
 
-def agreement_summary(rows: List[Dict[str, object]], args: argparse.Namespace, bins: List[float]) -> Dict[str, object]:
+def dtw_agreement_summary(dtw_rows: List[Dict[str, object]]) -> Dict[str, object]:
+    """Summarize per-segment DTW distances by side and pair."""
+    summary: Dict[str, object] = {}
+    for side in SIDES:
+        summary[side] = {}
+        for system in TARGET_SYSTEMS:
+            pair = f"{system}_vs_XsensFair"
+            values = np.asarray(
+                [
+                    float(row.get("DTWDistanceNormalized", math.nan))
+                    for row in dtw_rows
+                    if row["Side"] == side and row["Pair"] == pair
+                ],
+                dtype=np.float64,
+            )
+            raw_values = np.asarray(
+                [
+                    float(row.get("DTWDistance", math.nan))
+                    for row in dtw_rows
+                    if row["Side"] == side and row["Pair"] == pair
+                ],
+                dtype=np.float64,
+            )
+            item = summarize_values(values)
+            item["raw_distance"] = summarize_values(raw_values)
+            summary[side][pair] = item
+    return summary
+
+
+def agreement_summary(
+    rows: List[Dict[str, object]],
+    dtw_rows: List[Dict[str, object]],
+    args: argparse.Namespace,
+    bins: List[float],
+) -> Dict[str, object]:
     """Summarize ROM, peak, and RULA-bin agreement by side and pair."""
     summary: Dict[str, object] = {
         "config": {
@@ -342,10 +563,14 @@ def agreement_summary(rows: List[Dict[str, object]], args: argparse.Namespace, b
             "merge_gap_s": float(args.merge_gap_s),
             "min_valid_ratio": float(args.min_valid_ratio),
             "rula_bins_deg": bins,
+            "dtw_preprocess": args.dtw_preprocess,
+            "dtw_distance": "absolute-cost DTW on per-segment elbow-angle sequences",
+            "dtw_distance_normalized": "DTW cumulative cost divided by warping-path length",
         },
         "segments_count": {},
         "rom_agreement": {},
         "rula_bin_agreement": {},
+        "dtw_shape_agreement": dtw_agreement_summary(dtw_rows),
     }
     for side in SIDES:
         side_rows = [row for row in rows if row["Side"] == side]
@@ -485,10 +710,11 @@ def write_plot_index(out_dir: Path, rows: List[Dict[str, object]], summary: Dict
         lines.append(f"### {side}")
         for pair, metrics in summary["rom_agreement"][side].items():
             rula = summary["rula_bin_agreement"][side][pair]
+            dtw = summary["dtw_shape_agreement"][side].get(pair, {})
             lines.append(
                 f"- {pair}: rom_pearson={metrics['pearson_rom']}, rom_mae={metrics['rom_mae_deg']}, "
                 f"peak_mae={metrics['peak_mae_deg']}, rula_agreement={rula['agreement_rate']}, "
-                f"off_by_one={rula['off_by_one_rate']}"
+                f"off_by_one={rula['off_by_one_rate']}, dtw_norm_median={dtw.get('median')}"
             )
         lines.append("")
     lines.append("## Figures")
@@ -500,6 +726,11 @@ def write_plot_index(out_dir: Path, rows: List[Dict[str, object]], summary: Dict
             f"- `plot_rom_bars_{side_l}.png`",
             f"- `plot_rula_confusion_{side_l}.png`",
         ])
+    lines.append("")
+    lines.append("## Tables")
+    lines.append("- `segment_rom.csv`")
+    lines.append("- `segment_dtw.csv`")
+    lines.append("- `segment_rom_summary.json`")
     lines.append("")
     lines.append("## Segments")
     for row in rows:
@@ -518,27 +749,33 @@ def main() -> None:
     bins = parse_bins(args.rula_bins)
     data = load_combined_csv(Path(args.combined_csv))
     rows = build_segment_rows(data, args)
-    summary = agreement_summary(rows, args, bins)
+    dtw_rows = build_segment_dtw_rows(data, rows, args.dtw_preprocess)
+    summary = agreement_summary(rows, dtw_rows, args, bins)
     write_segment_csv(out_dir / "segment_rom.csv", rows)
+    write_segment_dtw_csv(out_dir / "segment_dtw.csv", dtw_rows)
     (out_dir / "segment_rom_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
-    plt.style.use("seaborn-v0_8-whitegrid")
-    for side in SIDES:
-        plot_segments_timeline(data, rows, side, out_dir)
-        plot_rom_scatter(rows, side, out_dir)
-        plot_rom_bars(rows, side, out_dir)
-        plot_rula_confusion(summary, side, out_dir)
+    if not args.skip_plots:
+        plt.style.use("seaborn-v0_8-whitegrid")
+        for side in SIDES:
+            plot_segments_timeline(data, rows, side, out_dir)
+            plot_rom_scatter(rows, side, out_dir)
+            plot_rom_bars(rows, side, out_dir)
+            plot_rula_confusion(summary, side, out_dir)
     write_plot_index(out_dir, rows, summary)
 
     print("[saved]", out_dir / "segment_rom.csv")
+    print("[saved]", out_dir / "segment_dtw.csv")
     print("[saved]", out_dir / "segment_rom_summary.json")
     for side in SIDES:
         print(f"[{side}] segments={summary['segments_count'][side]}")
         for pair, metrics in summary["rom_agreement"][side].items():
             rula = summary["rula_bin_agreement"][side][pair]
+            dtw = summary["dtw_shape_agreement"][side][pair]
             print(
                 f"  {pair}: ROM Pearson={metrics['pearson_rom']} "
-                f"ROM MAE={metrics['rom_mae_deg']} RULA agreement={rula['agreement_rate']}"
+                f"ROM MAE={metrics['rom_mae_deg']} RULA agreement={rula['agreement_rate']} "
+                f"DTW norm median={dtw['median']}"
             )
 
 

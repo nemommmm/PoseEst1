@@ -13,25 +13,32 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 SIDES = ("LeftElbow", "RightElbow")
-SYSTEMS = ("SKT", "AFH", "XsensFair", "XsensNative")
+DEFAULT_SYSTEM_ORDER = ("SKT", "FastSAM3D", "Merge", "AFH", "XsensFair", "XsensNative")
 COLORS = {
     "SKT": "#ff7a18",
+    "FastSAM3D": "#009688",
+    "Merge": "#8e44ad",
     "AFH": "#2196F3",
     "XsensFair": "#43a047",
     "XsensNative": "#70757f",
 }
 LABELS = {
     "SKT": "SKT stereo",
+    "FastSAM3D": "FastSAM3D unfiltered",
+    "Merge": "ViscandoXFastSAM3D Merge",
     "AFH": "AFH hybrid",
     "XsensFair": "Xsens-derived geometric",
     "XsensNative": "Xsens native",
 }
 LINESTYLES = {
     "SKT": "-",
+    "FastSAM3D": "-",
+    "Merge": "-",
     "AFH": "-",
     "XsensFair": "-",
     "XsensNative": "--",
 }
+FALLBACK_COLORS = ("#d81b60", "#00acc1", "#fdd835", "#6d4c41", "#5e35b1", "#546e7a")
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,6 +86,43 @@ def load_combined_csv(path: Path) -> Dict[str, np.ndarray]:
         else:
             data[key] = np.array([as_float(v) for v in values], dtype=np.float64)
     return data
+
+
+def infer_systems(data: Dict[str, np.ndarray], summary: Dict) -> List[str]:
+    """Infer system names from summary config or combined CSV angle columns."""
+    configured = summary.get("config", {}).get("system_names")
+    if configured:
+        return [str(system) for system in configured if f"{system}_LeftElbow_deg" in data]
+
+    systems = []
+    suffix = "_LeftElbow_deg"
+    for key in data:
+        if key.endswith(suffix):
+            systems.append(key[: -len(suffix)])
+    order = {name: idx for idx, name in enumerate(DEFAULT_SYSTEM_ORDER)}
+    return sorted(systems, key=lambda item: (order.get(item, len(order)), item))
+
+
+def target_systems(system_names: List[str]) -> List[str]:
+    """Return systems that should be compared against XsensFair in scatter plots."""
+    return [system for system in system_names if system != "XsensFair"]
+
+
+def color_for(system: str) -> str:
+    """Return a stable plot color for a system."""
+    if system in COLORS:
+        return COLORS[system]
+    return FALLBACK_COLORS[sum(ord(ch) for ch in system) % len(FALLBACK_COLORS)]
+
+
+def label_for(system: str) -> str:
+    """Return a readable plot label for a system."""
+    return LABELS.get(system, system)
+
+
+def linestyle_for(system: str) -> str:
+    """Return line style for a system."""
+    return LINESTYLES.get(system, "-")
 
 
 def finite_plot(x: np.ndarray, y: np.ndarray) -> Tuple[np.ndarray, np.ndarray]:
@@ -148,21 +192,21 @@ def active_threshold_for(summary: Dict, k: int) -> float:
     return float(summary.get("config", {}).get("active_delta_threshold_deg", 1.0))
 
 
-def plot_delta(data: Dict[str, np.ndarray], side: str, k: int, out_dir: Path) -> None:
+def plot_delta(data: Dict[str, np.ndarray], side: str, k: int, out_dir: Path, system_names: List[str]) -> None:
     """Plot signed K-frame elbow deltas."""
     time = data["Time_s"]
     fig, ax = plt.subplots(figsize=(11, 4.8))
-    for system in SYSTEMS:
+    for system in system_names:
         y = data[delta_col(system, side, k, data)]
         x_f, y_f = finite_plot(time, y)
         ax.plot(
             x_f,
             y_f,
-            color=COLORS[system],
-            linestyle=LINESTYLES[system],
+            color=color_for(system),
+            linestyle=linestyle_for(system),
             linewidth=1.2 if system != "XsensNative" else 1.0,
             alpha=0.95 if system != "XsensNative" else 0.75,
-            label=LABELS[system],
+            label=label_for(system),
         )
     setup_axes(ax, f"{title_side(side)} K={k} frame angle delta", f"Delta angle over {k} frame(s) (deg)")
     ax.axhline(0, color="#333333", linewidth=0.8, alpha=0.45)
@@ -183,20 +227,20 @@ def cumulative_abs_path(delta: np.ndarray) -> np.ndarray:
     return out
 
 
-def plot_cumulative(data: Dict[str, np.ndarray], side: str, k: int, out_dir: Path) -> None:
+def plot_cumulative(data: Dict[str, np.ndarray], side: str, k: int, out_dir: Path, system_names: List[str]) -> None:
     """Plot cumulative angular path."""
     time = data["Time_s"]
     fig, ax = plt.subplots(figsize=(11, 4.8))
-    for system in SYSTEMS:
+    for system in system_names:
         path = cumulative_abs_path(data[delta_col(system, side, k, data)])
         ax.plot(
             time,
             path,
-            color=COLORS[system],
-            linestyle=LINESTYLES[system],
+            color=color_for(system),
+            linestyle=linestyle_for(system),
             linewidth=1.5 if system != "XsensNative" else 1.0,
             alpha=0.95 if system != "XsensNative" else 0.75,
-            label=LABELS[system],
+            label=label_for(system),
         )
     setup_axes(ax, f"{title_side(side)} cumulative K={k} angular path", f"Cumulative |K={k} delta| (deg)")
     ax.legend(loc="upper left", ncol=2, fontsize=8)
@@ -214,21 +258,21 @@ def zeroed_angle(angle: np.ndarray) -> np.ndarray:
     return out - out[finite[0]]
 
 
-def plot_zeroed(data: Dict[str, np.ndarray], side: str, out_dir: Path) -> None:
+def plot_zeroed(data: Dict[str, np.ndarray], side: str, out_dir: Path, system_names: List[str]) -> None:
     """Plot angles after removing each system's initial offset."""
     time = data["Time_s"]
     fig, ax = plt.subplots(figsize=(11, 4.8))
-    for system in SYSTEMS:
+    for system in system_names:
         y = zeroed_angle(data[f"{system}_{side}_deg"])
         x_f, y_f = finite_plot(time, y)
         ax.plot(
             x_f,
             y_f,
-            color=COLORS[system],
-            linestyle=LINESTYLES[system],
+            color=color_for(system),
+            linestyle=linestyle_for(system),
             linewidth=1.25 if system != "XsensNative" else 1.0,
             alpha=0.95 if system != "XsensNative" else 0.75,
-            label=LABELS[system],
+            label=label_for(system),
         )
     setup_axes(ax, f"{title_side(side)} zeroed elbow angle", "Angle change from first finite frame (deg)")
     ax.axhline(0, color="#333333", linewidth=0.8, alpha=0.45)
@@ -255,7 +299,7 @@ def plot_scatter(
     else:
         x, y = finite_plot(ref, target)
     fig, ax = plt.subplots(figsize=(5.8, 5.6))
-    ax.scatter(x, y, s=10, alpha=0.35, color=COLORS[system], edgecolors="none")
+    ax.scatter(x, y, s=10, alpha=0.35, color=color_for(system), edgecolors="none")
     if len(x) and len(y):
         lim = float(np.nanmax(np.abs(np.concatenate([x, y]))))
         lim = max(lim, 5.0)
@@ -265,12 +309,12 @@ def plot_scatter(
     ax.set_aspect("equal", adjustable="box")
     suffix = "" if active_threshold is None else f" active |ref|>{active_threshold:g}"
     ax.set_title(
-        f"{title_side(side)} K={k} delta scatter{suffix}: {LABELS[system]} vs Xsens-derived",
+        f"{title_side(side)} K={k} delta scatter{suffix}: {label_for(system)} vs Xsens-derived",
         fontsize=11,
         weight="bold",
     )
     ax.set_xlabel(f"Xsens-derived geometric K={k} delta (deg)")
-    ax.set_ylabel(f"{LABELS[system]} K={k} delta (deg)")
+    ax.set_ylabel(f"{label_for(system)} K={k} delta (deg)")
     ax.grid(True, alpha=0.25)
     ax.legend(loc="upper left", fontsize=8)
     fig.tight_layout()
@@ -281,13 +325,7 @@ def plot_scatter(
 
 def plot_pearson_vs_k(summary: Dict, side: str, k_list: List[int], out_dir: Path) -> None:
     """Plot motion-agreement Pearson as a function of K-frame spacing."""
-    pair_names = ("SKT_vs_XsensFair", "AFH_vs_XsensFair", "SKT_vs_AFH", "XsensNative_vs_XsensFair")
-    colors = {
-        "SKT_vs_XsensFair": COLORS["SKT"],
-        "AFH_vs_XsensFair": COLORS["AFH"],
-        "SKT_vs_AFH": "#8e44ad",
-        "XsensNative_vs_XsensFair": COLORS["XsensNative"],
-    }
+    pair_names = list(summary.get("motion_agreement", {}).get(side, {}).keys())
     fig, ax = plt.subplots(figsize=(7.5, 4.8))
     for pair_name in pair_names:
         y = []
@@ -299,7 +337,8 @@ def plot_pearson_vs_k(summary: Dict, side: str, k_list: List[int], out_dir: Path
                 x.append(k)
                 y.append(float(pearson))
         if x:
-            ax.plot(x, y, marker="o", linewidth=1.7, color=colors[pair_name], label=pair_name)
+            target = pair_name.split("_vs_", 1)[0]
+            ax.plot(x, y, marker="o", linewidth=1.7, color=color_for(target), label=pair_name)
     ax.set_xscale("log")
     ax.set_xticks(k_list)
     ax.set_xticklabels([str(k) for k in k_list])
@@ -314,7 +353,7 @@ def plot_pearson_vs_k(summary: Dict, side: str, k_list: List[int], out_dir: Path
     plt.close(fig)
 
 
-def write_plot_index(out_dir: Path, summary: Dict, k_list: List[int]) -> None:
+def write_plot_index(out_dir: Path, summary: Dict, k_list: List[int], system_names: List[str]) -> None:
     """Write a compact Markdown index of generated figures and headline metrics."""
     lines = ["# K-Frame Elbow Motion Evaluation", ""]
     lines.append("## Headline Metrics")
@@ -343,11 +382,11 @@ def write_plot_index(out_dir: Path, summary: Dict, k_list: List[int]) -> None:
             lines.extend([
                 f"- `plot_delta_k{k}_{side_l}.png`",
                 f"- `plot_cumdelta_k{k}_{side_l}.png`",
-                f"- `plot_scatter_skt_vs_xsensfair_k{k}_{side_l}.png`",
-                f"- `plot_scatter_afh_vs_xsensfair_k{k}_{side_l}.png`",
-                f"- `plot_scatter_active_skt_vs_xsensfair_k{k}_{side_l}.png`",
-                f"- `plot_scatter_active_afh_vs_xsensfair_k{k}_{side_l}.png`",
             ])
+            for system in target_systems(system_names):
+                slug = system.lower()
+                lines.append(f"- `plot_scatter_{slug}_vs_xsensfair_k{k}_{side_l}.png`")
+                lines.append(f"- `plot_scatter_active_{slug}_vs_xsensfair_k{k}_{side_l}.png`")
     (out_dir / "plot_index.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
@@ -359,19 +398,20 @@ def main() -> None:
     data = load_combined_csv(Path(args.combined_csv))
     summary = json.loads(Path(args.summary_json).read_text(encoding="utf-8"))
     k_list = parse_k_list(args.k_frame_list, summary)
+    system_names = infer_systems(data, summary)
+    scatter_systems = target_systems(system_names)
     plt.style.use("seaborn-v0_8-whitegrid")
     for side in SIDES:
-        plot_zeroed(data, side, out_dir)
+        plot_zeroed(data, side, out_dir, system_names)
         plot_pearson_vs_k(summary, side, k_list, out_dir)
         for k in k_list:
             active_threshold = active_threshold_for(summary, k)
-            plot_delta(data, side, k, out_dir)
-            plot_cumulative(data, side, k, out_dir)
-            plot_scatter(data, side, "SKT", k, out_dir)
-            plot_scatter(data, side, "AFH", k, out_dir)
-            plot_scatter(data, side, "SKT", k, out_dir, active_threshold=active_threshold)
-            plot_scatter(data, side, "AFH", k, out_dir, active_threshold=active_threshold)
-    write_plot_index(out_dir, summary, k_list)
+            plot_delta(data, side, k, out_dir, system_names)
+            plot_cumulative(data, side, k, out_dir, system_names)
+            for system in scatter_systems:
+                plot_scatter(data, side, system, k, out_dir)
+                plot_scatter(data, side, system, k, out_dir, active_threshold=active_threshold)
+    write_plot_index(out_dir, summary, k_list, system_names)
     print("[saved plots]", out_dir)
 
 

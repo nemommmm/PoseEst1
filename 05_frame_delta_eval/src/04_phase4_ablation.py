@@ -14,7 +14,6 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 METHOD_DIR = SCRIPT_DIR.parent
 DEFAULT_OUT_DIR = METHOD_DIR / "results" / "phase4_ablation"
 SIDES = ("LeftElbow", "RightElbow")
-PAIRS = ("SKT_vs_XsensFair", "AFH_vs_XsensFair", "XsensNative_vs_XsensFair")
 
 
 def parse_args() -> argparse.Namespace:
@@ -25,9 +24,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--activity-thresholds", default="8,10,12")
     parser.add_argument("--dtw-preprocesses", default="mean_l2,mean,none")
     parser.add_argument("--wrist-smooth-radius", type=int, default=0)
+    parser.add_argument("--skip-afh", action="store_true",
+                        help="Exclude the legacy AFH NPZ from all ablation runs.")
     parser.add_argument("--afh-filter-status",
                         choices=("unknown_butterworth", "unfiltered", "not_included"),
                         default="unknown_butterworth")
+    parser.add_argument("--fastsam-trc", default=None,
+                        help="Optional unfiltered FastSAM3D TRC file to include in all runs.")
+    parser.add_argument("--merge-trc", default=None,
+                        help="Optional Merge TRC file to include in all runs.")
+    parser.add_argument("--extra-trc", action="append", default=[],
+                        help="Additional TRC source as NAME=PATH. May be supplied multiple times.")
+    parser.add_argument("--enable-quality-filter", action="store_true",
+                        help="Apply the same SKT quality filter as the main evaluation.")
     return parser.parse_args()
 
 
@@ -70,7 +79,7 @@ def fmt(value) -> str:
 def append_metric_rows(lines: List[str], label: str, summary: Dict, extra: str = "") -> None:
     """Append pair/side rows from one segment summary."""
     for side in SIDES:
-        for pair in PAIRS:
+        for pair in summary["rom_agreement"][side]:
             lines.append(
                 "| "
                 + " | ".join([
@@ -97,7 +106,7 @@ def write_markdown(
     lines: List[str] = [
         "# Phase 4 Sensitivity Summary",
         "",
-        "AFH rows are provisional until the unfiltered AFH NPZ is available.",
+        "Rows are generated dynamically from the systems present in the combined CSV.",
         "",
         f"- Base combined CSV: `{base_combined_csv}`",
         "",
@@ -148,6 +157,22 @@ def main() -> None:
 
     compute_script = SCRIPT_DIR / "01_compute_elbow_deltas.py"
     segment_script = SCRIPT_DIR / "03_segment_rom_eval.py"
+    compute_common_args: List[str] = [
+        "--wrist-smooth-radius",
+        str(args.wrist_smooth_radius),
+        "--afh-filter-status",
+        "not_included" if args.skip_afh else args.afh_filter_status,
+    ]
+    if args.skip_afh:
+        compute_common_args.append("--skip-afh")
+    if args.enable_quality_filter:
+        compute_common_args.append("--enable-quality-filter")
+    if args.fastsam_trc:
+        compute_common_args.extend(["--fastsam-trc", args.fastsam_trc])
+    if args.merge_trc:
+        compute_common_args.extend(["--merge-trc", args.merge_trc])
+    for extra_trc in args.extra_trc:
+        compute_common_args.extend(["--extra-trc", extra_trc])
 
     window_summaries: Dict[str, Dict] = {}
     base_combined_csv: Path | None = None
@@ -162,10 +187,7 @@ def main() -> None:
             "moving_average",
             "--smooth-window-ms",
             str(window_ms),
-            "--wrist-smooth-radius",
-            str(args.wrist_smooth_radius),
-            "--afh-filter-status",
-            args.afh_filter_status,
+            *compute_common_args,
             "--out-dir",
             str(delta_dir),
             "--skip-plots",

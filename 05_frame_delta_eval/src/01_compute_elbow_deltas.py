@@ -37,7 +37,7 @@ from pose_angle_utils import (  # noqa: E402
 from utils_mvnx import MvnxParser  # noqa: E402
 
 SIDES = ("LeftElbow", "RightElbow")
-SYSTEMS = ("SKT", "AFH", "XsensFair", "XsensNative")
+DEFAULT_SYSTEMS = ("SKT", "AFH", "XsensFair", "XsensNative")
 XSENS_SYSTEMS = ("XsensFair", "XsensNative")
 ANGLE_COLUMNS = ("LeftElbow_deg", "RightElbow_deg")
 DEFAULT_K_FRAME_LIST = (1, 6, 12, 25)
@@ -51,6 +51,26 @@ ELBOW_JOINT_INDICES = {
     "LeftElbow": (5, 7, 9),    # shoulder, elbow, wrist in COCO-17
     "RightElbow": (6, 8, 10),
 }
+COCO17_JOINT_NAMES = (
+    "Nose",
+    "LEye",
+    "REye",
+    "LEar",
+    "REar",
+    "LShoulder",
+    "RShoulder",
+    "LElbow",
+    "RElbow",
+    "LWrist",
+    "RWrist",
+    "LHip",
+    "RHip",
+    "LKnee",
+    "RKnee",
+    "LAnkle",
+    "RAnkle",
+)
+TRC_MARKER_TO_COCO17 = {name: idx for idx, name in enumerate(COCO17_JOINT_NAMES)}
 
 DEFAULT_SKT_NPZ = (
     PROJECT_ROOT
@@ -83,15 +103,31 @@ class SystemSeries:
     smoothing: Dict[str, object]
 
 
+@dataclass
+class TRCSource:
+    """External TRC pose source to evaluate on the shared timeline."""
+
+    name: str
+    path: Path
+
+
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--skt-npz", default=str(DEFAULT_SKT_NPZ))
     parser.add_argument("--afh-npz", default=str(DEFAULT_AFH_NPZ))
+    parser.add_argument("--skip-afh", action="store_true",
+                        help="Exclude the legacy AFH NPZ from this run.")
     parser.add_argument("--afh-filter-status",
                         choices=("unknown_butterworth", "unfiltered", "not_included"),
                         default="unknown_butterworth",
                         help="Document whether the AFH NPZ is still pre-filtered upstream.")
+    parser.add_argument("--fastsam-trc", default=None,
+                        help="Optional unfiltered FastSAM3D TRC file to evaluate as FastSAM3D.")
+    parser.add_argument("--merge-trc", default=None,
+                        help="Optional ViscandoXFastSAM3D Merge TRC file to evaluate as Merge.")
+    parser.add_argument("--extra-trc", action="append", default=[],
+                        help="Additional TRC source as NAME=PATH. May be supplied multiple times.")
     parser.add_argument("--xsens-fair", default=str(DEFAULT_FAIR_GT))
     parser.add_argument("--xsens-mvnx", default=str(DEFAULT_MVNX))
     parser.add_argument("--alignment-summary", default=str(DEFAULT_ALIGNMENT_SUMMARY))
@@ -156,6 +192,44 @@ def parse_k_frame_list(value: str) -> List[int]:
     if not out:
         raise ValueError("At least one K-frame value is required.")
     return sorted(set(out))
+
+
+def safe_system_name(name: str) -> str:
+    """Return a CSV-safe system name while preserving readable labels."""
+    cleaned = "".join(ch for ch in str(name).strip() if ch.isalnum() or ch == "_")
+    if not cleaned:
+        raise ValueError(f"Invalid empty system name from {name!r}")
+    if cleaned[0].isdigit():
+        cleaned = f"Method{cleaned}"
+    return cleaned
+
+
+def parse_trc_sources(args: argparse.Namespace) -> List[TRCSource]:
+    """Resolve optional TRC method inputs from CLI arguments."""
+    sources: List[TRCSource] = []
+    if args.fastsam_trc:
+        sources.append(TRCSource("FastSAM3D", Path(args.fastsam_trc).expanduser()))
+    if args.merge_trc:
+        sources.append(TRCSource("Merge", Path(args.merge_trc).expanduser()))
+    for raw in args.extra_trc:
+        if "=" not in raw:
+            raise ValueError(f"--extra-trc must use NAME=PATH, got {raw!r}")
+        name, path = raw.split("=", 1)
+        sources.append(TRCSource(safe_system_name(name), Path(path).expanduser()))
+
+    seen = set()
+    for source in sources:
+        source.name = safe_system_name(source.name)
+        if source.name in seen:
+            raise ValueError(f"Duplicate TRC system name: {source.name}")
+        if source.name in DEFAULT_SYSTEMS:
+            raise ValueError(f"TRC source name cannot shadow an existing system: {source.name}")
+        if source.name in XSENS_SYSTEMS:
+            raise ValueError(f"TRC source name cannot shadow Xsens system: {source.name}")
+        if not source.path.is_file():
+            raise FileNotFoundError(f"TRC file not found for {source.name}: {source.path}")
+        seen.add(source.name)
+    return sources
 
 
 def threshold_factor(k: int, key: str) -> float:
@@ -305,6 +379,169 @@ def original_timestamp_diagnostics(npz_path: Path) -> Dict[str, float | int]:
         "diff_median_s": float(np.nanmedian(diffs)) if len(diffs) else math.nan,
         "diff_max_s": float(np.nanmax(diffs)) if len(diffs) else math.nan,
     }
+
+
+def load_trc(
+    trc_path: Path,
+) -> Tuple[np.ndarray, List[str], np.ndarray, float, str]:
+    """Parse a TRC file into timestamps, marker names, and marker positions."""
+    with trc_path.open("r", encoding="utf-8") as handle:
+        lines = handle.readlines()
+    if len(lines) < 7:
+        raise ValueError(f"TRC file is too short: {trc_path}")
+
+    header_values = lines[2].strip().split("\t")
+    if len(header_values) < 5:
+        header_values = lines[2].strip().split()
+    fps = float(header_values[0])
+    num_markers = int(header_values[3])
+    units = header_values[4]
+
+    raw_names = lines[3].rstrip("\n").split("\t")[2:]
+    marker_names = [name.strip() for name in raw_names if name.strip()]
+    if len(marker_names) != num_markers:
+        fallback = lines[3].strip().split()[2:]
+        marker_names = [name.strip() for name in fallback if name.strip()]
+    if len(marker_names) != num_markers:
+        raise ValueError(
+            f"Marker count mismatch in {trc_path}: header={num_markers}, parsed={len(marker_names)}"
+        )
+
+    timestamps: List[float] = []
+    frames: List[List[float]] = []
+    expected_coord_count = num_markers * 3
+    for line in lines[6:]:
+        if not line.strip():
+            continue
+        values = line.rstrip("\n").split("\t")
+        if len(values) < 2:
+            values = line.strip().split()
+        timestamps.append(float(values[1]))
+        coords_raw = values[2:]
+        if len(coords_raw) < expected_coord_count:
+            coords_raw = coords_raw + [""] * (expected_coord_count - len(coords_raw))
+        coords = [float(value) if value != "" else np.nan for value in coords_raw[:expected_coord_count]]
+        frames.append(coords)
+
+    positions = np.asarray(frames, dtype=np.float64).reshape(-1, num_markers, 3)
+    return np.asarray(timestamps, dtype=np.float64), marker_names, positions, fps, units
+
+
+def unit_scale_to_cm(units: str) -> float:
+    """Return the multiplicative scale that converts TRC units to centimeters."""
+    normalized = units.strip().lower()
+    if normalized == "cm":
+        return 1.0
+    if normalized == "mm":
+        return 0.1
+    if normalized in {"m", "meter", "meters", "metre", "metres"}:
+        return 100.0
+    raise ValueError(f"Unsupported TRC unit {units!r}; expected mm, cm, or m.")
+
+
+def trc_markers_to_coco17(marker_names: List[str], positions_cm: np.ndarray) -> Tuple[np.ndarray, List[str], List[str]]:
+    """Map TRC marker positions into the COCO-17 keypoint order."""
+    name_to_idx = {name: idx for idx, name in enumerate(marker_names)}
+    keypoints = np.full((positions_cm.shape[0], len(COCO17_JOINT_NAMES), 3), np.nan, dtype=np.float64)
+    mapped: List[str] = []
+    missing: List[str] = []
+    for marker_name, coco_idx in TRC_MARKER_TO_COCO17.items():
+        if marker_name not in name_to_idx:
+            missing.append(marker_name)
+            continue
+        keypoints[:, coco_idx, :] = positions_cm[:, name_to_idx[marker_name], :]
+        mapped.append(marker_name)
+    return keypoints, mapped, missing
+
+
+def interpolate_keypoints_to_time(
+    source_time: np.ndarray,
+    keypoints: np.ndarray,
+    target_time: np.ndarray,
+) -> np.ndarray:
+    """Interpolate keypoints from one timeline onto another timeline."""
+    out = np.full((len(target_time), keypoints.shape[1], keypoints.shape[2]), np.nan, dtype=np.float64)
+    source_time = np.asarray(source_time, dtype=np.float64)
+    if source_time.size == 0:
+        return out
+    source_time = source_time - source_time[0]
+    unique_time, unique_idx = np.unique(source_time, return_index=True)
+    unique_keypoints = keypoints[unique_idx]
+    query = np.asarray(target_time, dtype=np.float64)
+    for joint_idx in range(unique_keypoints.shape[1]):
+        for axis_idx in range(unique_keypoints.shape[2]):
+            values = unique_keypoints[:, joint_idx, axis_idx]
+            finite = np.isfinite(unique_time) & np.isfinite(values)
+            if np.count_nonzero(finite) < 2:
+                continue
+            interp = interp1d(
+                unique_time[finite],
+                values[finite],
+                kind="linear",
+                bounds_error=False,
+                fill_value=np.nan,
+                assume_sorted=True,
+            )
+            out[:, joint_idx, axis_idx] = interp(query)
+    return out
+
+
+def load_trc_keypoints_on_timeline(
+    source: TRCSource,
+    corrected_time: np.ndarray,
+    synced_meta: List[Dict[str, int | float]],
+    left_rows: List[Dict[str, float | int]],
+) -> Tuple[np.ndarray, Dict[str, object]]:
+    """Load one TRC source and align it to the corrected synced-video timeline."""
+    timestamps, marker_names, positions, fps, units = load_trc(source.path)
+    keypoints, mapped_markers, missing_joints = trc_markers_to_coco17(
+        marker_names,
+        positions * unit_scale_to_cm(units),
+    )
+    required_for_elbow = {"LShoulder", "LElbow", "LWrist", "RShoulder", "RElbow", "RWrist"}
+    missing_required = sorted(required_for_elbow.intersection(set(missing_joints)))
+    if missing_required:
+        raise RuntimeError(f"{source.name} TRC is missing elbow-chain markers: {missing_required}")
+
+    if len(keypoints) == len(corrected_time):
+        aligned = keypoints.copy()
+        mode = "synced_frame_index"
+        note = "TRC frame count matches the synced pose timeline; rows are aligned by index."
+    elif len(keypoints) == len(left_rows):
+        left_indices = np.asarray([int(row["left_idx"]) for row in synced_meta], dtype=np.int64)
+        if np.any(left_indices >= len(keypoints)):
+            raise RuntimeError(f"{source.name} TRC has fewer rows than synced left-frame indices require.")
+        aligned = keypoints[left_indices]
+        mode = "left_metadata_frame_index"
+        note = "TRC frame count matches left-camera metadata; synced left-frame indices select comparable rows."
+    else:
+        aligned = interpolate_keypoints_to_time(timestamps, keypoints, corrected_time)
+        mode = "trc_timestamp_interpolation"
+        note = (
+            "TRC frame count did not match synced pose or left metadata length; "
+            "TRC Time column was linearly interpolated onto the corrected timeline."
+        )
+
+    valid_joint_mask = np.isfinite(aligned).all(axis=2)
+    summary = {
+        "source_path": str(source.path),
+        "alignment_mode": mode,
+        "alignment_note": note,
+        "source_frame_count": int(len(keypoints)),
+        "aligned_frame_count": int(len(aligned)),
+        "source_fps": float(fps),
+        "input_units": units,
+        "output_units": "cm",
+        "mapped_marker_count": int(len(mapped_markers)),
+        "missing_coco17_joints": missing_joints,
+        "valid_left_elbow_chain_ratio": float(
+            np.mean(valid_joint_mask[:, [5, 7, 9]].all(axis=1))
+        ) if len(valid_joint_mask) else 0.0,
+        "valid_right_elbow_chain_ratio": float(
+            np.mean(valid_joint_mask[:, [6, 8, 10]].all(axis=1))
+        ) if len(valid_joint_mask) else 0.0,
+    }
+    return aligned, summary
 
 
 def load_offset(summary_path: Path, source: str, override: Optional[float]) -> float:
@@ -847,6 +1084,12 @@ def maybe_float(value: float) -> str:
     return f"{float(value):.6f}"
 
 
+def system_slug(name: str) -> str:
+    """Return a readable lower-case filename slug for a system name."""
+    slug = "".join(ch.lower() if ch.isalnum() else "_" for ch in name)
+    return "_".join(part for part in slug.split("_") if part)
+
+
 def write_single_system_csv(out_path: Path, time_s: np.ndarray, series: SystemSeries) -> None:
     """Write per-system angle/delta CSV."""
     fieldnames = [
@@ -892,14 +1135,14 @@ def write_combined_csv(
 ) -> None:
     """Write all systems on the shared video timeline."""
     fieldnames = ["Frame", "Time_s", "FrameDt_s", "StereoFrameId", "LeftVideoFrame", "RightVideoFrame"]
-    for system in SYSTEMS:
+    for system, series in series_by_name.items():
         for side in SIDES:
             fieldnames.extend([
                 f"{system}_{side}_deg",
                 f"{system}_{side}_valid",
                 f"{system}_{side}_interpolated",
             ])
-            for k in sorted(series_by_name[system].deltas):
+            for k in sorted(series.deltas):
                 fieldnames.extend([
                     f"{system}_{side}_delta_k{k}_deg",
                     f"{system}_{side}_delta_valid_k{k}",
@@ -944,11 +1187,14 @@ def build_summary(
         "config": {
             "skt_npz": str(Path(args.skt_npz)),
             "afh_npz": str(Path(args.afh_npz)),
+            "skip_afh": bool(args.skip_afh),
             "afh_filter_status": args.afh_filter_status,
             "afh_blocker_note": (
                 "Do not use AFH headline metrics as final Phase 4 numbers until an unfiltered AFH NPZ is available."
-                if args.afh_filter_status != "unfiltered" else None
+                if (not args.skip_afh and args.afh_filter_status != "unfiltered") else None
             ),
+            "external_trc_sources": getattr(args, "trc_source_summaries", {}),
+            "system_names": list(series_by_name.keys()),
             "xsens_fair": str(Path(args.xsens_fair)),
             "xsens_mvnx": str(Path(args.xsens_mvnx)),
             "xsens_offset_s": float(xsens_offset_s),
@@ -962,7 +1208,7 @@ def build_summary(
             "wrist_smooth_radius_frames": int(args.wrist_smooth_radius),
             "filter_policy": (
                 "XsensFair/XsensNative: no extra project smoothing after interpolation; "
-                "SKT/AFH: smooth angle sequence before delta calculation."
+                "all camera/vision systems: smooth angle sequence before delta calculation."
             ),
             "per_system_smoothing": {
                 system: series.smoothing
@@ -1014,12 +1260,14 @@ def build_summary(
             }
             for system, series in series_by_name.items()
         }
+        reference = series_by_name["XsensFair"]
         pairs = {
-            "SKT_vs_XsensFair": (series_by_name["SKT"], series_by_name["XsensFair"]),
-            "AFH_vs_XsensFair": (series_by_name["AFH"], series_by_name["XsensFair"]),
-            "SKT_vs_AFH": (series_by_name["SKT"], series_by_name["AFH"]),
-            "XsensNative_vs_XsensFair": (series_by_name["XsensNative"], series_by_name["XsensFair"]),
+            f"{system}_vs_XsensFair": (series, reference)
+            for system, series in series_by_name.items()
+            if system != "XsensFair"
         }
+        if "SKT" in series_by_name and "AFH" in series_by_name:
+            pairs["SKT_vs_AFH"] = (series_by_name["SKT"], series_by_name["AFH"])
         summary["motion_agreement"][side] = {}
         for pair_name, (target, reference) in pairs.items():
             summary["motion_agreement"][side][pair_name] = {
@@ -1062,36 +1310,60 @@ def main() -> None:
     args = parse_args()
     args.k_list = parse_k_frame_list(args.k_frame_list)
     args.anomaly_thresholds, args.active_thresholds, args.noise_thresholds = build_threshold_maps(args, args.k_list)
+    args.trc_sources = parse_trc_sources(args)
+    if args.skip_afh:
+        args.afh_filter_status = "not_included"
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     skt_payload = np.load(args.skt_npz, allow_pickle=True)
-    afh_payload = np.load(args.afh_npz, allow_pickle=True)
     skt_kp = np.asarray(skt_payload["keypoints"], dtype=np.float64)
-    afh_kp = np.asarray(afh_payload["keypoints"], dtype=np.float64)
-    if skt_kp.shape != afh_kp.shape:
-        raise RuntimeError(f"SKT keypoints {skt_kp.shape} and AFH keypoints {afh_kp.shape} do not match.")
+    method_keypoints: Dict[str, np.ndarray] = {"SKT": skt_kp}
+    if not args.skip_afh:
+        afh_payload = np.load(args.afh_npz, allow_pickle=True)
+        afh_kp = np.asarray(afh_payload["keypoints"], dtype=np.float64)
+        if skt_kp.shape != afh_kp.shape:
+            raise RuntimeError(f"SKT keypoints {skt_kp.shape} and AFH keypoints {afh_kp.shape} do not match.")
+        method_keypoints["AFH"] = afh_kp
 
     corrected_time, synced_meta = build_synced_video_timeline(Path(args.left_meta), Path(args.right_meta))
     corrected_time, synced_meta = truncate_to_pose_length(corrected_time, synced_meta, len(skt_kp))
+    left_rows = parse_stereo_meta(Path(args.left_meta))
+    trc_source_summaries: Dict[str, Dict[str, object]] = {}
+    for source in args.trc_sources:
+        keypoints, trc_summary = load_trc_keypoints_on_timeline(
+            source,
+            corrected_time=corrected_time,
+            synced_meta=synced_meta,
+            left_rows=left_rows,
+        )
+        method_keypoints[source.name] = keypoints
+        trc_source_summaries[source.name] = trc_summary
+    args.trc_source_summaries = trc_source_summaries
+
+    method_names = list(method_keypoints.keys())
     corrected_time, synced_meta, filtered_arrays, selected_indices = apply_time_window(
         corrected_time,
         synced_meta,
-        [skt_kp, afh_kp],
+        [method_keypoints[name] for name in method_names],
         args.start_time,
         args.end_time,
     )
-    skt_kp, afh_kp = filtered_arrays
+    method_keypoints = {
+        name: np.asarray(filtered_arrays[idx], dtype=np.float64)
+        for idx, name in enumerate(method_names)
+    }
     resolve_angle_smoothing_config(args, corrected_time)
     if args.enable_quality_filter:
-        skt_kp, quality_stats = apply_skt_quality_filter(
-            skt_kp,
+        filtered_skt, quality_stats = apply_skt_quality_filter(
+            method_keypoints["SKT"],
             skt_payload,
             selected_indices=selected_indices,
             min_triang_conf=args.quality_min_triang_conf,
             max_epipolar_px=args.quality_max_epipolar_px,
             max_reprojection_px=args.quality_max_reprojection_px,
         )
+        method_keypoints["SKT"] = filtered_skt
         args.quality_filter_stats = quality_stats
         print(f"[quality] SKT elbow-chain masked frames: {quality_stats}")
     else:
@@ -1108,15 +1380,20 @@ def main() -> None:
         f"({args.smooth_window_actual_ms:.1f} ms); Xsens extra smoothing=off; "
         f"wrist median radius={args.wrist_smooth_radius}"
     )
-    if args.afh_filter_status != "unfiltered":
+    if not args.skip_afh and args.afh_filter_status != "unfiltered":
         print(f"[warning] AFH filter status is {args.afh_filter_status}; exclude AFH from final Phase 4 headline claims.")
+    for source_name, trc_summary in trc_source_summaries.items():
+        print(
+            f"[trc] {source_name}: frames={trc_summary['source_frame_count']} "
+            f"mode={trc_summary['alignment_mode']} path={trc_summary['source_path']}"
+        )
 
     raw_angles = {
-        "SKT": compute_pose_elbow_angles(skt_kp, wrist_smooth_radius=args.wrist_smooth_radius),
-        "AFH": compute_pose_elbow_angles(afh_kp, wrist_smooth_radius=args.wrist_smooth_radius),
-        "XsensFair": build_xsens_fair_angles(Path(args.xsens_fair), corrected_time, xsens_offset_s),
-        "XsensNative": build_xsens_native_angles(Path(args.xsens_mvnx), corrected_time, xsens_offset_s),
+        name: compute_pose_elbow_angles(keypoints, wrist_smooth_radius=args.wrist_smooth_radius)
+        for name, keypoints in method_keypoints.items()
     }
+    raw_angles["XsensFair"] = build_xsens_fair_angles(Path(args.xsens_fair), corrected_time, xsens_offset_s)
+    raw_angles["XsensNative"] = build_xsens_native_angles(Path(args.xsens_mvnx), corrected_time, xsens_offset_s)
     series_by_name = {
         name: build_system_series(
             name=name,
@@ -1134,14 +1411,8 @@ def main() -> None:
         for name, angles in raw_angles.items()
     }
 
-    file_map = {
-        "SKT": "elbow_angles_skt.csv",
-        "AFH": "elbow_angles_afh.csv",
-        "XsensFair": "elbow_angles_xsens_fair.csv",
-        "XsensNative": "elbow_angles_xsens_native.csv",
-    }
     for name, series in series_by_name.items():
-        write_single_system_csv(out_dir / file_map[name], corrected_time, series)
+        write_single_system_csv(out_dir / f"elbow_angles_{system_slug(name)}.csv", corrected_time, series)
     write_combined_csv(out_dir / "elbow_delta_combined.csv", corrected_time, synced_meta, series_by_name)
 
     summary = build_summary(
@@ -1160,13 +1431,17 @@ def main() -> None:
     for side in SIDES:
         for k in args.k_list:
             key = k_key(k)
-            skt_pair = summary["motion_agreement"][side]["SKT_vs_XsensFair"][key]
-            afh_pair = summary["motion_agreement"][side]["AFH_vs_XsensFair"][key]
-            print(
-                f"[{side} {key}] SKT Pearson={skt_pair['pearson_delta']} "
-                f"slope={skt_pair['slope_target_vs_reference']} path_ratio={skt_pair['path_ratio_target_reference']}; "
-                f"AFH Pearson={afh_pair['pearson_delta']} slope={afh_pair['slope_target_vs_reference']}"
-            )
+            metrics_text = []
+            for pair_name, pair_items in summary["motion_agreement"][side].items():
+                if not pair_name.endswith("_vs_XsensFair"):
+                    continue
+                pair = pair_items[key]
+                metrics_text.append(
+                    f"{pair_name}: Pearson={pair['pearson_delta']} "
+                    f"slope={pair['slope_target_vs_reference']} "
+                    f"path_ratio={pair['path_ratio_target_reference']}"
+                )
+            print(f"[{side} {key}] " + "; ".join(metrics_text))
 
     if not args.skip_plots:
         run_plot_script(out_dir)

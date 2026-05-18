@@ -18,20 +18,24 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 SIDES = ("LeftElbow", "RightElbow")
-SYSTEMS = ("SKT", "AFH", "XsensFair", "XsensNative")
-TARGET_SYSTEMS = ("SKT", "AFH", "XsensNative")
+DEFAULT_SYSTEM_ORDER = ("SKT", "FastSAM3D", "Merge", "AFH", "XsensFair", "XsensNative")
 COLORS = {
     "SKT": "#ff7a18",
+    "FastSAM3D": "#009688",
+    "Merge": "#8e44ad",
     "AFH": "#2196F3",
     "XsensFair": "#43a047",
     "XsensNative": "#70757f",
 }
 LABELS = {
     "SKT": "01 SKT stereo",
+    "FastSAM3D": "FastSAM3D unfiltered",
+    "Merge": "ViscandoXFastSAM3D Merge",
     "AFH": "04 AFH hybrid",
     "XsensFair": "Xsens-derived reference",
     "XsensNative": "Xsens native",
 }
+FALLBACK_COLORS = ("#d81b60", "#00acc1", "#fdd835", "#6d4c41", "#5e35b1", "#546e7a")
 
 
 def parse_args() -> argparse.Namespace:
@@ -89,6 +93,31 @@ def load_combined_csv(path: Path) -> Dict[str, np.ndarray]:
         else:
             data[key] = np.array([as_float(v) for v in values], dtype=np.float64)
     return data
+
+
+def infer_systems(data: Dict[str, np.ndarray]) -> List[str]:
+    """Infer available systems from combined CSV angle columns."""
+    suffix = "_LeftElbow_deg"
+    systems = [key[: -len(suffix)] for key in data if key.endswith(suffix)]
+    order = {name: idx for idx, name in enumerate(DEFAULT_SYSTEM_ORDER)}
+    return sorted(systems, key=lambda item: (order.get(item, len(order)), item))
+
+
+def target_systems(system_names: List[str]) -> List[str]:
+    """Return systems compared against XsensFair."""
+    return [system for system in system_names if system != "XsensFair"]
+
+
+def color_for(system: str) -> str:
+    """Return a stable color for a system."""
+    if system in COLORS:
+        return COLORS[system]
+    return FALLBACK_COLORS[sum(ord(ch) for ch in system) % len(FALLBACK_COLORS)]
+
+
+def label_for(system: str) -> str:
+    """Return a readable label for a system."""
+    return LABELS.get(system, system)
 
 
 def parse_bins(raw: str) -> List[float]:
@@ -329,7 +358,7 @@ def segment_stats(
     }
 
 
-def build_segment_rows(data: Dict[str, np.ndarray], args: argparse.Namespace) -> List[Dict[str, object]]:
+def build_segment_rows(data: Dict[str, np.ndarray], args: argparse.Namespace, system_names: List[str]) -> List[Dict[str, object]]:
     """Detect segments and compute per-system ROM rows."""
     time_s = data["Time_s"]
     rows: List[Dict[str, object]] = []
@@ -354,7 +383,7 @@ def build_segment_rows(data: Dict[str, np.ndarray], args: argparse.Namespace) ->
                 "End_s": float(time_s[end]),
                 "Duration_s": float(time_s[end] - time_s[start]),
             }
-            for system in SYSTEMS:
+            for system in system_names:
                 stats = segment_stats(
                     time_s=time_s,
                     angle=data[f"{system}_{side}_deg"],
@@ -368,11 +397,11 @@ def build_segment_rows(data: Dict[str, np.ndarray], args: argparse.Namespace) ->
     return rows
 
 
-def write_segment_csv(path: Path, rows: List[Dict[str, object]]) -> None:
+def write_segment_csv(path: Path, rows: List[Dict[str, object]], system_names: List[str]) -> None:
     """Write segment rows to CSV."""
     base = ["SegmentID", "Side", "StartFrame", "EndFrame", "Start_s", "End_s", "Duration_s"]
     metrics = ("rom_deg", "peak_deg", "trough_deg", "peak_time_s", "trough_time_s", "valid_frame_ratio")
-    fieldnames = base + [f"{system}_{metric}" for system in SYSTEMS for metric in metrics]
+    fieldnames = base + [f"{system}_{metric}" for system in system_names for metric in metrics]
     with path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=fieldnames)
         writer.writeheader()
@@ -391,6 +420,7 @@ def build_segment_dtw_rows(
     data: Dict[str, np.ndarray],
     segment_rows: List[Dict[str, object]],
     preprocess: str,
+    target_system_names: List[str],
 ) -> List[Dict[str, object]]:
     """Compute per-segment DTW shape distances against XsensFair."""
     frame_to_idx = {int(frame): idx for idx, frame in enumerate(data["Frame"])}
@@ -404,7 +434,7 @@ def build_segment_dtw_rows(
         reference_raw = data[f"XsensFair_{side}_deg"][start_idx:end_idx + 1]
         reference_seq = prepare_dtw_sequence(reference_raw, preprocess)
         reference_valid = int(np.sum(np.isfinite(reference_raw)))
-        for system in TARGET_SYSTEMS:
+        for system in target_system_names:
             target_raw = data[f"{system}_{side}_deg"][start_idx:end_idx + 1]
             target_seq = prepare_dtw_sequence(target_raw, preprocess)
             target_valid = int(np.sum(np.isfinite(target_raw)))
@@ -517,12 +547,12 @@ def confusion_summary(target: np.ndarray, reference: np.ndarray, bins: List[floa
     }
 
 
-def dtw_agreement_summary(dtw_rows: List[Dict[str, object]]) -> Dict[str, object]:
+def dtw_agreement_summary(dtw_rows: List[Dict[str, object]], target_system_names: List[str]) -> Dict[str, object]:
     """Summarize per-segment DTW distances by side and pair."""
     summary: Dict[str, object] = {}
     for side in SIDES:
         summary[side] = {}
-        for system in TARGET_SYSTEMS:
+        for system in target_system_names:
             pair = f"{system}_vs_XsensFair"
             values = np.asarray(
                 [
@@ -551,6 +581,8 @@ def agreement_summary(
     dtw_rows: List[Dict[str, object]],
     args: argparse.Namespace,
     bins: List[float],
+    system_names: List[str],
+    target_system_names: List[str],
 ) -> Dict[str, object]:
     """Summarize ROM, peak, and RULA-bin agreement by side and pair."""
     summary: Dict[str, object] = {
@@ -566,11 +598,13 @@ def agreement_summary(
             "dtw_preprocess": args.dtw_preprocess,
             "dtw_distance": "absolute-cost DTW on per-segment elbow-angle sequences",
             "dtw_distance_normalized": "DTW cumulative cost divided by warping-path length",
+            "system_names": system_names,
+            "target_system_names": target_system_names,
         },
         "segments_count": {},
         "rom_agreement": {},
         "rula_bin_agreement": {},
-        "dtw_shape_agreement": dtw_agreement_summary(dtw_rows),
+        "dtw_shape_agreement": dtw_agreement_summary(dtw_rows, target_system_names),
     }
     for side in SIDES:
         side_rows = [row for row in rows if row["Side"] == side]
@@ -579,7 +613,7 @@ def agreement_summary(
         ref_peak = row_values(rows, side, "XsensFair", "peak_deg")
         summary["rom_agreement"][side] = {}
         summary["rula_bin_agreement"][side] = {}
-        for system in TARGET_SYSTEMS:
+        for system in target_system_names:
             target_rom = row_values(rows, side, system, "rom_deg")
             target_peak = row_values(rows, side, system, "peak_deg")
             rom_f, ref_rom_f = finite_pair(target_rom, ref_rom)
@@ -602,7 +636,13 @@ def agreement_summary(
     return rounded(summary)
 
 
-def plot_segments_timeline(data: Dict[str, np.ndarray], rows: List[Dict[str, object]], side: str, out_dir: Path) -> None:
+def plot_segments_timeline(
+    data: Dict[str, np.ndarray],
+    rows: List[Dict[str, object]],
+    side: str,
+    out_dir: Path,
+    system_names: List[str],
+) -> None:
     """Plot elbow angle timeline with detected activity spans."""
     time_s = data["Time_s"]
     fig, ax = plt.subplots(figsize=(13, 5.2))
@@ -611,8 +651,8 @@ def plot_segments_timeline(data: Dict[str, np.ndarray], rows: List[Dict[str, obj
             continue
         ax.axvspan(float(row["Start_s"]), float(row["End_s"]), color="#9e9e9e", alpha=0.18)
         ax.text(float(row["Start_s"]), 176, str(row["SegmentID"]), fontsize=8, color="#555555", rotation=90)
-    for system in SYSTEMS:
-        ax.plot(time_s, data[f"{system}_{side}_deg"], color=COLORS[system], linewidth=1.2, label=LABELS[system])
+    for system in system_names:
+        ax.plot(time_s, data[f"{system}_{side}_deg"], color=color_for(system), linewidth=1.2, label=label_for(system))
     ax.set_title(f"{side} activity segments and elbow angles", fontsize=13, weight="bold")
     ax.set_xlabel("Time (s)")
     ax.set_ylabel("Elbow angle (deg)")
@@ -624,18 +664,18 @@ def plot_segments_timeline(data: Dict[str, np.ndarray], rows: List[Dict[str, obj
     plt.close(fig)
 
 
-def plot_rom_scatter(rows: List[Dict[str, object]], side: str, out_dir: Path) -> None:
+def plot_rom_scatter(rows: List[Dict[str, object]], side: str, out_dir: Path, target_system_names: List[str]) -> None:
     """Plot per-segment ROM scatter against XsensFair."""
     side_rows = [row for row in rows if row["Side"] == side]
     fig, ax = plt.subplots(figsize=(6.2, 5.8))
     max_val = 20.0
     ref = np.asarray([float(row["XsensFair_rom_deg"]) for row in side_rows], dtype=np.float64)
-    for system in ("SKT", "AFH", "XsensNative"):
+    for system in target_system_names:
         target = np.asarray([float(row[f"{system}_rom_deg"]) for row in side_rows], dtype=np.float64)
         x, y = finite_pair(ref, target)
         if len(x):
             max_val = max(max_val, float(np.nanmax(np.r_[x, y])))
-        ax.scatter(x, y, s=45, alpha=0.75, color=COLORS[system], label=LABELS[system])
+        ax.scatter(x, y, s=45, alpha=0.75, color=color_for(system), label=label_for(system))
     for row in side_rows:
         if math.isfinite(float(row["XsensFair_rom_deg"])):
             ax.text(float(row["XsensFair_rom_deg"]), float(row["XsensFair_rom_deg"]), str(row["SegmentID"]), fontsize=7)
@@ -653,7 +693,7 @@ def plot_rom_scatter(rows: List[Dict[str, object]], side: str, out_dir: Path) ->
     plt.close(fig)
 
 
-def plot_rom_bars(rows: List[Dict[str, object]], side: str, out_dir: Path) -> None:
+def plot_rom_bars(rows: List[Dict[str, object]], side: str, out_dir: Path, system_names: List[str]) -> None:
     """Plot grouped ROM bars per activity segment."""
     side_rows = [row for row in rows if row["Side"] == side]
     if not side_rows:
@@ -661,10 +701,10 @@ def plot_rom_bars(rows: List[Dict[str, object]], side: str, out_dir: Path) -> No
     x = np.arange(len(side_rows))
     width = 0.18
     fig, ax = plt.subplots(figsize=(max(9, len(side_rows) * 0.75), 5.2))
-    offsets = np.linspace(-1.5 * width, 1.5 * width, len(SYSTEMS))
-    for offset, system in zip(offsets, SYSTEMS):
+    offsets = np.linspace(-1.5 * width, 1.5 * width, len(system_names))
+    for offset, system in zip(offsets, system_names):
         values = [float(row[f"{system}_rom_deg"]) for row in side_rows]
-        ax.bar(x + offset, values, width=width, color=COLORS[system], label=LABELS[system], alpha=0.88)
+        ax.bar(x + offset, values, width=width, color=color_for(system), label=label_for(system), alpha=0.88)
     ax.set_xticks(x)
     ax.set_xticklabels([str(row["SegmentID"]) for row in side_rows], rotation=45)
     ax.set_title(f"{side} segment ROM by system", fontsize=13, weight="bold")
@@ -677,11 +717,19 @@ def plot_rom_bars(rows: List[Dict[str, object]], side: str, out_dir: Path) -> No
     plt.close(fig)
 
 
-def plot_rula_confusion(summary: Dict[str, object], side: str, out_dir: Path) -> None:
-    """Plot RULA-like confusion matrices for SKT and AFH."""
-    pairs = ("SKT_vs_XsensFair", "AFH_vs_XsensFair")
-    fig, axes = plt.subplots(1, 2, figsize=(9.5, 4.2))
-    for ax, pair in zip(axes, pairs):
+def plot_rula_confusion(
+    summary: Dict[str, object],
+    side: str,
+    out_dir: Path,
+    target_system_names: List[str],
+) -> None:
+    """Plot RULA-like confusion matrices for every target system."""
+    pairs = [f"{system}_vs_XsensFair" for system in target_system_names]
+    if not pairs:
+        return
+    fig_width = max(4.8, 4.6 * len(pairs))
+    fig, axes = plt.subplots(1, len(pairs), figsize=(fig_width, 4.2), squeeze=False)
+    for ax, pair in zip(axes.ravel(), pairs):
         matrix = np.asarray(summary["rula_bin_agreement"][side][pair]["confusion_matrix"], dtype=int)
         im = ax.imshow(matrix, cmap="YlGnBu")
         for (row, col), value in np.ndenumerate(matrix):
@@ -748,20 +796,24 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
     bins = parse_bins(args.rula_bins)
     data = load_combined_csv(Path(args.combined_csv))
-    rows = build_segment_rows(data, args)
-    dtw_rows = build_segment_dtw_rows(data, rows, args.dtw_preprocess)
-    summary = agreement_summary(rows, dtw_rows, args, bins)
-    write_segment_csv(out_dir / "segment_rom.csv", rows)
+    system_names = infer_systems(data)
+    if "XsensFair" not in system_names:
+        raise RuntimeError("Combined CSV must contain XsensFair angle columns for segment detection.")
+    target_system_names = target_systems(system_names)
+    rows = build_segment_rows(data, args, system_names)
+    dtw_rows = build_segment_dtw_rows(data, rows, args.dtw_preprocess, target_system_names)
+    summary = agreement_summary(rows, dtw_rows, args, bins, system_names, target_system_names)
+    write_segment_csv(out_dir / "segment_rom.csv", rows, system_names)
     write_segment_dtw_csv(out_dir / "segment_dtw.csv", dtw_rows)
     (out_dir / "segment_rom_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
 
     if not args.skip_plots:
         plt.style.use("seaborn-v0_8-whitegrid")
         for side in SIDES:
-            plot_segments_timeline(data, rows, side, out_dir)
-            plot_rom_scatter(rows, side, out_dir)
-            plot_rom_bars(rows, side, out_dir)
-            plot_rula_confusion(summary, side, out_dir)
+            plot_segments_timeline(data, rows, side, out_dir, system_names)
+            plot_rom_scatter(rows, side, out_dir, target_system_names)
+            plot_rom_bars(rows, side, out_dir, system_names)
+            plot_rula_confusion(summary, side, out_dir, target_system_names)
     write_plot_index(out_dir, rows, summary)
 
     print("[saved]", out_dir / "segment_rom.csv")

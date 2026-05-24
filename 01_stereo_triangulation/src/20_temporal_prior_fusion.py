@@ -36,6 +36,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--bad-blend", type=float, default=0.65, help="Blend weight toward aligned prior for bad joints.")
     parser.add_argument("--good-blend", type=float, default=0.0, help="Blend weight toward aligned prior for good joints.")
     parser.add_argument("--min-align-joints", type=int, default=5, help="Minimum reliable joints for per-frame alignment.")
+    parser.add_argument(
+        "--prior-already-on-skt-timeline",
+        action="store_true",
+        help="Use prior keypoints/timestamps directly instead of interpolating with the SKT NPZ timestamps.",
+    )
     return parser.parse_args()
 
 
@@ -226,7 +231,19 @@ def main() -> None:
     prior_keypoints = np.asarray(prior_data["keypoints"], dtype=np.float64)
     prior_timestamps = np.asarray(prior_data["timestamps"], dtype=np.float64)
 
-    prior_on_skt_timeline = interpolate_keypoints(prior_timestamps, prior_keypoints, skt_timestamps)
+    if args.prior_already_on_skt_timeline:
+        if len(prior_keypoints) != len(skt_keypoints):
+            raise RuntimeError(
+                "Prior is marked as already aligned, but frame counts differ: "
+                f"prior={len(prior_keypoints)}, skt={len(skt_keypoints)}"
+            )
+        prior_on_skt_timeline = prior_keypoints.copy()
+        target_timestamps = prior_timestamps.copy()
+        timeline_mode = "prior_already_on_skt_timeline"
+    else:
+        prior_on_skt_timeline = interpolate_keypoints(prior_timestamps, prior_keypoints, skt_timestamps)
+        target_timestamps = skt_timestamps.copy()
+        timeline_mode = "interpolated_to_skt_npz_timestamps"
     bad_joint_mask, quality_observed = build_bad_joint_mask(
         skt_data,
         skt_keypoints.shape[:2],
@@ -251,6 +268,8 @@ def main() -> None:
     )
 
     payload = {key: skt_data[key] for key in skt_data.files}
+    payload["timestamps_original_before_temporal_prior"] = skt_timestamps
+    payload["timestamps"] = target_timestamps
     payload["keypoints"] = fused_keypoints
     payload["keypoints_skt_before_temporal_prior"] = skt_keypoints
     payload["temporal_prior_keypoints_interpolated"] = prior_on_skt_timeline
@@ -259,6 +278,7 @@ def main() -> None:
     payload["temporal_prior_blend_weight"] = blend_weight
     payload["temporal_prior_alignment_support"] = alignment_support
     payload["temporal_prior_source"] = np.array(str(args.prior))
+    payload["temporal_prior_timeline_mode"] = np.array(timeline_mode)
     payload["postprocess_variant"] = np.array("skt_plus_similarity_aligned_temporal_prior")
 
     args.output.parent.mkdir(parents=True, exist_ok=True)

@@ -571,3 +571,69 @@
   - `03_mono_motionbert/results_mono/skeleton_comparison_dirC.mp4`
 - Created Direction B interactive point-cloud viewer:
   - `02_dense_stereo_sgbm/results/interactive_pointcloud.html`
+
+## 2026-05-25 — SKT Mature-Model / Skeleton-Prior Experiments
+
+Snapshot before experiments: `04ac905 chore: snapshot before skeleton-prior experiments`.
+
+### Priority 1: SMPL / SMPL-X Body-Model Prior
+
+- Status: blocked in the current local environment.
+- Missing Python packages: `smplx`, `human_body_prior`, `pytorch3d`.
+- No local SMPL / SMPL-X body model assets were found under the project, sibling folders, Downloads, or cache paths.
+- Interpretation: still conceptually the strongest skeleton/body prior, but cannot be run responsibly without dependencies and licensed model files.
+
+### Priority 2: MotionBERT / VideoPose3D Temporal Prior
+
+- Status: not immediately runnable from the current checkout.
+- Historical `03_mono_motionbert` entries exist in git history.
+- The core `RTMDet-MotionBert-OpenSim` path was a deleted git submodule / gitlink, not a normal tracked source directory.
+- Interpretation: still a strong medium-term route, but it needs external dependency recovery or a clean setup before evaluation.
+
+### Priority 3: FastSAM3D Unfiltered Prior Fusion
+
+- Status: implemented and smoke-evaluated.
+- Added `01_stereo_triangulation/src/23_convert_trc_to_prior_npz.py`.
+- Updated `01_stereo_triangulation/src/20_temporal_prior_fusion.py` with `--prior-already-on-skt-timeline`.
+- Input prior: `../10 Aitor/fastsam3d_2.trc` (`12.5 Hz`, `3015` frames, `mm`).
+- Prior alignment mode: `left_metadata_frame_index`.
+- Prior NPZ: `01_stereo_triangulation/results/skt_model_fusion/fastsam3d_unfiltered_prior.npz`.
+- Fused NPZ: `01_stereo_triangulation/results/skt_model_fusion/fastsam_prior_fusion/skt_fastsam_prior_fused.npz`.
+- Repaired / blended joint-frame count: `11994`.
+- Median alignment support: `13` joints.
+
+Common-valid-frame summary:
+
+| Comparison | Side | K | Metric | Original SKT | SKT + FastSAM3D Prior |
+|---|---:|---:|---|---:|---:|
+| vs XsensFair | Left | 1 | Pearson | 0.177 | 0.216 |
+| vs XsensFair | Left | 1 | RMSE deg | 8.96 | 8.45 |
+| vs XsensFair | Left | 1 | high delta count | 40 | 21 |
+| vs XsensFair | Left | 6 | Pearson | 0.310 | 0.384 |
+| vs XsensFair | Left | 6 | RMSE deg | 24.94 | 22.04 |
+| vs XsensFair | Left | 6 | high delta count | 441 | 410 |
+| vs XsensFair | Right | 1 | Pearson | 0.172 | 0.193 |
+| vs XsensFair | Right | 1 | RMSE deg | 9.24 | 8.97 |
+| vs XsensFair | Right | 1 | high delta count | 39 | 29 |
+| vs XsensFair | Right | 6 | Pearson | 0.282 | 0.328 |
+| vs XsensFair | Right | 6 | RMSE deg | 27.39 | 25.48 |
+| vs XsensFair | Right | 6 | high delta count | 489 | 480 |
+| vs FastSAM3D | Left | 1 | Pearson | 0.139 | 0.269 |
+| vs FastSAM3D | Left | 1 | RMSE deg | 9.18 | 8.29 |
+| vs FastSAM3D | Left | 1 | high delta count | 40 | 21 |
+| vs FastSAM3D | Left | 6 | Pearson | 0.257 | 0.402 |
+| vs FastSAM3D | Left | 6 | RMSE deg | 25.93 | 21.96 |
+| vs FastSAM3D | Left | 6 | high delta count | 465 | 430 |
+| vs FastSAM3D | Right | 1 | Pearson | 0.140 | 0.202 |
+| vs FastSAM3D | Right | 1 | RMSE deg | 9.48 | 8.98 |
+| vs FastSAM3D | Right | 1 | high delta count | 43 | 30 |
+| vs FastSAM3D | Right | 6 | Pearson | 0.254 | 0.351 |
+| vs FastSAM3D | Right | 6 | RMSE deg | 28.44 | 25.48 |
+| vs FastSAM3D | Right | 6 | high delta count | 539 | 529 |
+
+Interpretation:
+
+- FastSAM3D prior fusion gives a consistent but moderate improvement on common valid frames.
+- The clearest gain is fewer K=1 high-delta outliers and higher K=6 motion-trend agreement.
+- It does not close the gap to standalone FastSAM3D, so this should be treated as an auxiliary stabilization experiment rather than a final solution.
+- Since Xsens is a comparison system, report this as improved agreement with an Xsens-derived reference, not improved accuracy against ground truth.

@@ -1,4 +1,4 @@
-"""Estimate a constant EasyErgo-to-stereo rotation for AFH1 v1."""
+"""Estimate a constant EasyErgo-to-stereo rotation for FastSAM3D v1."""
 
 from __future__ import annotations
 
@@ -10,9 +10,9 @@ from scipy.interpolate import interp1d
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-AFH1_DIR = SCRIPT_DIR.parent
-PROJECT_ROOT = AFH1_DIR.parent
-RESULTS_DIR = AFH1_DIR / "results"
+FASTSAM3D_DIR = SCRIPT_DIR.parent
+PROJECT_ROOT = FASTSAM3D_DIR.parent
+RESULTS_DIR = FASTSAM3D_DIR / "results"
 
 STEREO_POSE_NPZ = (
     PROJECT_ROOT
@@ -35,7 +35,7 @@ DEFAULT_STEREO_TO_XSENS_OFFSET_S = 17.25
 
 
 def append_experiment_log(message: str) -> None:
-    """Append one line to the AFH1 experiment log."""
+    """Append one line to the FastSAM3D experiment log."""
     with EXPERIMENT_LOG.open("a", encoding="utf-8") as handle:
         handle.write(f"- {message}\n")
 
@@ -164,7 +164,7 @@ def main() -> None:
         json.dump(payload, handle, indent=2)
 
     append_experiment_log(
-        "Calibrated AFH1 constant rotation using shoulders+hips over the first "
+        "Calibrated FastSAM3D constant rotation using shoulders+hips over the first "
         f"{CALIB_WINDOW_SEC:.1f}s ({len(frame_indices)} frames, mean residual "
         f"{payload['residual_cm_mean']:.2f} cm)."
     )

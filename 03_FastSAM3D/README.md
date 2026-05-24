@@ -1,6 +1,6 @@
-# Direction 04: EasyErgo Final MVNX
+# Direction 03: FastSAM3D / EasyErgo Hybrid Pose
 
-This directory is now trimmed to the retained Direction 04 path only:
+This directory keeps the retained FastSAM3D / EasyErgo pose branch:
 
 - Input: EasyErgo final `*.mvnx`
 - Output: fair-angle evaluation against Xsens
@@ -8,7 +8,8 @@ This directory is now trimmed to the retained Direction 04 path only:
 
 ## Retained Scope
 
-Only the final MVNX branch is kept as the active implementation.
+The active implementation is the retained FastSAM3D / EasyErgo branch plus the
+core hybrid skeleton used by the motion-level elbow evaluation.
 
 Execution order:
 
@@ -20,7 +21,9 @@ Execution order:
 - `src/03_render_final_mvnx_video.py`
   - Optional visualization entry for the retained final MVNX output
 
-Earlier AFH1 variants, trunk-only hybrids, OpenSim-side comparisons, and elbow-only exploratory branches were removed from this workspace to keep Direction 04 focused.
+Earlier v2 variants, trunk-only hybrids, OpenSim-side comparisons, and point-cloud
+diagnostics were moved to `archive_intermediate_20260520/` to keep this folder
+focused.
 
 ## Input Files
 
@@ -28,7 +31,10 @@ Place the downloaded EasyErgo final export here:
 
 - `data/easyergo_uploaded/*.mvnx`
 
-The current kept dataset also includes the original TRC / MOT / OSIM downloads, but they are no longer part of the active Direction 04 evaluation path.
+The current kept dataset may still include original TRC / MOT / OSIM downloads,
+but they are no longer part of the active FastSAM3D evaluation path.
+Large uploaded AVI files were moved to `archive_intermediate_20260520/` because
+they are only needed for optional video rendering.
 
 ## Retained Timing Mapping
 
@@ -55,17 +61,17 @@ The retained outputs are:
 Evaluation:
 
 ```bash
-/opt/anaconda3/envs/pose/bin/python 04_hybrid_afh1/src/01_evaluate_final_mvnx.py
+/opt/anaconda3/envs/pose/bin/python 03_FastSAM3D/src/01_evaluate_final_mvnx.py
 ```
 
 Timing diagnosis:
 
 ```bash
-/opt/anaconda3/envs/pose/bin/python 04_hybrid_afh1/src/02_diagnose_final_mvnx_timing.py
+/opt/anaconda3/envs/pose/bin/python 03_FastSAM3D/src/02_diagnose_final_mvnx_timing.py
 ```
 
 Video:
 
 ```bash
-/opt/anaconda3/envs/pose/bin/python 04_hybrid_afh1/src/03_render_final_mvnx_video.py
+/opt/anaconda3/envs/pose/bin/python 03_FastSAM3D/src/03_render_final_mvnx_video.py
 ```

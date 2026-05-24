@@ -58,7 +58,7 @@ DEFAULT_SKT_NPZ = (
     / "recovered_baseline"
     / "optimized_pose.npz"
 )
-DEFAULT_AFH_NPZ = PROJECT_ROOT / "04_hybrid_afh1" / "results" / "hybrid_skeleton_afh1_v1.npz"
+DEFAULT_AFH_NPZ = PROJECT_ROOT / "03_FastSAM3D" / "results" / "hybrid_skeleton_afh1_v1.npz"
 DEFAULT_OUTPUT_DIR = METHOD_DIR / "results" / "manual_agreement"
 
 # ---------------------------------------------------------------------------

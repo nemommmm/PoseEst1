@@ -13,10 +13,10 @@ import numpy as np
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-AFH1_DIR = SCRIPT_DIR.parent
-INPUT_DIR = AFH1_DIR / "data" / "easyergo_uploaded"
+FASTSAM3D_DIR = SCRIPT_DIR.parent
+INPUT_DIR = FASTSAM3D_DIR / "data" / "easyergo_uploaded"
 DEFAULT_TRC_PATH = INPUT_DIR / "markers_easyergo.trc"
-RESULTS_DIR = AFH1_DIR / "results"
+RESULTS_DIR = FASTSAM3D_DIR / "results"
 JSON_OUT = RESULTS_DIR / "easyergo_trc_inspection.json"
 MD_OUT = RESULTS_DIR / "easyergo_trc_inspection.md"
 

@@ -1,4 +1,4 @@
-"""Marker mapping configuration for AFH1 EasyErgo inputs."""
+"""Marker mapping configuration for FastSAM3D EasyErgo inputs."""
 
 from __future__ import annotations
 

@@ -141,6 +141,7 @@ celerybeat.pid
 # Environments
 .env
 .envrc
+.conda/
 .venv
 env/
 venv/
@@ -233,6 +234,7 @@ Calibration_video/
 results/
 src/*.png
 *.html
+archive_intermediate_*/
 
 # Ignore local output folders (generated parameters/results)
 output/

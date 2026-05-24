@@ -10,8 +10,8 @@ import numpy as np
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-AFH1_DIR = SCRIPT_DIR.parent
-PROJECT_ROOT = AFH1_DIR.parent
+FASTSAM3D_DIR = SCRIPT_DIR.parent
+PROJECT_ROOT = FASTSAM3D_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "shared"))
 
 from pose_postprocess import LEFT_HIP, RIGHT_HIP
@@ -25,14 +25,14 @@ SOURCE_POSE_NPZ = (
     / "recovered_baseline"
     / "optimized_pose.npz"
 )
-RESULTS_DIR = AFH1_DIR / "results"
+RESULTS_DIR = FASTSAM3D_DIR / "results"
 ANCHOR_OUT = RESULTS_DIR / "stereo_pelvis_anchor.npz"
 SUMMARY_OUT = RESULTS_DIR / "stereo_pelvis_anchor_summary.json"
 EXPERIMENT_LOG = RESULTS_DIR / "experiment_log.md"
 
 
 def append_experiment_log(message: str) -> None:
-    """Append one line to the AFH1 experiment log."""
+    """Append one line to the FastSAM3D experiment log."""
     with EXPERIMENT_LOG.open("a", encoding="utf-8") as handle:
         handle.write(f"- {message}\n")
 

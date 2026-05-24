@@ -161,7 +161,7 @@ def build_angle_analysis(
 
 
 def resolve_variant_paths(args: argparse.Namespace) -> dict[str, str]:
-    """Resolve defaults from the chosen AFH1 variant."""
+    """Resolve defaults from the chosen FastSAM3D variant."""
     cfg = VARIANT_CONFIG[args.variant]
     return {
         "easyergo_mvnx": args.easyergo_mvnx,

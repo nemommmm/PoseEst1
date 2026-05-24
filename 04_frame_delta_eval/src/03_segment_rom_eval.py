@@ -31,7 +31,7 @@ LABELS = {
     "SKT": "01 SKT stereo",
     "FastSAM3D": "FastSAM3D unfiltered",
     "Merge": "ViscandoXFastSAM3D Merge",
-    "AFH": "04 AFH hybrid",
+    "AFH": "03 FastSAM3D hybrid",
     "XsensFair": "Xsens-derived reference",
     "XsensNative": "Xsens native",
 }

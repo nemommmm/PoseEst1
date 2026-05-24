@@ -80,7 +80,7 @@ DEFAULT_SKT_NPZ = (
     / "recovered_baseline"
     / "optimized_pose.npz"
 )
-DEFAULT_AFH_NPZ = PROJECT_ROOT / "04_hybrid_afh1" / "results" / "hybrid_skeleton_afh1_v1.npz"
+DEFAULT_AFH_NPZ = PROJECT_ROOT / "03_FastSAM3D" / "results" / "hybrid_skeleton_afh1_v1.npz"
 DEFAULT_FAIR_GT = SHARED_DIR / "fair_gt_angles.npz"
 DEFAULT_MVNX = PROJECT_ROOT.parent / "Xsens_ground_truth" / "Aitor-001.mvnx"
 DEFAULT_ALIGNMENT_SUMMARY = PROJECT_ROOT / "01_stereo_triangulation" / "results" / "alignment_summary.json"

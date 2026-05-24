@@ -10,9 +10,9 @@ from scipy.interpolate import interp1d
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-AFH1_DIR = SCRIPT_DIR.parent
-PROJECT_ROOT = AFH1_DIR.parent
-RESULTS_DIR = AFH1_DIR / "results"
+FASTSAM3D_DIR = SCRIPT_DIR.parent
+PROJECT_ROOT = FASTSAM3D_DIR.parent
+RESULTS_DIR = FASTSAM3D_DIR / "results"
 
 EASYERGO_NPZ = RESULTS_DIR / "easyergo_normalized.npz"
 STEREO_ANCHOR_NPZ = RESULTS_DIR / "stereo_pelvis_anchor.npz"
@@ -26,7 +26,7 @@ DEFAULT_STEREO_TO_XSENS_OFFSET_S = 17.25
 
 
 def append_experiment_log(message: str) -> None:
-    """Append one line to the AFH1 experiment log."""
+    """Append one line to the FastSAM3D experiment log."""
     with EXPERIMENT_LOG.open("a", encoding="utf-8") as handle:
         handle.write(f"- {message}\n")
 
@@ -53,7 +53,7 @@ def stereo_time_to_easyergo_time(
 
 
 def main() -> None:
-    """Create AFH1 v1 skeletons in stereo coordinates."""
+    """Create FastSAM3D v1 skeletons in stereo coordinates."""
     easy = np.load(EASYERGO_NPZ, allow_pickle=True)
     stereo_anchor = np.load(STEREO_ANCHOR_NPZ, allow_pickle=True)
     with ROTATION_JSON.open("r", encoding="utf-8") as handle:
@@ -100,7 +100,7 @@ def main() -> None:
         HYBRID_NPZ,
         timestamps=stereo_ts_abs,
         keypoints=hybrid,
-        source_method="AFH1_v1_time_aligned",
+        source_method="FastSAM3D_v1_time_aligned",
         units="cm",
         rotation_3x3=rotation,
         easyergo_query_timestamps=easy_query_ts,
@@ -159,7 +159,7 @@ def main() -> None:
 
     append_experiment_log(
         "Combined stereo pelvis anchor with time-aligned EasyErgo relative skeleton and saved "
-        f"AFH1 v1 hybrid NPZ ({summary['num_frames']} frames)."
+        f"FastSAM3D v1 hybrid NPZ ({summary['num_frames']} frames)."
     )
 
     print(f"[saved] {HYBRID_NPZ}")

@@ -25,14 +25,16 @@ such as controlled goniometer measurements or a higher-grade optical mocap setup
 |---|---|---|---|
 | `01_stereo_triangulation/` | Sparse Keypoint Triangulation | SKT | 稀疏关键点三角化 |
 | `02_dense_stereo_sgbm/` | Dense Disparity Mapping | DDM | 密集视差映射 |
-| `03_mono_motionbert/` | Monocular Temporal Lifting | MTL | 单目时序提升 |
+| `03_FastSAM3D/` | FastSAM3D / EasyErgo Hybrid Pose | FastSAM3D | FastSAM3D / EasyErgo 混合姿态 |
+| `04_frame_delta_eval/` | Motion-Level Elbow Evaluation | Frame Delta | 基于运动变化的肘部评估 |
 
 ## Structure
 
 - `shared/`: 共享工具库（Xsens reference 解析、角度语义、后处理、标定参数）
 - `01_stereo_triangulation/`: 双目关键点三角化主线（SKT）
 - `02_dense_stereo_sgbm/`: SGBM 密集视差对照方向（DDM）
-- `03_mono_motionbert/`: 单目 MotionBERT 对照方向（MTL）
+- `03_FastSAM3D/`: FastSAM3D / EasyErgo 混合姿态方向
+- `04_frame_delta_eval/`: 01 / 03 / Xsens-derived reference 的 motion-level 评估
 
 ## Core Evaluation
 

@@ -13,8 +13,8 @@ from scipy.interpolate import interp1d
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-AFH1_DIR = SCRIPT_DIR.parent
-PROJECT_ROOT = AFH1_DIR.parent
+FASTSAM3D_DIR = SCRIPT_DIR.parent
+PROJECT_ROOT = FASTSAM3D_DIR.parent
 SHARED_DIR = PROJECT_ROOT / "shared"
 sys.path.insert(0, str(SHARED_DIR))
 
@@ -31,18 +31,18 @@ from utils_mvnx import MvnxParser  # noqa: E402
 INPUT_DIR = Path(
     os.environ.get(
         "POSE_EASYERGO_INPUT_DIR",
-        str(AFH1_DIR / "data" / "easyergo_uploaded"),
+        str(FASTSAM3D_DIR / "data" / "easyergo_uploaded"),
     )
 ).resolve()
 RESULTS_DIR = Path(
     os.environ.get(
         "POSE_RESULTS_DIR",
-        str(AFH1_DIR / "results" / "01_final_mvnx_eval"),
+        str(FASTSAM3D_DIR / "results" / "01_final_mvnx_eval"),
     )
 ).resolve()
 SUMMARY_MD = RESULTS_DIR / "easyergo_final_mvnx_summary.md"
 INSPECTION_JSON = RESULTS_DIR / "easyergo_final_mvnx_inspection.json"
-EXPERIMENT_LOG = AFH1_DIR / "results" / "experiment_log.md"
+EXPERIMENT_LOG = FASTSAM3D_DIR / "results" / "experiment_log.md"
 APPEND_EXPERIMENT_LOG = os.environ.get("POSE_APPEND_EXPERIMENT_LOG", "1").lower() not in {
     "0",
     "false",
@@ -59,7 +59,7 @@ ALIGNMENT_JSON = (
 TIMING_JSON = Path(
     os.environ.get(
         "POSE_TIMING_JSON",
-        str(AFH1_DIR / "results" / "02_final_mvnx_timing" / "affine_fit.json"),
+        str(FASTSAM3D_DIR / "results" / "02_final_mvnx_timing" / "affine_fit.json"),
     )
 ).resolve()
 GT_MVNX_PATH = PROJECT_ROOT.parent / "Xsens_ground_truth" / "Aitor-001.mvnx"
@@ -118,7 +118,7 @@ BASELINE_ACTIVITY_NAMES = {
 
 
 def append_experiment_log(message: str) -> None:
-    """Append one line to the AFH1 experiment log."""
+    """Append one line to the FastSAM3D experiment log."""
     if not APPEND_EXPERIMENT_LOG:
         return
     with EXPERIMENT_LOG.open("a", encoding="utf-8") as handle:

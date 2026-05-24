@@ -12,9 +12,9 @@ from easyergo_marker_mapping import COCO17_JOINT_NAMES, MARKER_NAME_TO_COCO17
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-AFH1_DIR = SCRIPT_DIR.parent
-INPUT_DIR = AFH1_DIR / "data" / "easyergo_uploaded"
-RESULTS_DIR = AFH1_DIR / "results"
+FASTSAM3D_DIR = SCRIPT_DIR.parent
+INPUT_DIR = FASTSAM3D_DIR / "data" / "easyergo_uploaded"
+RESULTS_DIR = FASTSAM3D_DIR / "results"
 NPZ_OUT = RESULTS_DIR / "easyergo_normalized.npz"
 SUMMARY_OUT = RESULTS_DIR / "easyergo_normalized_summary.json"
 EXPERIMENT_LOG = RESULTS_DIR / "experiment_log.md"
@@ -105,7 +105,7 @@ def build_coco17_positions(
 
 
 def append_experiment_log(message: str) -> None:
-    """Append one line to the AFH1 experiment log."""
+    """Append one line to the FastSAM3D experiment log."""
     with EXPERIMENT_LOG.open("a", encoding="utf-8") as handle:
         handle.write(f"- {message}\n")
 

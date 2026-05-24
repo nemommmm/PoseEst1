@@ -13,8 +13,8 @@ import pandas as pd
 
 
 SCRIPT_DIR = Path(__file__).resolve().parent
-AFH1_DIR = SCRIPT_DIR.parent
-PROJECT_ROOT = AFH1_DIR.parent
+FASTSAM3D_DIR = SCRIPT_DIR.parent
+PROJECT_ROOT = FASTSAM3D_DIR.parent
 SHARED_DIR = PROJECT_ROOT / "shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
@@ -26,13 +26,13 @@ from utils_mvnx import MvnxParser  # noqa: E402
 INPUT_DIR = Path(
     os.environ.get(
         "POSE_EASYERGO_INPUT_DIR",
-        str(AFH1_DIR / "data" / "easyergo_uploaded"),
+        str(FASTSAM3D_DIR / "data" / "easyergo_uploaded"),
     )
 ).resolve()
 RESULTS_DIR = Path(
     os.environ.get(
         "POSE_RESULTS_DIR",
-        str(AFH1_DIR / "results" / "02_final_mvnx_timing"),
+        str(FASTSAM3D_DIR / "results" / "02_final_mvnx_timing"),
     )
 ).resolve()
 SUMMARY_MD = RESULTS_DIR / "timing_diagnosis_summary.md"

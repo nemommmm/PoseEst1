@@ -1,5 +1,44 @@
 # Experiment Log
 
+## 2026-05-24 - SKT + Mature Pose Model Fusion Scaffold
+
+- Goal: implement a thesis-explainable path for reducing SKT jitter without directly averaging raw SKT and FastSAM3D / monocular 3D coordinates.
+- Pre-change snapshot commit:
+  - `fa642f5 chore: snapshot before SKT model fusion experiment`
+
+### Implemented
+
+- Added detector backend switch to `01_stereo_triangulation/src/02_batch_inference.py`:
+  - default remains historical `POSE_2D_DETECTOR=yolo`
+  - optional experimental backend: `POSE_2D_DETECTOR=rtmlib`
+  - RTMLib adapter is lazy-imported, so the existing YOLO path does not require new dependencies.
+- Added `01_stereo_triangulation/src/19_quality_gate_sweep.py`:
+  - scans internal SKT quality signals for left/right elbow high-delta outlier capture
+  - uses no Xsens reference; this isolates SKT jitter diagnostics.
+- Added `01_stereo_triangulation/src/20_temporal_prior_fusion.py`:
+  - consumes external temporal prior NPZ files with `timestamps` and `keypoints`
+  - aligns the prior to reliable SKT joints per frame before blending
+  - only blends low-quality SKT joints by default.
+- Added experiment notes:
+  - `01_stereo_triangulation/results/skt_model_fusion/README.md`
+
+### Initial quality-gate diagnostic
+
+- Command:
+  - `/opt/anaconda3/envs/pose/bin/python 01_stereo_triangulation/src/19_quality_gate_sweep.py --input 01_stereo_triangulation/results/historical_best_20260324/recovered_baseline/optimized_pose.npz --k-values 1 6 --high-delta-deg 35`
+- Output:
+  - `01_stereo_triangulation/results/skt_model_fusion/quality_gate_sweep_elbow.csv`
+  - `01_stereo_triangulation/results/skt_model_fusion/quality_gate_sweep_elbow.md`
+
+### Early interpretation
+
+- For elbow high-delta pairs, the most useful current quality signals are:
+  - low `stereo_quality_min`
+  - low `pair_conf_min`
+  - high `epipolar_error_max`
+- This supports the current working hypothesis that many SKT high-delta jumps are not random noise only; they are at least partly explainable by stereo/keypoint quality signals and can be routed to stricter gating or temporal-prior repair.
+- Next validation should rerun SKT with an alternative 2D detector such as RTMPose / RTMO, then repeat the same gate sweep because confidence-score distributions will differ from YOLO.
+
 ## 2026-04-13 - Historical Best (13.21 deg) Reproduction Check
 
 - Goal: assess whether the historical best Direction A result (`13.21°` calibrated MAE, reported on 2026-03-24) can be reproduced from files still present in the reorganized repository.

@@ -22,8 +22,16 @@ POSE_2D_DETECTOR=rtmlib \
 POSE_RTMLIB_MODEL=Body \
 POSE_RTMLIB_BACKEND=onnxruntime \
 POSE_RTMLIB_DEVICE=cpu \
+POSE_RTMLIB_MODE=lightweight \
+POSE_MAX_FRAMES=120 \
 /opt/anaconda3/envs/pose/bin/python 01_stereo_triangulation/src/02_batch_inference.py
 ```
+
+Recommended first-pass modes:
+
+- `POSE_RTMLIB_MODE=lightweight`: fastest RTMPose-s path; useful for smoke tests and deployment-oriented checks.
+- `POSE_RTMLIB_MODE=balanced`: medium RTMPose-m path.
+- `POSE_RTMLIB_MODE=performance`: RTMPose-x path; it works but is too slow on CPU for long runs.
 
 The default remains the historical YOLO path:
 
@@ -35,6 +43,18 @@ POSE_MODEL_NAME=yolov8m-pose.pt \
 
 Important: RTMPose / RTMO confidence scores should not reuse YOLO thresholds
 blindly. After each detector run, scan the gate thresholds again.
+
+RTMO note: direct `POSE_RTMLIB_MODEL=RTMO` requires an explicit ONNX model path:
+
+```bash
+POSE_2D_DETECTOR=rtmlib \
+POSE_RTMLIB_MODEL=RTMO \
+POSE_RTMLIB_ONNX_MODEL=/path/to/rtmo.onnx \
+/opt/anaconda3/envs/pose/bin/python 01_stereo_triangulation/src/02_batch_inference.py
+```
+
+For most first-pass tests, `POSE_RTMLIB_MODEL=Body` is easier because RTMLib
+auto-downloads the detector and RTMPose model.
 
 ## Direction B: quality-gate sweep
 
@@ -57,6 +77,29 @@ Outputs:
 Use these outputs to decide whether high-delta outliers are mainly associated
 with low pair confidence, low stereo quality, high epipolar error, or high
 reprojection error.
+
+## Detector smoke comparison
+
+Compare short detector-backend runs before committing to full-sequence inference:
+
+```bash
+/opt/anaconda3/envs/pose/bin/python \
+  01_stereo_triangulation/src/21_compare_skt_detector_runs.py \
+  --limit-frames 120 \
+  --run YOLOv8m=01_stereo_triangulation/results/skt_model_fusion/yolo_120/yolo_3d_optimized.npz \
+  --run RTMPoseS=01_stereo_triangulation/results/skt_model_fusion/rtmlib_body_light_120/yolo_3d_optimized.npz
+```
+
+Initial 120-frame result:
+
+- RTMLib / RTMPose-s lightweight successfully runs through the SKT pipeline.
+- In this early segment, RTMPose-s does **not** outperform YOLOv8m internally:
+  - epipolar p90 is higher;
+  - reprojection p90 is higher;
+  - elbow-chain valid ratios are lower;
+  - left-elbow high-delta rates are higher.
+- Therefore, simply replacing YOLO with RTMPose is not enough. The next useful
+  step is quality-aware gating or temporal-prior repair, not a blind detector swap.
 
 ## Direction C: temporal prior fusion
 

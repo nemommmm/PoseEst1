@@ -39,6 +39,42 @@
 - This supports the current working hypothesis that many SKT high-delta jumps are not random noise only; they are at least partly explainable by stereo/keypoint quality signals and can be routed to stricter gating or temporal-prior repair.
 - Next validation should rerun SKT with an alternative 2D detector such as RTMPose / RTMO, then repeat the same gate sweep because confidence-score distributions will differ from YOLO.
 
+## 2026-05-24 - RTMLib / RTMPose SKT Smoke Tests
+
+- Goal: verify that a mature 2D pose model can be plugged into SKT and compare a short internal-stability sample against YOLOv8m.
+
+### Runs
+
+- YOLOv8m baseline, first 120 synchronized stereo pairs:
+  - output directory: `01_stereo_triangulation/results/skt_model_fusion/yolo_120/`
+- RTMLib `Body` in `performance` mode:
+  - first 20 frames completed successfully using RTMPose-x
+  - 120-frame CPU run was stopped after more than 6 minutes without finishing
+  - conclusion: performance mode is usable for interface verification, but too slow on CPU for routine experiments.
+- RTMLib `Body` in `lightweight` mode:
+  - first 120 synchronized stereo pairs completed successfully
+  - output directory: `01_stereo_triangulation/results/skt_model_fusion/rtmlib_body_light_120/`
+
+### Internal smoke comparison
+
+- Summary files:
+  - `01_stereo_triangulation/results/skt_model_fusion/detector_smoke_comparison.csv`
+  - `01_stereo_triangulation/results/skt_model_fusion/detector_smoke_comparison.md`
+
+| Run | Frames | Valid joints | L elbow chain | R elbow chain | Epi p90 px | Reproj p90 px | Stereo quality | L K1 high | L K6 high | R K6 high |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| YOLOv8m | 120 | 0.784 | 1.000 | 1.000 | 133.153 | 16.617 | 0.235 | 0.008 | 0.053 | 0.035 |
+| RTMPose-s lightweight | 120 | 0.748 | 0.850 | 0.892 | 153.597 | 22.692 | 0.220 | 0.089 | 0.208 | 0.144 |
+
+### Interpretation
+
+- RTMPose-s can be integrated into the SKT pipeline, but the first 120-frame sample does **not** improve internal SKT stability over YOLOv8m.
+- The weaker elbow-chain validity and higher high-delta rates suggest that detector replacement alone is not a reliable repair.
+- More promising next steps:
+  - retune thresholds specifically for RTMPose confidence distributions;
+  - use stricter quality gating around elbow chains;
+  - route bad-quality frames into temporal-prior repair instead of trusting raw triangulation.
+
 ## 2026-04-13 - Historical Best (13.21 deg) Reproduction Check
 
 - Goal: assess whether the historical best Direction A result (`13.21°` calibrated MAE, reported on 2026-03-24) can be reproduced from files still present in the reorganized repository.

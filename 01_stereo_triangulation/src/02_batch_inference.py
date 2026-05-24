@@ -37,6 +37,7 @@ RTMLIB_BACKEND = os.environ.get("POSE_RTMLIB_BACKEND", "onnxruntime").strip()
 RTMLIB_DEVICE = os.environ.get("POSE_RTMLIB_DEVICE", "cpu").strip()
 RTMLIB_MODE = os.environ.get("POSE_RTMLIB_MODE", "performance").strip()
 RTMLIB_TO_OPENPOSE = os.environ.get("POSE_RTMLIB_TO_OPENPOSE", "0") == "1"
+RTMLIB_ONNX_MODEL = os.environ.get("POSE_RTMLIB_ONNX_MODEL", "").strip()
 
 USE_DENSE_STEREO = os.environ.get("POSE_USE_DENSE_STEREO", "0") == "1"
 SGBM_MIN_DISPARITY = int(os.environ.get("POSE_SGBM_MIN_DISPARITY", "100"))
@@ -82,6 +83,7 @@ ENABLE_ONE_EURO = os.environ.get("POSE_ENABLE_ONE_EURO", "1") == "1"
 FLOOR_AXIS = None
 FLOOR_VALUE = None
 DISABLE_PROGRESS = os.environ.get("POSE_DISABLE_PROGRESS", "0") == "1"
+MAX_FRAMES = max(0, int(os.environ.get("POSE_MAX_FRAMES", "0")))
 
 TORSO_JOINTS = np.array([5, 6, 11, 12], dtype=np.int64)
 UPPER_BODY_JOINTS = np.array([5, 6, 7, 8, 9, 10, 11, 12], dtype=np.int64)
@@ -116,6 +118,7 @@ def detector_slug_from_name(name: str) -> str:
         .replace(" ", "_")
         .replace("-", "_")
         .replace(".", "_")
+        .replace(":", "_")
         .lower()
     )
 
@@ -392,22 +395,35 @@ class RTMLibPoseDetector:
             )
 
         model_cls = getattr(rtmlib, RTMLIB_MODEL_CLASS)
-        constructor_attempts = [
-            dict(to_openpose=RTMLIB_TO_OPENPOSE, mode=RTMLIB_MODE, backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
-            dict(mode=RTMLIB_MODE, backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
-            dict(to_openpose=RTMLIB_TO_OPENPOSE, backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
-            dict(backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
-        ]
-        last_error = None
-        self.model = None
-        for kwargs in constructor_attempts:
-            try:
-                self.model = model_cls(**kwargs)
-                break
-            except TypeError as exc:
-                last_error = exc
-        if self.model is None:
-            raise TypeError(f"Failed to construct RTMLib {RTMLIB_MODEL_CLASS}: {last_error}") from last_error
+        if RTMLIB_MODEL_CLASS == "RTMO":
+            if not RTMLIB_ONNX_MODEL:
+                raise ValueError(
+                    "RTMLib RTMO requires POSE_RTMLIB_ONNX_MODEL=/path/to/rtmo.onnx. "
+                    "Use POSE_RTMLIB_MODEL=Body for the auto-downloaded RTMPose path."
+                )
+            self.model = model_cls(
+                onnx_model=RTMLIB_ONNX_MODEL,
+                to_openpose=RTMLIB_TO_OPENPOSE,
+                backend=RTMLIB_BACKEND,
+                device=RTMLIB_DEVICE,
+            )
+        else:
+            constructor_attempts = [
+                dict(to_openpose=RTMLIB_TO_OPENPOSE, mode=RTMLIB_MODE, backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
+                dict(mode=RTMLIB_MODE, backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
+                dict(to_openpose=RTMLIB_TO_OPENPOSE, backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
+                dict(backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
+            ]
+            last_error = None
+            self.model = None
+            for kwargs in constructor_attempts:
+                try:
+                    self.model = model_cls(**kwargs)
+                    break
+                except TypeError as exc:
+                    last_error = exc
+            if self.model is None:
+                raise TypeError(f"Failed to construct RTMLib {RTMLIB_MODEL_CLASS}: {last_error}") from last_error
 
         self.display_name = f"rtmlib:{RTMLIB_MODEL_CLASS}:{RTMLIB_MODE}:{RTMLIB_BACKEND}:{RTMLIB_DEVICE}"
         self.slug = detector_slug_from_name(self.display_name)
@@ -980,6 +996,9 @@ def main():
         os.path.join(DATA_DIR, "1_video_right.txt"),
     )
     estimated_total_pairs = estimate_synchronized_pair_count(loader_test.left_data, loader_test.right_data)
+    if MAX_FRAMES > 0:
+        estimated_total_pairs = min(estimated_total_pairs, MAX_FRAMES)
+        print(f"[Info] Frame limit enabled: processing at most {MAX_FRAMES} synchronized pairs")
     print(f"[Info] Estimated synchronized frame pairs: {estimated_total_pairs}")
     frame_l, _, _, _ = loader_test.get_next_pair()
     if frame_l is None:
@@ -1092,6 +1111,9 @@ def main():
     frame_idx = 0
 
     while True:
+        if MAX_FRAMES > 0 and frame_idx >= MAX_FRAMES:
+            break
+
         frame_l, frame_r, _, ts = loader.get_next_pair()
         if frame_l is None:
             break

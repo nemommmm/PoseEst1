@@ -75,6 +75,36 @@
   - use stricter quality gating around elbow chains;
   - route bad-quality frames into temporal-prior repair instead of trusting raw triangulation.
 
+## 2026-05-25 - SKT Elbow Quality Repair Pilot
+
+- Goal: test whether internal SKT quality signals can reduce elbow high-delta events without introducing an external temporal model.
+- Script:
+  - `01_stereo_triangulation/src/22_elbow_quality_repair.py`
+- Input:
+  - `01_stereo_triangulation/results/historical_best_20260324/recovered_baseline/optimized_pose.npz`
+- Method:
+  - flag left/right shoulder-elbow-wrist chains using `pair_conf`, `stereo_quality`, `epipolar_error`, and `reprojection_error`
+  - linearly interpolate only flagged segments up to a configured maximum gap length
+  - evaluate before/after elbow deltas for `K=1` and `K=6`
+- Ablation summary:
+  - `01_stereo_triangulation/results/skt_model_fusion/elbow_quality_repair_ablation.md`
+
+### Key results
+
+| Run | Left K1 high | Left K6 high | Right K1 high | Right K6 high |
+|---|---:|---:|---:|---:|
+| before | 0.062 | 0.188 | 0.054 | 0.199 |
+| default gap=5 | 0.056 | 0.186 | 0.048 | 0.198 |
+| default gap=12 | 0.051 | 0.175 | 0.040 | 0.177 |
+| default gap=20 | 0.046 | 0.157 | 0.037 | 0.169 |
+
+### Interpretation
+
+- The pilot supports the hypothesis that SKT elbow jitter is partly quality-signal explainable.
+- Short-gap repair improves `K=1` more than `K=6`; larger repair windows improve `K=6`, but become less conservative.
+- `gap=20` is numerically best but spans about `1.6 s` at 12.5 fps, so it may be too aggressive for ergonomic motion-risk evaluation.
+- `gap=12` is the most defensible next candidate for full frame-delta evaluation: it improves both elbows while avoiding the strongest smoothing setting.
+
 ## 2026-04-13 - Historical Best (13.21 deg) Reproduction Check
 
 - Goal: assess whether the historical best Direction A result (`13.21°` calibrated MAE, reported on 2026-03-24) can be reproduced from files still present in the reorganized repository.

@@ -1,0 +1,855 @@
+{
+  "config": {
+    "skt_npz": "01_stereo_triangulation/results/historical_best_20260324/recovered_baseline/optimized_pose.npz",
+    "afh_npz": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/03_FastSAM3D/results/hybrid_skeleton_afh1_v1.npz",
+    "skip_afh": true,
+    "afh_filter_status": "not_included",
+    "afh_blocker_note": null,
+    "external_trc_sources": {
+      "FastSAM3D": {
+        "source_path": "../10 Aitor/fastsam3d_2.trc",
+        "alignment_mode": "left_metadata_frame_index",
+        "alignment_note": "TRC frame count matches left-camera metadata; synced left-frame indices select comparable rows.",
+        "source_frame_count": 3015,
+        "aligned_frame_count": 2801,
+        "source_fps": 12.5,
+        "input_units": "mm",
+        "output_units": "cm",
+        "mapped_marker_count": 17,
+        "missing_coco17_joints": [],
+        "valid_left_elbow_chain_ratio": 1.0,
+        "valid_right_elbow_chain_ratio": 1.0
+      },
+      "Merge": {
+        "source_path": "../10 Aitor/merged_output_2.trc",
+        "alignment_mode": "synced_frame_index",
+        "alignment_note": "TRC frame count matches the synced pose timeline; rows are aligned by index.",
+        "source_frame_count": 2801,
+        "aligned_frame_count": 2801,
+        "source_fps": 12.5,
+        "input_units": "mm",
+        "output_units": "cm",
+        "mapped_marker_count": 17,
+        "missing_coco17_joints": [],
+        "valid_left_elbow_chain_ratio": 1.0,
+        "valid_right_elbow_chain_ratio": 1.0
+      }
+    },
+    "system_names": [
+      "SKT",
+      "FastSAM3D",
+      "Merge",
+      "XsensFair",
+      "XsensNative"
+    ],
+    "xsens_fair": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/shared/fair_gt_angles.npz",
+    "xsens_mvnx": "/Users/laomeng/Desktop/MVE386 Project Course/Xsens_ground_truth/Aitor-001.mvnx",
+    "xsens_offset_s": 17.25,
+    "offset_source": "position",
+    "smooth_method": "moving_average",
+    "smooth_window_ms_requested": 200.0,
+    "smooth_window_ms_effective": 240.01193,
+    "smooth_window_frames_effective": 3,
+    "smooth_radius_frames_effective": 1,
+    "smooth_radius_legacy_arg": null,
+    "wrist_smooth_radius_frames": 0,
+    "filter_policy": "XsensFair/XsensNative: no extra project smoothing after interpolation; all camera/vision systems: smooth angle sequence before delta calculation.",
+    "per_system_smoothing": {
+      "SKT": {
+        "method": "moving_average",
+        "reason": "Phase 4 camera-system policy: simple 200 ms rule-of-thumb smoothing before delta.",
+        "radius_frames": 1,
+        "window_frames": 3,
+        "requested_window_ms": 200.0,
+        "effective_window_ms": 240.01193
+      },
+      "FastSAM3D": {
+        "method": "moving_average",
+        "reason": "Phase 4 camera-system policy: simple 200 ms rule-of-thumb smoothing before delta.",
+        "radius_frames": 1,
+        "window_frames": 3,
+        "requested_window_ms": 200.0,
+        "effective_window_ms": 240.01193
+      },
+      "Merge": {
+        "method": "moving_average",
+        "reason": "Phase 4 camera-system policy: simple 200 ms rule-of-thumb smoothing before delta.",
+        "radius_frames": 1,
+        "window_frames": 3,
+        "requested_window_ms": 200.0,
+        "effective_window_ms": 240.01193
+      },
+      "XsensFair": {
+        "method": "none",
+        "reason": "Xsens already contains internal filtering; no extra project smoothing is applied.",
+        "radius_frames": 0,
+        "window_frames": 1,
+        "requested_window_ms": null,
+        "effective_window_ms": 0.0
+      },
+      "XsensNative": {
+        "method": "none",
+        "reason": "Xsens already contains internal filtering; no extra project smoothing is applied.",
+        "radius_frames": 0,
+        "window_frames": 1,
+        "requested_window_ms": null,
+        "effective_window_ms": 0.0
+      }
+    },
+    "max_gap_frames": 5,
+    "anomaly_delta_deg": 30.0,
+    "active_delta_threshold_deg": 1.0,
+    "noise_floor_threshold_deg": 0.5,
+    "k_frame_list": [
+      1,
+      6
+    ],
+    "thresholds_by_k": {
+      "k1": {
+        "anomaly_delta_deg": 30.0,
+        "active_delta_threshold_deg": 1.0,
+        "noise_floor_threshold_deg": 0.5
+      },
+      "k6": {
+        "anomaly_delta_deg": 60.0,
+        "active_delta_threshold_deg": 5.0,
+        "noise_floor_threshold_deg": 2.0
+      }
+    },
+    "lag_window_frames": 10,
+    "quality_filter_enabled": false,
+    "quality_min_triang_conf": 0.2,
+    "quality_max_epipolar_px": 10.0,
+    "quality_max_reprojection_px": 10.0,
+    "start_time_s": null,
+    "end_time_s": null
+  },
+  "timeline": {
+    "frame_count": 2801,
+    "duration_s": 248.800197,
+    "median_dt_s": 0.080004,
+    "effective_fps": 12.499379,
+    "corrected_timestamp_nonpositive_diff_count": 0,
+    "first_stereo_frame_id": 214132,
+    "last_stereo_frame_id": 217242,
+    "first_original_frame_index": 0,
+    "last_original_frame_index": 2800,
+    "old_npz_timestamp_diagnostics": {
+      "frame_count": 2801,
+      "duration_s": 248.800197,
+      "nonpositive_diff_count": 241,
+      "diff_min_s": -0.64958,
+      "diff_median_s": 0.080006,
+      "diff_max_s": 0.965646
+    }
+  },
+  "systems": {
+    "LeftElbow": {
+      "SKT": {
+        "k1": {
+          "valid_angle_ratio": 0.932881,
+          "valid_delta_ratio": 0.925027,
+          "interpolated_frame_count": 5,
+          "delta_anomaly_count": 40,
+          "rom_deg": 158.59558,
+          "total_path_deg": 14269.990683,
+          "signed_net_change_deg": 128.33632
+        },
+        "k6": {
+          "valid_angle_ratio": 0.932881,
+          "valid_delta_ratio": 0.910746,
+          "interpolated_frame_count": 5,
+          "delta_anomaly_count": 94,
+          "rom_deg": 158.59558,
+          "total_path_deg": 44589.333454,
+          "signed_net_change_deg": 847.516414
+        }
+      },
+      "FastSAM3D": {
+        "k1": {
+          "valid_angle_ratio": 1.0,
+          "valid_delta_ratio": 0.999643,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 0,
+          "rom_deg": 117.093483,
+          "total_path_deg": 7472.854112,
+          "signed_net_change_deg": -18.057231
+        },
+        "k6": {
+          "valid_angle_ratio": 1.0,
+          "valid_delta_ratio": 0.997858,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 26,
+          "rom_deg": 117.093483,
+          "total_path_deg": 29588.698362,
+          "signed_net_change_deg": -207.482474
+        }
+      },
+      "Merge": {
+        "k1": {
+          "valid_angle_ratio": 1.0,
+          "valid_delta_ratio": 0.999643,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 0,
+          "rom_deg": 111.337498,
+          "total_path_deg": 7193.269649,
+          "signed_net_change_deg": -17.674213
+        },
+        "k6": {
+          "valid_angle_ratio": 1.0,
+          "valid_delta_ratio": 0.997858,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 30,
+          "rom_deg": 111.337498,
+          "total_path_deg": 28892.789036,
+          "signed_net_change_deg": -131.60362
+        }
+      },
+      "XsensFair": {
+        "k1": {
+          "valid_angle_ratio": 0.904677,
+          "valid_delta_ratio": 0.90432,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 1,
+          "rom_deg": 127.951781,
+          "total_path_deg": 5332.039221,
+          "signed_net_change_deg": 22.186005
+        },
+        "k6": {
+          "valid_angle_ratio": 0.904677,
+          "valid_delta_ratio": 0.902535,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 7,
+          "rom_deg": 127.951781,
+          "total_path_deg": 22977.541065,
+          "signed_net_change_deg": 147.44619
+        }
+      },
+      "XsensNative": {
+        "k1": {
+          "valid_angle_ratio": 0.904677,
+          "valid_delta_ratio": 0.90432,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 1,
+          "rom_deg": 129.444993,
+          "total_path_deg": 5578.53256,
+          "signed_net_change_deg": 16.358452
+        },
+        "k6": {
+          "valid_angle_ratio": 0.904677,
+          "valid_delta_ratio": 0.902535,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 11,
+          "rom_deg": 129.444993,
+          "total_path_deg": 24152.671128,
+          "signed_net_change_deg": 112.179987
+        }
+      }
+    },
+    "RightElbow": {
+      "SKT": {
+        "k1": {
+          "valid_angle_ratio": 0.949304,
+          "valid_delta_ratio": 0.940378,
+          "interpolated_frame_count": 17,
+          "delta_anomaly_count": 43,
+          "rom_deg": 164.939551,
+          "total_path_deg": 15574.241097,
+          "signed_net_change_deg": 65.813123
+        },
+        "k6": {
+          "valid_angle_ratio": 0.949304,
+          "valid_delta_ratio": 0.927883,
+          "interpolated_frame_count": 17,
+          "delta_anomaly_count": 125,
+          "rom_deg": 164.939551,
+          "total_path_deg": 50588.281126,
+          "signed_net_change_deg": 101.105768
+        }
+      },
+      "FastSAM3D": {
+        "k1": {
+          "valid_angle_ratio": 1.0,
+          "valid_delta_ratio": 0.999643,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 0,
+          "rom_deg": 111.246275,
+          "total_path_deg": 7640.395045,
+          "signed_net_change_deg": -9.055678
+        },
+        "k6": {
+          "valid_angle_ratio": 1.0,
+          "valid_delta_ratio": 0.997858,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 26,
+          "rom_deg": 111.246275,
+          "total_path_deg": 31897.29853,
+          "signed_net_change_deg": -60.190237
+        }
+      },
+      "Merge": {
+        "k1": {
+          "valid_angle_ratio": 1.0,
+          "valid_delta_ratio": 0.999643,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 0,
+          "rom_deg": 111.246276,
+          "total_path_deg": 7352.616176,
+          "signed_net_change_deg": -36.822741
+        },
+        "k6": {
+          "valid_angle_ratio": 1.0,
+          "valid_delta_ratio": 0.997858,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 20,
+          "rom_deg": 111.246276,
+          "total_path_deg": 31037.056863,
+          "signed_net_change_deg": -247.355054
+        }
+      },
+      "XsensFair": {
+        "k1": {
+          "valid_angle_ratio": 0.904677,
+          "valid_delta_ratio": 0.90432,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 1,
+          "rom_deg": 117.122674,
+          "total_path_deg": 5722.50827,
+          "signed_net_change_deg": 4.542765
+        },
+        "k6": {
+          "valid_angle_ratio": 0.904677,
+          "valid_delta_ratio": 0.902535,
+          "interpolated_frame_count": 0,
+          "delta_anomaly_count": 19,
+          "rom_deg": 117.122674,
+          "total_path_deg": 25557.939834,
+          "signed_net_change_deg": 24.73354
+        }
+      },
+      "XsensNative": {
+        "k1": {
+          "valid_angle_ratio": 0.901821,
+          "valid_delta_ratio": 0.901107,
+          "interpolated_frame_count": 1,
+          "delta_anomaly_count": 2,
+          "rom_deg": 120.031163,
+          "total_path_deg": 5842.551296,
+          "signed_net_change_deg": -3.745162
+        },
+        "k6": {
+          "valid_angle_ratio": 0.901821,
+          "valid_delta_ratio": 0.897537,
+          "interpolated_frame_count": 1,
+          "delta_anomaly_count": 22,
+          "rom_deg": 120.031163,
+          "total_path_deg": 25937.085252,
+          "signed_net_change_deg": 0.898665
+        }
+      }
+    }
+  },
+  "motion_agreement": {
+    "LeftElbow": {
+      "SKT_vs_XsensFair": {
+        "k1": {
+          "valid_pair_count": 2414,
+          "pearson_delta": 0.176524,
+          "slope_target_vs_reference": 0.466147,
+          "delta_mae_deg": 5.666041,
+          "delta_rmse_deg": 8.959121,
+          "active_delta_threshold_deg": 1.0,
+          "active_pair_count": 1380,
+          "active_pearson_delta": 0.213635,
+          "active_slope_target_vs_reference": 0.456401,
+          "active_delta_mae_deg": 6.342565,
+          "active_delta_rmse_deg": 9.580644,
+          "noise_floor_threshold_deg": 0.5,
+          "quiet_pair_count": 598,
+          "target_quiet_delta_std_deg": 8.237416,
+          "target_quiet_delta_mae_deg": 4.687654,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 1,
+            "best_pearson_delta": 0.18846,
+            "best_slope_target_vs_reference": 0.497549,
+            "best_pair_count": 2414
+          },
+          "target_path_deg": 13568.568295,
+          "reference_path_deg": 5158.286516,
+          "path_ratio_target_reference": 2.630441,
+          "target_rom_deg": 158.59558,
+          "reference_rom_deg": 127.951781,
+          "rom_match_min_over_max": 0.80678
+        },
+        "k6": {
+          "valid_pair_count": 2384,
+          "pearson_delta": 0.310269,
+          "slope_target_vs_reference": 0.574861,
+          "delta_mae_deg": 16.647829,
+          "delta_rmse_deg": 24.941751,
+          "active_delta_threshold_deg": 5.0,
+          "active_pair_count": 1288,
+          "active_pearson_delta": 0.374388,
+          "active_slope_target_vs_reference": 0.573473,
+          "active_delta_mae_deg": 18.74271,
+          "active_delta_rmse_deg": 27.552085,
+          "noise_floor_threshold_deg": 2.0,
+          "quiet_pair_count": 511,
+          "target_quiet_delta_std_deg": 21.350775,
+          "target_quiet_delta_mae_deg": 14.1676,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 1,
+            "best_pearson_delta": 0.337675,
+            "best_slope_target_vs_reference": 0.625366,
+            "best_pair_count": 2384
+          },
+          "target_path_deg": 42272.372362,
+          "reference_path_deg": 22109.044473,
+          "path_ratio_target_reference": 1.911995,
+          "target_rom_deg": 158.59558,
+          "reference_rom_deg": 127.951781,
+          "rom_match_min_over_max": 0.80678
+        }
+      },
+      "FastSAM3D_vs_XsensFair": {
+        "k1": {
+          "valid_pair_count": 2533,
+          "pearson_delta": 0.453759,
+          "slope_target_vs_reference": 0.578379,
+          "delta_mae_deg": 2.301206,
+          "delta_rmse_deg": 4.027426,
+          "active_delta_threshold_deg": 1.0,
+          "active_pair_count": 1445,
+          "active_pearson_delta": 0.512052,
+          "active_slope_target_vs_reference": 0.580182,
+          "active_delta_mae_deg": 2.763937,
+          "active_delta_rmse_deg": 4.639017,
+          "noise_floor_threshold_deg": 0.5,
+          "quiet_pair_count": 624,
+          "target_quiet_delta_std_deg": 3.005928,
+          "target_quiet_delta_mae_deg": 1.615809,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.453759,
+            "best_slope_target_vs_reference": 0.578379,
+            "best_pair_count": 2533
+          },
+          "target_path_deg": 6659.207916,
+          "reference_path_deg": 5332.039221,
+          "path_ratio_target_reference": 1.248905,
+          "target_rom_deg": 117.093483,
+          "reference_rom_deg": 127.951781,
+          "rom_match_min_over_max": 0.915138
+        },
+        "k6": {
+          "valid_pair_count": 2528,
+          "pearson_delta": 0.587446,
+          "slope_target_vs_reference": 0.681171,
+          "delta_mae_deg": 8.276927,
+          "delta_rmse_deg": 13.362739,
+          "active_delta_threshold_deg": 5.0,
+          "active_pair_count": 1361,
+          "active_pearson_delta": 0.677995,
+          "active_slope_target_vs_reference": 0.684482,
+          "active_delta_mae_deg": 9.622718,
+          "active_delta_rmse_deg": 14.680721,
+          "noise_floor_threshold_deg": 2.0,
+          "quiet_pair_count": 538,
+          "target_quiet_delta_std_deg": 9.936019,
+          "target_quiet_delta_mae_deg": 6.032719,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.587446,
+            "best_slope_target_vs_reference": 0.681171,
+            "best_pair_count": 2528
+          },
+          "target_path_deg": 26488.639346,
+          "reference_path_deg": 22977.541065,
+          "path_ratio_target_reference": 1.152806,
+          "target_rom_deg": 117.093483,
+          "reference_rom_deg": 127.951781,
+          "rom_match_min_over_max": 0.915138
+        }
+      },
+      "Merge_vs_XsensFair": {
+        "k1": {
+          "valid_pair_count": 2533,
+          "pearson_delta": 0.010647,
+          "slope_target_vs_reference": 0.013024,
+          "delta_mae_deg": 3.563601,
+          "delta_rmse_deg": 5.224506,
+          "active_delta_threshold_deg": 1.0,
+          "active_pair_count": 1445,
+          "active_pearson_delta": 0.011103,
+          "active_slope_target_vs_reference": 0.010563,
+          "active_delta_mae_deg": 4.351604,
+          "active_delta_rmse_deg": 6.007475,
+          "noise_floor_threshold_deg": 0.5,
+          "quiet_pair_count": 624,
+          "target_quiet_delta_std_deg": 3.93386,
+          "target_quiet_delta_mae_deg": 2.417518,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": -2,
+            "best_pearson_delta": 0.048018,
+            "best_slope_target_vs_reference": 0.058741,
+            "best_pair_count": 2533
+          },
+          "target_path_deg": 6367.345074,
+          "reference_path_deg": 5332.039221,
+          "path_ratio_target_reference": 1.194167,
+          "target_rom_deg": 111.337498,
+          "reference_rom_deg": 127.951781,
+          "rom_match_min_over_max": 0.870152
+        },
+        "k6": {
+          "valid_pair_count": 2528,
+          "pearson_delta": 0.027054,
+          "slope_target_vs_reference": 0.03062,
+          "delta_mae_deg": 14.642444,
+          "delta_rmse_deg": 20.088525,
+          "active_delta_threshold_deg": 5.0,
+          "active_pair_count": 1361,
+          "active_pearson_delta": 0.042077,
+          "active_slope_target_vs_reference": 0.03301,
+          "active_delta_mae_deg": 17.575291,
+          "active_delta_rmse_deg": 22.661397,
+          "noise_floor_threshold_deg": 2.0,
+          "quiet_pair_count": 538,
+          "target_quiet_delta_std_deg": 16.160823,
+          "target_quiet_delta_mae_deg": 10.775117,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": -3,
+            "best_pearson_delta": 0.057702,
+            "best_slope_target_vs_reference": 0.065169,
+            "best_pair_count": 2528
+          },
+          "target_path_deg": 25804.254009,
+          "reference_path_deg": 22977.541065,
+          "path_ratio_target_reference": 1.123021,
+          "target_rom_deg": 111.337498,
+          "reference_rom_deg": 127.951781,
+          "rom_match_min_over_max": 0.870152
+        }
+      },
+      "XsensNative_vs_XsensFair": {
+        "k1": {
+          "valid_pair_count": 2533,
+          "pearson_delta": 0.983589,
+          "slope_target_vs_reference": 1.011408,
+          "delta_mae_deg": 0.291574,
+          "delta_rmse_deg": 0.617865,
+          "active_delta_threshold_deg": 1.0,
+          "active_pair_count": 1445,
+          "active_pearson_delta": 0.986163,
+          "active_slope_target_vs_reference": 1.010667,
+          "active_delta_mae_deg": 0.367554,
+          "active_delta_rmse_deg": 0.745072,
+          "noise_floor_threshold_deg": 0.5,
+          "quiet_pair_count": 624,
+          "target_quiet_delta_std_deg": 0.505729,
+          "target_quiet_delta_mae_deg": 0.33952,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.983589,
+            "best_slope_target_vs_reference": 1.011408,
+            "best_pair_count": 2533
+          },
+          "target_path_deg": 5578.53256,
+          "reference_path_deg": 5332.039221,
+          "path_ratio_target_reference": 1.046229,
+          "target_rom_deg": 129.444993,
+          "reference_rom_deg": 127.951781,
+          "rom_match_min_over_max": 0.988465
+        },
+        "k6": {
+          "valid_pair_count": 2528,
+          "pearson_delta": 0.987683,
+          "slope_target_vs_reference": 1.029164,
+          "delta_mae_deg": 1.109741,
+          "delta_rmse_deg": 2.233225,
+          "active_delta_threshold_deg": 5.0,
+          "active_pair_count": 1361,
+          "active_pearson_delta": 0.990641,
+          "active_slope_target_vs_reference": 1.027844,
+          "active_delta_mae_deg": 1.431341,
+          "active_delta_rmse_deg": 2.628226,
+          "noise_floor_threshold_deg": 2.0,
+          "quiet_pair_count": 538,
+          "target_quiet_delta_std_deg": 1.71356,
+          "target_quiet_delta_mae_deg": 1.293071,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.987683,
+            "best_slope_target_vs_reference": 1.029164,
+            "best_pair_count": 2528
+          },
+          "target_path_deg": 24152.671128,
+          "reference_path_deg": 22977.541065,
+          "path_ratio_target_reference": 1.051143,
+          "target_rom_deg": 129.444993,
+          "reference_rom_deg": 127.951781,
+          "rom_match_min_over_max": 0.988465
+        }
+      }
+    },
+    "RightElbow": {
+      "SKT_vs_XsensFair": {
+        "k1": {
+          "valid_pair_count": 2432,
+          "pearson_delta": 0.171947,
+          "slope_target_vs_reference": 0.416793,
+          "delta_mae_deg": 5.908197,
+          "delta_rmse_deg": 9.238772,
+          "active_delta_threshold_deg": 1.0,
+          "active_pair_count": 1357,
+          "active_pearson_delta": 0.215581,
+          "active_slope_target_vs_reference": 0.409632,
+          "active_delta_mae_deg": 6.515819,
+          "active_delta_rmse_deg": 9.763984,
+          "noise_floor_threshold_deg": 0.5,
+          "quiet_pair_count": 617,
+          "target_quiet_delta_std_deg": 8.023999,
+          "target_quiet_delta_mae_deg": 4.970097,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 1,
+            "best_pearson_delta": 0.178623,
+            "best_slope_target_vs_reference": 0.431468,
+            "best_pair_count": 2432
+          },
+          "target_path_deg": 14440.340542,
+          "reference_path_deg": 5515.748211,
+          "path_ratio_target_reference": 2.61802,
+          "target_rom_deg": 164.939551,
+          "reference_rom_deg": 117.122674,
+          "rom_match_min_over_max": 0.710095
+        },
+        "k6": {
+          "valid_pair_count": 2402,
+          "pearson_delta": 0.281854,
+          "slope_target_vs_reference": 0.480833,
+          "delta_mae_deg": 18.420009,
+          "delta_rmse_deg": 27.391395,
+          "active_delta_threshold_deg": 5.0,
+          "active_pair_count": 1277,
+          "active_pearson_delta": 0.336818,
+          "active_slope_target_vs_reference": 0.475867,
+          "active_delta_mae_deg": 21.386425,
+          "active_delta_rmse_deg": 31.089142,
+          "noise_floor_threshold_deg": 2.0,
+          "quiet_pair_count": 562,
+          "target_quiet_delta_std_deg": 20.378016,
+          "target_quiet_delta_mae_deg": 13.878437,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 1,
+            "best_pearson_delta": 0.310907,
+            "best_slope_target_vs_reference": 0.528766,
+            "best_pair_count": 2402
+          },
+          "target_path_deg": 46118.169747,
+          "reference_path_deg": 24285.631446,
+          "path_ratio_target_reference": 1.89899,
+          "target_rom_deg": 164.939551,
+          "reference_rom_deg": 117.122674,
+          "rom_match_min_over_max": 0.710095
+        }
+      },
+      "FastSAM3D_vs_XsensFair": {
+        "k1": {
+          "valid_pair_count": 2533,
+          "pearson_delta": 0.591721,
+          "slope_target_vs_reference": 0.674244,
+          "delta_mae_deg": 2.169678,
+          "delta_rmse_deg": 3.646806,
+          "active_delta_threshold_deg": 1.0,
+          "active_pair_count": 1414,
+          "active_pearson_delta": 0.68114,
+          "active_slope_target_vs_reference": 0.673851,
+          "active_delta_mae_deg": 2.561575,
+          "active_delta_rmse_deg": 3.965951,
+          "noise_floor_threshold_deg": 0.5,
+          "quiet_pair_count": 644,
+          "target_quiet_delta_std_deg": 3.171885,
+          "target_quiet_delta_mae_deg": 1.668055,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.591721,
+            "best_slope_target_vs_reference": 0.674244,
+            "best_pair_count": 2533
+          },
+          "target_path_deg": 6875.421768,
+          "reference_path_deg": 5722.50827,
+          "path_ratio_target_reference": 1.20147,
+          "target_rom_deg": 111.246275,
+          "reference_rom_deg": 117.122674,
+          "rom_match_min_over_max": 0.949827
+        },
+        "k6": {
+          "valid_pair_count": 2528,
+          "pearson_delta": 0.735573,
+          "slope_target_vs_reference": 0.774473,
+          "delta_mae_deg": 7.507289,
+          "delta_rmse_deg": 11.90433,
+          "active_delta_threshold_deg": 5.0,
+          "active_pair_count": 1347,
+          "active_pearson_delta": 0.830069,
+          "active_slope_target_vs_reference": 0.772104,
+          "active_delta_mae_deg": 8.329734,
+          "active_delta_rmse_deg": 12.282011,
+          "noise_floor_threshold_deg": 2.0,
+          "quiet_pair_count": 587,
+          "target_quiet_delta_std_deg": 10.426347,
+          "target_quiet_delta_mae_deg": 6.068243,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.735573,
+            "best_slope_target_vs_reference": 0.774473,
+            "best_pair_count": 2528
+          },
+          "target_path_deg": 29007.148657,
+          "reference_path_deg": 25557.939834,
+          "path_ratio_target_reference": 1.134956,
+          "target_rom_deg": 111.246275,
+          "reference_rom_deg": 117.122674,
+          "rom_match_min_over_max": 0.949827
+        }
+      },
+      "Merge_vs_XsensFair": {
+        "k1": {
+          "valid_pair_count": 2533,
+          "pearson_delta": 0.084411,
+          "slope_target_vs_reference": 0.092954,
+          "delta_mae_deg": 3.663331,
+          "delta_rmse_deg": 5.326923,
+          "active_delta_threshold_deg": 1.0,
+          "active_pair_count": 1414,
+          "active_pearson_delta": 0.114038,
+          "active_slope_target_vs_reference": 0.093541,
+          "active_delta_mae_deg": 4.467084,
+          "active_delta_rmse_deg": 6.078107,
+          "noise_floor_threshold_deg": 0.5,
+          "quiet_pair_count": 644,
+          "target_quiet_delta_std_deg": 4.165112,
+          "target_quiet_delta_mae_deg": 2.58045,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.084411,
+            "best_slope_target_vs_reference": 0.092954,
+            "best_pair_count": 2533
+          },
+          "target_path_deg": 6626.462732,
+          "reference_path_deg": 5722.50827,
+          "path_ratio_target_reference": 1.157965,
+          "target_rom_deg": 111.246276,
+          "reference_rom_deg": 117.122674,
+          "rom_match_min_over_max": 0.949827
+        },
+        "k6": {
+          "valid_pair_count": 2528,
+          "pearson_delta": 0.084135,
+          "slope_target_vs_reference": 0.087432,
+          "delta_mae_deg": 15.73689,
+          "delta_rmse_deg": 21.964201,
+          "active_delta_threshold_deg": 5.0,
+          "active_pair_count": 1347,
+          "active_pearson_delta": 0.113238,
+          "active_slope_target_vs_reference": 0.08749,
+          "active_delta_mae_deg": 19.438375,
+          "active_delta_rmse_deg": 25.839843,
+          "noise_floor_threshold_deg": 2.0,
+          "quiet_pair_count": 587,
+          "target_quiet_delta_std_deg": 14.959127,
+          "target_quiet_delta_mae_deg": 10.614603,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.084135,
+            "best_slope_target_vs_reference": 0.087432,
+            "best_pair_count": 2528
+          },
+          "target_path_deg": 28365.520828,
+          "reference_path_deg": 25557.939834,
+          "path_ratio_target_reference": 1.109852,
+          "target_rom_deg": 111.246276,
+          "reference_rom_deg": 117.122674,
+          "rom_match_min_over_max": 0.949827
+        }
+      },
+      "XsensNative_vs_XsensFair": {
+        "k1": {
+          "valid_pair_count": 2524,
+          "pearson_delta": 0.992413,
+          "slope_target_vs_reference": 1.01008,
+          "delta_mae_deg": 0.225282,
+          "delta_rmse_deg": 0.470036,
+          "active_delta_threshold_deg": 1.0,
+          "active_pair_count": 1406,
+          "active_pearson_delta": 0.993581,
+          "active_slope_target_vs_reference": 1.009764,
+          "active_delta_mae_deg": 0.296399,
+          "active_delta_rmse_deg": 0.576212,
+          "noise_floor_threshold_deg": 0.5,
+          "quiet_pair_count": 644,
+          "target_quiet_delta_std_deg": 0.367439,
+          "target_quiet_delta_mae_deg": 0.293681,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.992413,
+            "best_slope_target_vs_reference": 1.01008,
+            "best_pair_count": 2524
+          },
+          "target_path_deg": 5842.551296,
+          "reference_path_deg": 5697.994113,
+          "path_ratio_target_reference": 1.02537,
+          "target_rom_deg": 120.031163,
+          "reference_rom_deg": 117.122674,
+          "rom_match_min_over_max": 0.975769
+        },
+        "k6": {
+          "valid_pair_count": 2514,
+          "pearson_delta": 0.99584,
+          "slope_target_vs_reference": 1.010218,
+          "delta_mae_deg": 0.77741,
+          "delta_rmse_deg": 1.483063,
+          "active_delta_threshold_deg": 5.0,
+          "active_pair_count": 1337,
+          "active_pearson_delta": 0.997237,
+          "active_slope_target_vs_reference": 1.010123,
+          "active_delta_mae_deg": 0.991405,
+          "active_delta_rmse_deg": 1.650314,
+          "noise_floor_threshold_deg": 2.0,
+          "quiet_pair_count": 585,
+          "target_quiet_delta_std_deg": 1.86691,
+          "target_quiet_delta_mae_deg": 1.236839,
+          "lag_sweep": {
+            "lag_window_frames": 10,
+            "best_lag_frames": 0,
+            "best_pearson_delta": 0.99584,
+            "best_slope_target_vs_reference": 1.010218,
+            "best_pair_count": 2514
+          },
+          "target_path_deg": 25937.085252,
+          "reference_path_deg": 25448.675859,
+          "path_ratio_target_reference": 1.019192,
+          "target_rom_deg": 120.031163,
+          "reference_rom_deg": 117.122674,
+          "rom_match_min_over_max": 0.975769
+        }
+      }
+    }
+  },
+  "quality_filter_stats": {}
+}

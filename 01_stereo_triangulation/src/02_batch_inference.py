@@ -27,17 +27,9 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 SRC_DIR = _SRC_DIR
 PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params.npz")
 OUTPUT_TAG = os.environ.get("POSE_OUTPUT_TAG", "").strip()
-POSE_2D_DETECTOR = os.environ.get("POSE_2D_DETECTOR", "yolo").strip().lower()
 MODEL_NAME = os.environ.get("POSE_MODEL_NAME", "yolov8n-pose.pt")
 MODEL_PATH = os.path.join(SRC_DIR, MODEL_NAME)
 MODEL_SLUG = os.path.splitext(MODEL_NAME)[0].replace("-", "_")
-RTMLIB_DEFAULT_MODEL = "RTMO" if POSE_2D_DETECTOR == "rtmo" else "Body"
-RTMLIB_MODEL_CLASS = os.environ.get("POSE_RTMLIB_MODEL", RTMLIB_DEFAULT_MODEL).strip()
-RTMLIB_BACKEND = os.environ.get("POSE_RTMLIB_BACKEND", "onnxruntime").strip()
-RTMLIB_DEVICE = os.environ.get("POSE_RTMLIB_DEVICE", "cpu").strip()
-RTMLIB_MODE = os.environ.get("POSE_RTMLIB_MODE", "performance").strip()
-RTMLIB_TO_OPENPOSE = os.environ.get("POSE_RTMLIB_TO_OPENPOSE", "0") == "1"
-RTMLIB_ONNX_MODEL = os.environ.get("POSE_RTMLIB_ONNX_MODEL", "").strip()
 
 USE_DENSE_STEREO = os.environ.get("POSE_USE_DENSE_STEREO", "0") == "1"
 SGBM_MIN_DISPARITY = int(os.environ.get("POSE_SGBM_MIN_DISPARITY", "100"))
@@ -83,7 +75,6 @@ ENABLE_ONE_EURO = os.environ.get("POSE_ENABLE_ONE_EURO", "1") == "1"
 FLOOR_AXIS = None
 FLOOR_VALUE = None
 DISABLE_PROGRESS = os.environ.get("POSE_DISABLE_PROGRESS", "0") == "1"
-MAX_FRAMES = max(0, int(os.environ.get("POSE_MAX_FRAMES", "0")))
 
 TORSO_JOINTS = np.array([5, 6, 11, 12], dtype=np.int64)
 UPPER_BODY_JOINTS = np.array([5, 6, 7, 8, 9, 10, 11, 12], dtype=np.int64)
@@ -109,18 +100,6 @@ class TrackState:
     misses: int = 0
     last_score: float = float("nan")
     last_source: str = "none"
-
-
-def detector_slug_from_name(name: str) -> str:
-    return (
-        name.strip()
-        .replace(os.sep, "_")
-        .replace(" ", "_")
-        .replace("-", "_")
-        .replace(".", "_")
-        .replace(":", "_")
-        .lower()
-    )
 
 
 def tagged_name(filename):
@@ -283,178 +262,6 @@ def extract_candidates(result, offset_xy=(0.0, 0.0), source="full"):
     return candidates
 
 
-def bbox_from_keypoints(keypoints_xy, confidence, image_shape, min_conf=0.05):
-    """Build a loose bbox from visible keypoints for detector-agnostic tracking."""
-    h, w = image_shape[:2]
-    keypoints_xy = np.asarray(keypoints_xy, dtype=np.float64)
-    confidence = np.asarray(confidence, dtype=np.float64)
-    valid = (
-        np.isfinite(keypoints_xy).all(axis=1)
-        & np.isfinite(confidence)
-        & (confidence >= min_conf)
-    )
-    if np.count_nonzero(valid) < 3:
-        return None
-
-    pts = keypoints_xy[valid]
-    x1, y1 = np.min(pts, axis=0)
-    x2, y2 = np.max(pts, axis=0)
-    pad_x = max(12.0, 0.12 * max(x2 - x1, 1.0))
-    pad_y = max(12.0, 0.12 * max(y2 - y1, 1.0))
-    return np.array(
-        [
-            np.clip(x1 - pad_x, 0, w - 1),
-            np.clip(y1 - pad_y, 0, h - 1),
-            np.clip(x2 + pad_x, 0, w - 1),
-            np.clip(y2 + pad_y, 0, h - 1),
-        ],
-        dtype=np.float64,
-    )
-
-
-def candidates_from_keypoint_arrays(keypoints_xy, confidence, image_shape, offset_xy=(0.0, 0.0), source="full"):
-    """Convert generic pose-detector arrays into DetectionCandidate records."""
-    keypoints_xy = np.asarray(keypoints_xy, dtype=np.float64)
-    confidence = np.asarray(confidence, dtype=np.float64)
-    if keypoints_xy.size == 0 or confidence.size == 0 or keypoints_xy.ndim < 2:
-        return []
-    if keypoints_xy.ndim >= 3 and keypoints_xy.shape[-1] > 2:
-        keypoints_xy = keypoints_xy[..., :2]
-    if keypoints_xy.ndim == 2:
-        keypoints_xy = keypoints_xy[None, ...]
-    if confidence.ndim == 1:
-        confidence = confidence[None, ...]
-    if confidence.ndim == 3 and confidence.shape[-1] == 1:
-        confidence = confidence[..., 0]
-
-    off_x, off_y = offset_xy
-    candidates = []
-    for kpts_xy, kpts_conf in zip(keypoints_xy, confidence):
-        if kpts_xy.shape[0] < 17 or kpts_conf.shape[0] < 17:
-            continue
-        kpts_xy = kpts_xy[:17].copy()
-        kpts_conf = kpts_conf[:17].astype(np.float64)
-        kpts_xy[:, 0] += off_x
-        kpts_xy[:, 1] += off_y
-        bbox = bbox_from_keypoints(kpts_xy, kpts_conf, image_shape)
-        if bbox is None:
-            continue
-        mean_conf = nanmean_subset(kpts_conf, np.arange(len(kpts_conf)))
-        candidates.append(
-            DetectionCandidate(
-                bbox=bbox,
-                keypoints=kpts_xy,
-                conf=kpts_conf,
-                det_conf=mean_conf,
-                mean_conf=mean_conf,
-                torso_conf=nanmean_subset(kpts_conf, TORSO_JOINTS),
-                upper_conf=nanmean_subset(kpts_conf, UPPER_BODY_JOINTS),
-                area=float(bbox_area(bbox)),
-                source=source,
-            )
-        )
-    return candidates
-
-
-class YoloPoseDetector:
-    """Ultralytics YOLO pose adapter used by the historical SKT pipeline."""
-
-    def __init__(self):
-        if not os.path.exists(MODEL_PATH):
-            raise FileNotFoundError(f"YOLO model not found: {MODEL_PATH}")
-        self.model = YOLO(MODEL_PATH)
-        self.display_name = MODEL_NAME
-        self.slug = f"yolo_{MODEL_SLUG}"
-
-    def infer_candidates(self, image, offset_xy=(0.0, 0.0), source="full", conf_th=0.25):
-        result = self.model(image, verbose=False, conf=conf_th)[0]
-        return extract_candidates(result, offset_xy=offset_xy, source=source)
-
-
-class RTMLibPoseDetector:
-    """Optional RTMLib adapter for RTMPose/RTMO-style detectors.
-
-    RTMLib is intentionally imported lazily so the default YOLO pipeline keeps
-    working in environments where RTMLib is not installed yet.
-    """
-
-    def __init__(self):
-        try:
-            import rtmlib  # type: ignore
-        except ImportError as exc:
-            raise ImportError(
-                "RTMLib is required for POSE_2D_DETECTOR=rtmlib. "
-                "Install it in the pose environment before running this mode."
-            ) from exc
-
-        if not hasattr(rtmlib, RTMLIB_MODEL_CLASS):
-            available = [name for name in ("Body", "Wholebody", "RTMO") if hasattr(rtmlib, name)]
-            raise ValueError(
-                f"RTMLib model class '{RTMLIB_MODEL_CLASS}' was not found. "
-                f"Available common classes: {available}"
-            )
-
-        model_cls = getattr(rtmlib, RTMLIB_MODEL_CLASS)
-        if RTMLIB_MODEL_CLASS == "RTMO":
-            if not RTMLIB_ONNX_MODEL:
-                raise ValueError(
-                    "RTMLib RTMO requires POSE_RTMLIB_ONNX_MODEL=/path/to/rtmo.onnx. "
-                    "Use POSE_RTMLIB_MODEL=Body for the auto-downloaded RTMPose path."
-                )
-            self.model = model_cls(
-                onnx_model=RTMLIB_ONNX_MODEL,
-                to_openpose=RTMLIB_TO_OPENPOSE,
-                backend=RTMLIB_BACKEND,
-                device=RTMLIB_DEVICE,
-            )
-        else:
-            constructor_attempts = [
-                dict(to_openpose=RTMLIB_TO_OPENPOSE, mode=RTMLIB_MODE, backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
-                dict(mode=RTMLIB_MODE, backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
-                dict(to_openpose=RTMLIB_TO_OPENPOSE, backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
-                dict(backend=RTMLIB_BACKEND, device=RTMLIB_DEVICE),
-            ]
-            last_error = None
-            self.model = None
-            for kwargs in constructor_attempts:
-                try:
-                    self.model = model_cls(**kwargs)
-                    break
-                except TypeError as exc:
-                    last_error = exc
-            if self.model is None:
-                raise TypeError(f"Failed to construct RTMLib {RTMLIB_MODEL_CLASS}: {last_error}") from last_error
-
-        self.display_name = f"rtmlib:{RTMLIB_MODEL_CLASS}:{RTMLIB_MODE}:{RTMLIB_BACKEND}:{RTMLIB_DEVICE}"
-        self.slug = detector_slug_from_name(self.display_name)
-
-    def infer_candidates(self, image, offset_xy=(0.0, 0.0), source="full", conf_th=0.25):
-        output = self.model(image)
-        if not isinstance(output, tuple) or len(output) < 2:
-            raise RuntimeError("RTMLib detector must return (keypoints, scores).")
-        keypoints_xy, confidence = output[:2]
-        candidates = candidates_from_keypoint_arrays(
-            keypoints_xy,
-            confidence,
-            image.shape,
-            offset_xy=offset_xy,
-            source=source,
-        )
-        # RTMLib returns all candidates; keep the same threshold semantics as YOLO.
-        return [candidate for candidate in candidates if candidate.mean_conf >= conf_th]
-
-
-def create_pose_detector():
-    if POSE_2D_DETECTOR in {"yolo", "ultralytics"}:
-        return YoloPoseDetector()
-    if POSE_2D_DETECTOR in {"rtmlib", "rtmpose", "rtmo"}:
-        return RTMLibPoseDetector()
-    raise ValueError(
-        f"Unsupported POSE_2D_DETECTOR='{POSE_2D_DETECTOR}'. "
-        "Use 'yolo' or 'rtmlib'."
-    )
-
-
 def score_candidate(candidate, prev_bbox, frame_shape):
     h, w = frame_shape[:2]
     frame_area = max(float(h * w), 1.0)
@@ -486,7 +293,7 @@ def select_candidate(candidates, prev_bbox, frame_shape):
     return best_candidate, float(best_score)
 
 
-def infer_tracked_pose(detector, frame, track_state, frame_idx):
+def infer_tracked_pose(model, frame, track_state, frame_idx):
     frame_shape = frame.shape
     attempts = []
     if (
@@ -504,7 +311,8 @@ def infer_tracked_pose(detector, frame, track_state, frame_idx):
     chosen_score = -np.inf
     chosen_source = "none"
     for source, image, offset_xy, conf_th in attempts:
-        candidates = detector.infer_candidates(image, offset_xy=offset_xy, source=source, conf_th=conf_th)
+        result = model(image, verbose=False, conf=conf_th)[0]
+        candidates = extract_candidates(result, offset_xy=offset_xy, source=source)
         candidate, candidate_score = select_candidate(candidates, track_state.bbox, frame_shape)
         if candidate is None:
             continue
@@ -982,6 +790,9 @@ def main():
     if not os.path.exists(PARAM_PATH):
         print(f"[Error] Calibration parameters not found: {PARAM_PATH}")
         return
+    if not os.path.exists(MODEL_PATH):
+        print(f"[Error] YOLO model not found: {MODEL_PATH}")
+        return
 
     data = np.load(PARAM_PATH)
     mtx_l, dist_l = data["mtx_l"], data["dist_l"]
@@ -996,9 +807,6 @@ def main():
         os.path.join(DATA_DIR, "1_video_right.txt"),
     )
     estimated_total_pairs = estimate_synchronized_pair_count(loader_test.left_data, loader_test.right_data)
-    if MAX_FRAMES > 0:
-        estimated_total_pairs = min(estimated_total_pairs, MAX_FRAMES)
-        print(f"[Info] Frame limit enabled: processing at most {MAX_FRAMES} synchronized pairs")
     print(f"[Info] Estimated synchronized frame pairs: {estimated_total_pairs}")
     frame_l, _, _, _ = loader_test.get_next_pair()
     if frame_l is None:
@@ -1009,14 +817,8 @@ def main():
 
     R1, R2, P1, P2, Q, _, _ = cv2.stereoRectify(mtx_l, dist_l, mtx_r, dist_r, (w, h), R, T, alpha=0)
 
-    print("[Info] Loading 2D pose detector...")
-    print(f"[Info] Detector backend: {POSE_2D_DETECTOR}")
-    try:
-        detector = create_pose_detector()
-    except Exception as exc:
-        print(f"[Error] Failed to load pose detector: {exc}")
-        return
-    print(f"[Info] Using pose detector: {detector.display_name}")
+    print("[Info] Loading YOLO model...")
+    print(f"[Info] Using pose model: {os.path.basename(MODEL_PATH)}")
     print(
         "[Info] 2D temporal smoothing: "
         + (
@@ -1035,6 +837,7 @@ def main():
             "[Info] Temporal window triangulation rescue: "
             f"enabled (radius={TEMPORAL_WINDOW_RADIUS}, min_support={TEMPORAL_WINDOW_MIN_SUPPORT})"
         )
+    model = YOLO(MODEL_PATH)
 
     sgbm = None
     map1_l = map2_l = map1_r = map2_r = None
@@ -1111,15 +914,12 @@ def main():
     frame_idx = 0
 
     while True:
-        if MAX_FRAMES > 0 and frame_idx >= MAX_FRAMES:
-            break
-
         frame_l, frame_r, _, ts = loader.get_next_pair()
         if frame_l is None:
             break
 
-        candidate_l, track_left = infer_tracked_pose(detector, frame_l, track_left, frame_idx)
-        candidate_r, track_right = infer_tracked_pose(detector, frame_r, track_right, frame_idx)
+        candidate_l, track_left = infer_tracked_pose(model, frame_l, track_left, frame_idx)
+        candidate_r, track_right = infer_tracked_pose(model, frame_r, track_right, frame_idx)
 
         pts_l = np.full((17, 2), np.nan, dtype=np.float64)
         pts_r = np.full((17, 2), np.nan, dtype=np.float64)
@@ -1407,25 +1207,20 @@ def main():
         bbox_right=all_bbox_right,
         source_left=all_source_left,
         source_right=all_source_right,
-        detector_backend=np.array(POSE_2D_DETECTOR),
-        detector_name=np.array(detector.display_name),
-        model_name=np.array(detector.display_name),
+        model_name=np.array(MODEL_NAME),
         postprocess_variant=np.array(resolve_raw_variant()),
         reprojection_threshold_px=np.array(REPROJECTION_MAX_PX, dtype=np.float64),
     )
     raw_save_file = os.path.join(OUTPUT_DIR, "yolo_3d_raw.npz")
-    raw_model_save_file = os.path.join(OUTPUT_DIR, f"yolo_3d_raw_{detector.slug}.npz")
-    raw_skt_save_file = os.path.join(OUTPUT_DIR, f"skt_3d_raw_{detector.slug}.npz")
+    raw_model_save_file = os.path.join(OUTPUT_DIR, f"yolo_3d_raw_{MODEL_SLUG}.npz")
     raw_tagged_save_file = resolve_output_path("yolo_3d_raw.npz")
     np.savez(raw_save_file, **raw_payload)
     np.savez(raw_model_save_file, **raw_payload)
-    np.savez(raw_skt_save_file, **raw_payload)
     if raw_tagged_save_file not in {raw_save_file, raw_model_save_file}:
         np.savez(raw_tagged_save_file, **raw_payload)
 
     optimized_save_file = os.path.join(OUTPUT_DIR, "yolo_3d_optimized.npz")
-    optimized_model_save_file = os.path.join(OUTPUT_DIR, f"yolo_3d_optimized_{detector.slug}.npz")
-    optimized_skt_save_file = os.path.join(OUTPUT_DIR, f"skt_3d_optimized_{detector.slug}.npz")
+    optimized_model_save_file = os.path.join(OUTPUT_DIR, f"yolo_3d_optimized_{MODEL_SLUG}.npz")
     optimized_tagged_save_file = resolve_output_path("yolo_3d_optimized.npz")
     optimized_payload = dict(
         timestamps=all_timestamps,
@@ -1458,27 +1253,22 @@ def main():
         source_right=all_source_right,
         prior_names=np.array(list(priors.keys())),
         prior_values=np.array(list(priors.values()), dtype=np.float64),
-        detector_backend=np.array(POSE_2D_DETECTOR),
-        detector_name=np.array(detector.display_name),
-        model_name=np.array(detector.display_name),
+        model_name=np.array(MODEL_NAME),
         postprocess_variant=np.array(postprocess_variant),
         reprojection_threshold_px=np.array(REPROJECTION_MAX_PX, dtype=np.float64),
     )
 
     np.savez(optimized_save_file, **optimized_payload)
     np.savez(optimized_model_save_file, **optimized_payload)
-    np.savez(optimized_skt_save_file, **optimized_payload)
     if optimized_tagged_save_file not in {optimized_save_file, optimized_model_save_file}:
         np.savez(optimized_tagged_save_file, **optimized_payload)
 
     print(f"\n[Info] Raw data saved to {raw_save_file}")
     print(f"[Info] Model-specific raw data saved to {raw_model_save_file}")
-    print(f"[Info] Detector-specific raw data saved to {raw_skt_save_file}")
     if raw_tagged_save_file not in {raw_save_file, raw_model_save_file}:
         print(f"[Info] Tagged raw data saved to {raw_tagged_save_file}")
     print(f"[Info] Optimized data saved to {optimized_save_file}")
     print(f"[Info] Model-specific optimized data saved to {optimized_model_save_file}")
-    print(f"[Info] Detector-specific optimized data saved to {optimized_skt_save_file}")
     if optimized_tagged_save_file not in {optimized_save_file, optimized_model_save_file}:
         print(f"[Info] Tagged optimized data saved to {optimized_tagged_save_file}")
     print(f"[Info] Total frames processed: {len(all_timestamps)}")

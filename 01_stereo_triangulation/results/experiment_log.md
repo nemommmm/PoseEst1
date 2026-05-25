@@ -637,3 +637,73 @@ Interpretation:
 - The clearest gain is fewer K=1 high-delta outliers and higher K=6 motion-trend agreement.
 - It does not close the gap to standalone FastSAM3D, so this should be treated as an auxiliary stabilization experiment rather than a final solution.
 - Since Xsens is a comparison system, report this as improved agreement with an Xsens-derived reference, not improved accuracy against ground truth.
+
+## 2026-05-25 — Remaining SKT Enhancement Baselines
+
+Snapshot before experiments: `51a0642 chore: snapshot before remaining SKT enhancement baselines`.
+
+### Priority 4: Quality-Aware Elbow Repair
+
+- Existing implementation: `01_stereo_triangulation/src/22_elbow_quality_repair.py`.
+- Existing summary: `01_stereo_triangulation/results/skt_model_fusion/elbow_quality_repair_ablation.md`.
+- Reference-free conclusion: short quality-gated interpolation reduces elbow high-delta events.
+- Most defensible candidate remains `default gap=12`, because `gap=20` gives stronger numerical smoothing but is less safe for motion-risk evaluation.
+
+Representative result:
+
+| Run | Angle | K | High before | High after | P95 before | P95 after |
+|---|---|---:|---:|---:|---:|---:|
+| default gap=12 | LeftElbow | 1 | 0.062 | 0.051 | 38.4 | 35.0 |
+| default gap=12 | LeftElbow | 6 | 0.188 | 0.175 | 64.6 | 62.8 |
+| default gap=12 | RightElbow | 1 | 0.054 | 0.040 | 36.8 | 32.3 |
+| default gap=12 | RightElbow | 6 | 0.199 | 0.177 | 68.9 | 60.0 |
+
+### Priority 5: OneEuro / Kalman Temporal Smoothing
+
+- Added script: `01_stereo_triangulation/src/24_temporal_smoothing_ablation.py`.
+- Input: first-120-frame YOLOv8m raw SKT run.
+- Output: `01_stereo_triangulation/results/skt_model_fusion/temporal_smoothing_ablation/temporal_smoothing_ablation.md`.
+- Reference-free conclusion: OneEuro is the better simple temporal baseline; Kalman is not clearly safe without tuning.
+
+Representative result:
+
+| Variant | Angle | K | P95 delta | High-delta rate |
+|---|---|---:|---:|---:|
+| raw | LeftElbow | 1 | 11.524 | 0.017 |
+| one_euro_only | LeftElbow | 1 | 5.405 | 0.000 |
+| bone_plus_one_euro | LeftElbow | 6 | 33.951 | 0.053 |
+| kalman_only | RightElbow | 6 | 100.703 | 0.123 |
+
+2D OneEuro check:
+
+- Compared YOLOv8m first 120 frames with and without `POSE_ENABLE_2D_TEMPORAL_SMOOTHING`.
+- Output: `01_stereo_triangulation/results/skt_model_fusion/temporal_2d_smoothing_compare/detector_smoke_comparison.md`.
+- The short-run high-delta rates were effectively unchanged, suggesting that the remaining high-delta issue is not solved by 2D smoothing alone.
+
+### Priority 6: Detector Replacement
+
+- Existing RTMPoseS smoke test was retained.
+- Added a YOLO11m first-120-frame smoke test using temporary `yolo11m-pose.pt` weights, then removed the downloaded weight file from the repo folder.
+- Output: `01_stereo_triangulation/results/skt_model_fusion/detector_smoke_comparison_updated/detector_smoke_comparison.md`.
+
+Updated detector smoke result:
+
+| Run | Valid joints | L elbow chain | R elbow chain | Epi p90 px | Reproj p90 px | L K6 high | R K6 high |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| YOLOv8m | 0.784 | 1.000 | 1.000 | 133.153 | 16.617 | 0.053 | 0.035 |
+| YOLO11m | 0.791 | 1.000 | 1.000 | 76.138 | 18.854 | 0.053 | 0.053 |
+| RTMPoseS | 0.748 | 0.850 | 0.892 | 153.597 | 22.692 | 0.208 | 0.144 |
+
+Interpretation:
+
+- YOLO11m improves epipolar p90 substantially in this short test, but it does not clearly reduce elbow high-delta rates.
+- RTMPoseS underperforms YOLOv8m here, likely because its confidence/keypoint behavior is not plug-compatible with the current SKT gates.
+- Detector replacement alone is not the highest-ROI route unless paired with detector-specific threshold tuning.
+
+### Overall Ranking After These Baselines
+
+1. FastSAM3D prior fusion: most promising among quick add-ons, but still auxiliary.
+2. Quality-aware elbow repair: useful and explainable; use conservative `gap=12`.
+3. OneEuro / bone+OneEuro: useful as a simple smoothing baseline; Kalman needs more tuning before trust.
+4. YOLO11m detector swap: worth noting, but not enough by itself.
+5. RTMPoseS direct swap: not recommended as currently configured.

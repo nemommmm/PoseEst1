@@ -55,9 +55,11 @@ current gates.
 
 ## Working Recommendation
 
-The most practical short-term stack is:
+After removing FastSAM3D prior fusion from the main SKT improvement ranking,
+the most practical short-term SKT-only stack is:
 
-1. Keep the current YOLOv8m SKT baseline unless YOLO11m full-sequence testing shows a clear gain.
-2. Add conservative quality-aware repair for elbow-chain outliers.
-3. Keep OneEuro / bone+OneEuro as the simple smoothing baseline.
-4. Treat FastSAM3D prior fusion as the most promising auxiliary route, but not a final replacement for SKT.
+1. Add conservative quality-aware repair for elbow-chain outliers.
+2. Keep OneEuro / bone+OneEuro as the simple smoothing baseline.
+3. Keep the current YOLOv8m SKT baseline unless YOLO11m full-sequence testing shows a clear gain.
+4. Do not use RTMPoseS as a direct drop-in without detector-specific gate tuning.
+5. Treat FastSAM3D prior fusion only as a diagnostic experiment, not as an SKT mainline method.

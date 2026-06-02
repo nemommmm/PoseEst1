@@ -40,7 +40,7 @@ PARAM_PATH = SHARED_DIR / "camera_params.npz"
 DEFAULT_REF_NPZ = PROJECT_ROOT / "01_stereo_triangulation" / "results" / "yolo_3d_raw.npz"
 DEFAULT_SUMMARY = RESULTS_DIR / "point_cloud_summary_audit.json"
 GT_COMPARISON_JSON = PROJECT_ROOT / "01_stereo_triangulation" / "results" / "skeleton_comparison_dirA.json"
-MVNX_PATH = Path.home() / "Desktop" / "MVE386 Project Course" / "Xsens_ground_truth" / "Aitor-001.mvnx"
+MVNX_PATH = PROJECT_ROOT.parent / "Xsens_ground_truth" / "Aitor-001.mvnx"
 FAIR_GT_NPZ = SHARED_DIR / "fair_gt_angles.npz"
 
 SGBM_MIN_DISPARITY = int(os.environ.get("POSE_SGBM_MIN_DISPARITY", "100"))

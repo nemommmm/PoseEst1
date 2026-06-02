@@ -1,6 +1,6 @@
 # PoseEst1
 
-MVE386 / Chalmers master's thesis project on 3D-vision and AI-based human pose
+Chalmers master's thesis project on 3D-vision and AI-based human pose
 estimation for ergonomic assessment in manufacturing environments.
 
 ## Xsens Reference Policy

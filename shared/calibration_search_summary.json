@@ -2554,7 +2554,7 @@
   "candidate_score": 2.3017304123450155,
   "candidate_kept_frames": 40,
   "candidate_total_frames": 40,
-  "candidate_output_path": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/src/camera_params_candidate.npz",
-  "active_output_path": "/Users/laomeng/Desktop/MVE386 Project Course/PoseEst1/src/camera_params.npz",
+  "candidate_output_path": "shared/camera_params_candidate.npz",
+  "active_output_path": "shared/camera_params.npz",
   "promoted_to_active": false
 }

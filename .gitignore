@@ -212,7 +212,7 @@ marimo/_lsp/
 __marimo__/
 
 # ------------------------------------------------
-# Custom Rules for Vis1 Project
+# Custom Rules for Master Thesis Project
 # ------------------------------------------------
 
 # Ignore large video files to prevent accidental upload
@@ -226,6 +226,23 @@ __marimo__/
 # Ignore confidential data folders
 2025_Ergonomics_Data/
 Calibration_video/
+
+# Partner/proprietary motion-capture and pose data
+*.mvnx
+*.trc
+*.mot
+*.osim
+*.c3d
+*.bvh
+
+# Binary arrays generated from partner data or pose pipelines
+*.npz
+*.npy
+
+# Known partner-data / generated-result locations
+03_FastSAM3D/data/easyergo_uploaded/
+shared/recovered_methods/
+00_pose_pipeline/runs/
 
 # macOS / generated artifacts
 .DS_Store

@@ -1,6 +1,7 @@
 # PoseEst1
 
-MVE386 / Chalmers 硕士论文项目：基于 3D 视觉与 AI 的制造环境人体姿态与人体工程学评估。
+MVE386 / Chalmers master's thesis project on 3D-vision and AI-based human pose
+estimation for ergonomic assessment in manufacturing environments.
 
 ## Xsens Reference Policy
 
@@ -19,30 +20,36 @@ such as controlled goniometer measurements or a higher-grade optical mocap setup
 
 ## Pipeline Naming
 
-后续论文、报告和代码说明统一使用以下命名：
+Use the following names consistently in the thesis, reports, and code comments:
 
-| Directory | Formal Name | Abbreviation | Chinese |
+| Directory | Formal Name | Abbreviation | Purpose |
 |---|---|---|---|
-| `01_stereo_triangulation/` | Sparse Keypoint Triangulation | SKT | 稀疏关键点三角化 |
-| `02_dense_stereo_sgbm/` | Dense Disparity Mapping | DDM | 密集视差映射 |
-| `03_FastSAM3D/` | FastSAM3D / EasyErgo Hybrid Pose | FastSAM3D | FastSAM3D / EasyErgo 混合姿态 |
-| `04_frame_delta_eval/` | Motion-Level Elbow Evaluation | Frame Delta | 基于运动变化的肘部评估 |
+| `00_pose_pipeline/` | Standalone Pose Pipeline | Pipeline | Reusable end-to-end workflow for new datasets |
+| `01_stereo_triangulation/` | Sparse Keypoint Triangulation | SKT | Stereo keypoint detection and triangulation |
+| `02_dense_stereo_sgbm/` | Dense Disparity Mapping | DDM | Dense stereo disparity baseline |
+| `03_FastSAM3D/` | FastSAM3D / EasyErgo Hybrid Pose | FastSAM3D | External single-view / hybrid pose comparison |
+| `04_frame_delta_eval/` | Motion-Level Elbow Evaluation | Frame Delta | Motion-level elbow evaluation experiments |
 
 ## Structure
 
-- `shared/`: 共享工具库（Xsens reference 解析、角度语义、后处理、标定参数）
-- `01_stereo_triangulation/`: 双目关键点三角化主线（SKT）
-- `02_dense_stereo_sgbm/`: SGBM 密集视差对照方向（DDM）
-- `03_FastSAM3D/`: FastSAM3D / EasyErgo 混合姿态方向
-- `04_frame_delta_eval/`: 01 / 03 / Xsens-derived reference 的 motion-level 评估
+- `00_pose_pipeline/`: standalone workflow for dataset validation, SKT inference,
+  automatic time-offset estimation, angle evaluation, motion-delta evaluation,
+  segment analysis, scatter plots, and comparison videos.
+- `shared/`: shared utilities for Xsens parsing, angle semantics,
+  post-processing, and calibration assets.
+- `01_stereo_triangulation/`: original SKT development branch.
+- `02_dense_stereo_sgbm/`: dense SGBM disparity baseline.
+- `03_FastSAM3D/`: FastSAM3D / EasyErgo hybrid-pose branch.
+- `04_frame_delta_eval/`: motion-level evaluation experiments against
+  Xsens-derived references and external pose methods.
 
 ## Core Evaluation
 
-项目核心指标按优先级统一为：
+The core evaluation metrics are prioritized as follows:
 
 1. Joint Angle MAE
 2. RULA scoring
-3. MPJPE（支持性空间指标）
+3. MPJPE as a supporting spatial diagnostic
 
 When these metrics are computed against Xsens, interpret them as agreement with
 the Xsens-derived reference rather than true physical error against absolute GT.

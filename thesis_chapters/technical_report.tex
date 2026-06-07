@@ -27,10 +27,18 @@
 \usepackage{array}
 \usepackage{float}
 \usepackage{tabularx}
+\usepackage{setspace}
+\usepackage{placeins}
+\usepackage{caption}
 
 \hypersetup{colorlinks=true, linkcolor=blue!70!black, urlcolor=blue!70!black, citecolor=green!50!black}
 \graphicspath{{figures/}}
 \emergencystretch=2em
+\setstretch{1.06}
+\setlength{\textfloatsep}{1.1em plus 0.25em minus 0.2em}
+\setlength{\floatsep}{1.0em plus 0.25em minus 0.2em}
+\setlength{\intextsep}{1.0em plus 0.25em minus 0.2em}
+\captionsetup{font=small, labelfont=bf}
 
 \definecolor{goodcolor}{rgb}{0.00,0.38,0.18}
 \definecolor{warncolor}{rgb}{0.55,0.27,0.07}
@@ -175,6 +183,7 @@ Section~\ref{sec:results} reports the experimental results.
 Section~\ref{sec:discussion} discusses applicability and limitations, and
 Section~\ref{sec:conclusion} concludes the report.
 
+\clearpage
 % =============================================================
 \section{Background and Related Work}
 \label{sec:background}
@@ -190,6 +199,11 @@ from visual features.
 These methods are attractive for deployment because they require only one
 camera, and modern learning-based models can exploit strong priors about human
 body shape and motion.
+Recent real-time 2D pose estimators such as OpenPose and RTMPose demonstrate
+that keypoint detection can be made fast enough for online applications
+\cite{cao2019openpose,jiang2023rtmpose}, while temporal 3D pose models such as
+VideoPose3D and MotionBERT show how motion priors can be learned from pose
+sequences \cite{pavllo20193d,zhu2023motionbert}.
 Their main limitation is that absolute scale and depth are not directly
 observed from a single view, so position-space evaluation often requires
 external scale correction or coordinate alignment.
@@ -217,6 +231,23 @@ indicator for selected joints, but the full RULA workflow is not treated as a
 completed automated scoring system.
 This distinction keeps the evaluation focused on the pose-estimation component.
 
+Recent work has increasingly connected motion capture, computer vision, and
+digital human modelling for workplace ergonomics.
+Systematic reviews show that motion-capture technologies are becoming common
+in industrial applications, but that deployment still depends on usability,
+measurement reliability, and task-specific interpretation
+\cite{menolotto2020motion}.
+Vision-based ergonomic assessment has also been explored in construction and
+collaborative-robot settings \cite{yu2019joint,menanno2024ergonomic}.
+Most directly related to this thesis, Quesada Diaz, Iriondo Pascual, and
+co-authors compared computer-vision and IMU-based motion capture for
+manufacturing ergonomics, highlighting both the promise of non-intrusive
+vision systems and the need for careful filtering, alignment, and benchmarking
+\cite{quesada2026supporting}.
+Iriondo Pascual's broader work on productivity and worker well-being
+optimization further situates this thesis within human-centred manufacturing
+and digital ergonomics \cite{iriondo2024development,iriondo2025integrating}.
+
 \subsection{Evaluation Dimensions}
 
 Pose-estimation errors can appear differently depending on the evaluation
@@ -236,7 +267,7 @@ single metric as sufficient.
 IMU-based motion capture systems such as Xsens provide high-frequency body
 motion measurements without requiring optical markers.
 They are practical for industrial recordings but rely on sensor calibration and
-body-model assumptions.
+body-model assumptions \cite{roetenberg2009xsens,filippeschi2017survey}.
 In this project, Xsens is therefore used as an external comparison/reference
 system rather than an absolute physical ground truth.
 The thesis also distinguishes between Xsens native angles and Xsens-derived
@@ -245,6 +276,7 @@ formula as the vision methods.
 The latter representation is used as the main reference for fairer
 cross-method angle comparison.
 
+\clearpage
 % =============================================================
 \section{Data and Experimental Setup}
 \label{sec:data_setup}
@@ -282,7 +314,7 @@ the estimated baseline close to the physical value, which is important because
 small calibration errors are amplified when triangulated joints are used for
 angle computation.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=\linewidth]{calibration_evolution.png}
   \caption{Stereo calibration evolution. The current calibration balances a realistic baseline estimate with a low reprojection error, making it suitable as the fixed geometric input for SKT and SGBM.}
@@ -301,7 +333,7 @@ frame rate of approximately 12.5 fps.
 The left metadata contains 3015 rows and the right metadata contains 2882 rows,
 so some rows are unpaired or outside the synchronized interval.
 
-\begin{table}[H]
+\begin{table}[!htbp]
   \centering
   \caption{Summary of the synchronized camera timeline used for evaluation.}
   \label{tab:timeline_summary}
@@ -365,7 +397,7 @@ region.
 This reduces the risk that the final motion comparison is driven by an
 arbitrary manually selected shift.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=\linewidth]{thesis_offset_search.png}
   \caption{Automatic offset estimation between the camera timeline and the Xsens reference timeline. The final selected value is 17.31 s, with position-, angle-, and motion-based scores all supporting a similar alignment.}
@@ -380,7 +412,7 @@ Short-term differences remain, especially for SKT, but these differences are
 then treated as method behaviour rather than as a known global synchronization
 error.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=\linewidth]{thesis_joint_angle_over_time.png}
   \caption{Left and right elbow angles on the shared timeline after offset correction. The plot provides a qualitative synchronization check before quantitative angle and motion metrics are interpreted.}
@@ -396,13 +428,14 @@ The current visual check does not remove the possibility of small residual
 clock drift, but it supports the use of a constant offset for the present
 analysis.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=\linewidth]{thesis_k6_delta_first_last_10s.png}
   \caption{K=6 elbow motion deltas near the beginning and end of the common valid interval. This figure is used as a practical check that the chosen constant offset remains reasonable across the recording.}
   \label{fig:first_last_delta}
 \end{figure}
 
+\clearpage
 % =============================================================
 \section{Methods}
 \label{sec:methods}
@@ -427,14 +460,14 @@ This prevents a misleading conclusion where a method that is strong in one
 space, such as metric stereo geometry, is assumed to be equally strong in
 angle or motion consistency.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=\linewidth]{thesis_pipeline_overview.png}
   \caption{Overview of the thesis evaluation pipeline. Inputs are synchronized and evaluated separately in angle space, motion space, and position space before the final cross-method interpretation.}
   \label{fig:pipeline_overview}
 \end{figure}
 
-\begin{table}[H]
+\begin{table}[!htbp]
   \centering
   \caption{Role of each evaluated pose-estimation path in the thesis.}
   \label{tab:method_roles}
@@ -498,6 +531,10 @@ FastSAM3D is used as a learning-based monocular comparison method.
 Instead of explicitly triangulating left--right keypoint pairs, FastSAM3D
 produces 3D pose outputs from a single camera stream using a model-based pose
 pipeline.
+Although the exact FastSAM3D implementation is treated as an external output
+in this thesis, its inclusion reflects the recent trend toward efficient
+segmentation- and learning-based visual pipelines for real-time perception
+\cite{zhao2023fastsam}.
 In this thesis, the FastSAM3D outputs are provided as TRC marker files and are
 aligned to the common camera timeline before evaluation.
 
@@ -547,7 +584,7 @@ needed for ergonomic joint angles are not always reliable enough.
 This result is important because it prevents an over-simplified conclusion
 that dense stereo should automatically outperform sparse triangulation.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \begin{subfigure}[b]{0.57\linewidth}
     \includegraphics[width=\linewidth]{ddm_fill_rate.png}
@@ -562,6 +599,7 @@ that dense stereo should automatically outperform sparse triangulation.
   \label{fig:ddm_diagnostics}
 \end{figure}
 
+\clearpage
 % =============================================================
 \section{Evaluation Framework}
 \label{sec:evaluation}
@@ -633,8 +671,11 @@ defined in the pipeline configuration.
 The important methodological principle is that smoothing is applied before
 delta computation; otherwise, the delta metric would measure filter artifacts
 rather than the motion signal itself.
+This choice is consistent with the broader use of lightweight temporal filters
+for noisy motion signals, where filter design must balance jitter suppression
+against motion lag \cite{casiez2012oneeuro}.
 
-\begin{table}[H]
+\begin{table}[!htbp]
   \centering
   \caption{Interpretation of the evaluation tracks used in the thesis.}
   \label{tab:evaluation_tracks}
@@ -670,6 +711,7 @@ scale while producing jittery short-term angles.
 The evaluation framework therefore reports multiple complementary quantities
 instead of selecting a single ``winner'' metric.
 
+\clearpage
 % =============================================================
 \section{Results}
 \label{sec:results}
@@ -686,7 +728,7 @@ for angle estimation in this recording, especially for shoulder, hip, and knee
 angles.
 The elbow remains difficult for all vision methods.
 
-\begin{table}[H]
+\begin{table}[!htbp]
   \centering
   \caption{Angle-space summary across eight evaluated joint angles. Lower MAE is better.}
   \label{tab:angle_summary}
@@ -711,7 +753,7 @@ consistent enough to motivate the later discussion of learned pose priors.
 The Xsens-native comparison is included as an internal reference-system check,
 not as a vision method.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=0.92\linewidth]{thesis_angle_summary.png}
   \caption{Angle-space summary across evaluated methods. FastSAM3D has the lowest mean and median MAE among the vision methods, while the Xsens-native check indicates the approximate lower bound of the reference-system representation difference.}
@@ -729,7 +771,7 @@ whereas SKT reaches 0.39 and 0.39.
 Merge has near-zero correlation in the current run, indicating that the hybrid
 output does not preserve the same short-term motion pattern.
 
-\begin{table}[H]
+\begin{table}[!htbp]
   \centering
   \caption{K=6 motion-delta agreement. Higher correlation is better.}
   \label{tab:motion_summary}
@@ -756,14 +798,14 @@ The high Xsens-native check confirms that the K=6 metric can recover strong
 agreement when the two compared signals are expected to have the same motion
 pattern.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=0.92\linewidth]{thesis_motion_k6_summary.png}
   \caption{K=6 motion-delta correlation summary. FastSAM3D shows stronger short-term motion agreement than SKT on the current dataset, whereas Merge does not preserve the same motion pattern.}
   \label{fig:motion_k6_summary_plot}
 \end{figure}
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \begin{subfigure}[b]{0.48\linewidth}
     \includegraphics[width=\linewidth]{thesis_scatter_skt_vs_xsensfair_leftelbow_k6.png}
@@ -797,7 +839,7 @@ K=6 is used as the main reporting point because it reduces single-frame noise
 while still representing sub-second motion, rather than smoothing over an
 entire action.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \begin{subfigure}[b]{0.48\linewidth}
     \includegraphics[width=\linewidth]{thesis_pearson_vs_k_leftelbow.png}
@@ -820,7 +862,7 @@ among the vision methods, while SKT remains more variable across segments.
 The Xsens native check gives the expected lower-bound reference, with small
 ROM error and very low DTW distance.
 
-\begin{table}[H]
+\begin{table}[!htbp]
   \centering
   \caption{Segment-level summary over detected active movement intervals. Lower values are better.}
   \label{tab:segment_summary}
@@ -836,7 +878,7 @@ ROM error and very low DTW distance.
   \end{tabular}
 \end{table}
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=0.95\linewidth]{thesis_segment_summary.png}
   \caption{Segment-level ROM error and DTW distance. FastSAM3D gives the strongest segment-level agreement among the vision methods, while the Xsens-native check provides a reference-system lower bound.}
@@ -855,7 +897,7 @@ coordinate and scale convention.
 When FastSAM3D is aligned directly to SKT over common joints, the mean
 inter-method distance is approximately 60.0 cm.
 
-\begin{table}[H]
+\begin{table}[!htbp]
   \centering
   \caption{Position-space diagnostic results. These values should be interpreted as coordinate/scale diagnostics rather than pure pose-quality rankings.}
   \label{tab:position_summary}
@@ -871,7 +913,7 @@ inter-method distance is approximately 60.0 cm.
   \end{tabularx}
 \end{table}
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=0.9\linewidth]{thesis_position_diagnostic.png}
   \caption{Position-space diagnostic comparison. SKT is more meaningful in metric 3D space because it is tied to calibrated stereo geometry, whereas direct FastSAM3D-to-reference distance is dominated by coordinate and scale conventions.}
@@ -891,6 +933,7 @@ Merge does not improve the current headline results.
 SGBM shows that dense disparity is not automatically better than sparse
 triangulation when the relevant body regions lack reliable texture.
 
+\clearpage
 % =============================================================
 \section{Discussion}
 \label{sec:discussion}
@@ -940,7 +983,7 @@ This suggests that the next SKT improvement should focus on quality-aware
 keypoint filtering and temporal repair rather than only on changing the final
 angle formula.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \begin{subfigure}[b]{0.98\linewidth}
     \includegraphics[width=\linewidth]{thesis_skt_high_delta_left_elbow_frames.png}
@@ -982,6 +1025,9 @@ If this baseline runs reliably, transformer-based temporal priors or
 FastSAM3D-like model outputs can be explored as optional stabilizers.
 FastSAM3D's current runtime on GPU hardware can serve as a practical benchmark
 for the expected performance level of learning-based pose methods.
+Real-time pose models such as RTMPose make this deployment direction plausible,
+but the final system still needs to measure end-to-end latency rather than
+model inference time alone \cite{jiang2023rtmpose}.
 
 % =============================================================
 \section{Conclusion and Future Work}
@@ -1013,6 +1059,7 @@ The third step is to extend the motion-space evaluation beyond the elbow joint
 and connect pose-estimation outputs more directly to full ergonomic risk
 assessment.
 
+\clearpage
 % =============================================================
 \appendix
 \clearpage
@@ -1046,7 +1093,7 @@ It is not used as a headline result, but it records the sanity check that the
 remaining local lag does not obviously grow from the beginning to the end of
 the recording.
 
-\begin{figure}[H]
+\begin{figure}[!htbp]
   \centering
   \includegraphics[width=\linewidth]{thesis_residual_lag_drift_check.png}
   \caption{Residual lag sanity check after applying the selected constant offset. This figure supports the assumption that a constant offset is adequate for the present recording, while still acknowledging that future datasets should repeat this check.}
@@ -1055,7 +1102,7 @@ the recording.
 
 \section{Claim-evidence Self-review}
 
-\begin{table}[H]
+\begin{table}[!htbp]
   \centering
   \caption{Claim-evidence map for the current thesis draft.}
   \label{tab:claim_evidence}
@@ -1089,22 +1136,94 @@ the recording.
   \end{tabularx}
 \end{table}
 
-\begin{thebibliography}{9}
-
-\bibitem{kabsch1976solution}
-W.~Kabsch,
-\textit{A solution for the best rotation to relate two sets of vectors},
-Acta Crystallographica, Section A, vol.~32, pp.~922--923, 1976.
+\begin{thebibliography}{99}
 
 \bibitem{mcatamney1993rula}
 L.~McAtamney and E.~N.~Corlett,
 \textit{RULA: a survey method for the investigation of work-related upper limb disorders},
 Applied Ergonomics, vol.~24, no.~2, pp.~91--99, 1993.
 
+\bibitem{menolotto2020motion}
+M.~Menolotto, D.-S.~Komaris, S.~Tedesco, B.~O'Flynn, and M.~Walsh,
+\textit{Motion capture technology in industrial applications: A systematic review},
+Sensors, vol.~20, no.~19, article 5687, 2020.
+
+\bibitem{yu2019joint}
+Y.~Yu, X.~Yang, H.~Li, X.~Luo, and H.~Guo,
+\textit{Joint-level vision-based ergonomic assessment tool for construction workers},
+Journal of Construction Engineering and Management, vol.~145, no.~5, 2019.
+
+\bibitem{menanno2024ergonomic}
+M.~Menanno, C.~Riccio, V.~Benedetto, and G.~Palmieri,
+\textit{An ergonomic risk assessment system based on 3D human pose estimation and collaborative robot},
+Applied Sciences, vol.~14, no.~11, article 4823, 2024.
+
+\bibitem{quesada2026supporting}
+A.~Quesada Diaz, A.~Iriondo Pascual, L.~Hanson, D.~H{\"o}gberg, and A.~Syberfeldt,
+\textit{Supporting ergonomics evaluations in manufacturing: A comparison of computer vision- and IMU-based motion capture},
+IOP Conference Series: Materials Science and Engineering, vol.~1342, article 012053, 2026.
+
+\bibitem{iriondo2024development}
+A.~Iriondo Pascual, L.~Hanson, D.~H{\"o}gberg, E.~Brolin, and A.~Syberfeldt,
+\textit{Development and initial usability evaluation of a digital tool for simulation-based multi-objective optimization of productivity and worker well-being},
+Advanced Engineering Informatics, vol.~60, article 102726, 2024.
+
+\bibitem{iriondo2025integrating}
+A.~Iriondo Pascual, L.~Hanson, E.~Brolin, D.~H{\"o}gberg, and A.~Syberfeldt,
+\textit{Integrating motion capture and digital human modelling tools for worker ergonomics assessment: A case study from experimental lab to real-world manufacturing},
+Lecture Notes in Computer Science, vol.~15828, pp.~324--333, 2025.
+
+\bibitem{filippeschi2017survey}
+A.~Filippeschi, N.~Schmitz, M.~Miezal, G.~Bleser, E.~Ruffaldi, and D.~Stricker,
+\textit{Survey of motion tracking methods based on inertial sensors: A focus on upper limb human motion},
+Sensors, vol.~17, no.~6, article 1257, 2017.
+
+\bibitem{roetenberg2009xsens}
+D.~Roetenberg, H.~Luinge, and P.~Slycke,
+\textit{Xsens MVN: Full 6DOF human motion tracking using miniature inertial sensors},
+Xsens Technologies technical report, 2009.
+
+\bibitem{cao2019openpose}
+Z.~Cao, G.~Hidalgo, T.~Simon, S.-E.~Wei, and Y.~Sheikh,
+\textit{OpenPose: Realtime multi-person 2D pose estimation using part affinity fields},
+IEEE Transactions on Pattern Analysis and Machine Intelligence,
+vol.~43, no.~1, pp.~172--186, 2019.
+
+\bibitem{jiang2023rtmpose}
+T.~Jiang, P.~Lu, L.~Zhang, N.~Ma, R.~Han, C.~Lyu, Y.~Li, and K.~Chen,
+\textit{RTMPose: Real-time multi-person pose estimation based on MMPose},
+arXiv preprint arXiv:2303.07399, 2023.
+
+\bibitem{pavllo20193d}
+D.~Pavllo, C.~Feichtenhofer, D.~Grangier, and M.~Auli,
+\textit{3D human pose estimation in video with temporal convolutions and semi-supervised training},
+Proceedings of the IEEE/CVF Conference on Computer Vision and Pattern Recognition, pp.~7753--7762, 2019.
+
+\bibitem{zhu2023motionbert}
+W.~Zhu, X.~Ma, Z.~Liu, L.~Liu, W.~Wu, and Y.~Wang,
+\textit{MotionBERT: A unified perspective on learning human motion representation},
+Proceedings of the IEEE/CVF International Conference on Computer Vision, pp.~15085--15099, 2023.
+
+\bibitem{zhao2023fastsam}
+X.~Zhao, W.~Ding, Y.~An, Y.~Du, T.~Yu, M.~Li, M.~Tang, and J.~Wang,
+\textit{Fast Segment Anything},
+arXiv preprint arXiv:2306.12156, 2023.
+
 \bibitem{hartley2004multiple}
 R.~Hartley and A.~Zisserman,
 \textit{Multiple View Geometry in Computer Vision},
 2nd ed., Cambridge University Press, 2004.
+
+\bibitem{hirschmuller2007sgbm}
+H.~Hirschm{\"u}ller,
+\textit{Stereo processing by semiglobal matching and mutual information},
+IEEE Transactions on Pattern Analysis and Machine Intelligence,
+vol.~30, no.~2, pp.~328--341, 2007.
+
+\bibitem{kabsch1976solution}
+W.~Kabsch,
+\textit{A solution for the best rotation to relate two sets of vectors},
+Acta Crystallographica, Section A, vol.~32, pp.~922--923, 1976.
 
 \bibitem{sakoe1978dtw}
 H.~Sakoe and S.~Chiba,
@@ -1112,11 +1231,10 @@ H.~Sakoe and S.~Chiba,
 IEEE Transactions on Acoustics, Speech, and Signal Processing,
 vol.~26, no.~1, pp.~43--49, 1978.
 
-\bibitem{hirschmuller2007sgbm}
-H.~Hirschm{\"u}ller,
-\textit{Stereo processing by semiglobal matching and mutual information},
-IEEE Transactions on Pattern Analysis and Machine Intelligence,
-vol.~30, no.~2, pp.~328--341, 2007.
+\bibitem{casiez2012oneeuro}
+G.~Casiez, N.~Roussel, and D.~Vogel,
+\textit{1 Euro filter: A simple speed-based low-pass filter for noisy input in interactive systems},
+Proceedings of the SIGCHI Conference on Human Factors in Computing Systems, pp.~2527--2530, 2012.
 
 \end{thebibliography}
 

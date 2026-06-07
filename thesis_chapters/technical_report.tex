@@ -1,0 +1,1400 @@
+% =============================================================
+%  Technical Report: 3D Human Pose Estimation for Ergonomics
+%  Author: Fanbo Meng
+%  Institution: Chalmers University of Technology × Viscando AB
+%  Date: April 2026
+%
+%  Usage:
+%    Standalone: pdflatex technical_report.tex
+%    In thesis:  \input{thesis_chapters/technical_report}  (remove \documentclass block)
+%  Note: \section{} level --- wrap in \chapter{} when Chalmers template is finalised.
+% =============================================================
+
+\documentclass[12pt,a4paper]{article}
+
+\usepackage[margin=2.5cm]{geometry}
+\usepackage{fontspec}
+\defaultfontfeatures{Ligatures=TeX}
+\usepackage{amsmath,amssymb}
+\usepackage{siunitx}
+\usepackage{booktabs}
+\usepackage{graphicx}
+\usepackage{subcaption}
+\usepackage{xcolor}
+\usepackage{hyperref}
+\usepackage{microtype}
+\usepackage{parskip}
+\usepackage{enumitem}
+\usepackage{array}
+\usepackage{multirow}
+\usepackage{float}
+
+\hypersetup{colorlinks=true, linkcolor=blue!70!black, urlcolor=blue!70!black, citecolor=green!50!black}
+
+\graphicspath{{figures/}}
+
+\definecolor{warncolor}{rgb}{0.55,0.27,0.07}
+\newcommand{\warn}[1]{\textcolor{warncolor}{\textbf{#1}}}
+\newcommand{\good}[1]{\textcolor{green!50!black}{\textbf{#1}}}
+\newcommand{\bad}[1]{\textcolor{red!70!black}{\textbf{#1}}}
+\newcommand{\degr}{\ensuremath{^\circ}}
+
+% ─────────────────────────────────────────────────────────────
+\title{\textbf{3D Human Pose Estimation for Industrial Ergonomics:\\
+A Comprehensive Stage Review}}
+\author{Fanbo Meng\\
+\small Chalmers University of Technology\\
+\small Supervisor: Yuri Tarakanov (Viscando AB)}
+\date{April 2026 (Stage 2 complete)}
+% ─────────────────────────────────────────────────────────────
+
+\begin{document}
+\maketitle
+\tableofcontents
+\newpage
+
+% =============================================================
+\section*{Abstract}
+% =============================================================
+
+This report documents the full technical methodology and results of a two-stage
+master's thesis project on 3D human pose estimation for ergonomic risk assessment
+in industrial environments.
+Three pipeline directions were systematically evaluated against Xsens inertial
+motion capture ground truth:
+\textbf{Direction~A} (Sparse Keypoint Triangulation, SKT) achieves
+\good{13.21\degr\ calibrated} / 18.59\degr\ uncalibrated joint-angle MAE
+and 26.0\,cm MPJPE, with 76.3\,\% elbow RULA accuracy;
+\textbf{Direction~B} (Dense Stereo SGBM, DDM) fails at joint locations due to
+low-texture clothing and is abandoned;
+\textbf{Direction~C} (Monocular MotionBERT, MTL) produces 218\,cm mean joint
+distance, predominantly from coordinate frame misalignment rather than depth
+estimation failure, and is abandoned.
+The next milestone is real-time deployment on Viscando production hardware
+(TensorRT + GStreamer/DeepStream).
+
+\warn{Calibration caveat:} The 13.21\degr\ result uses piecewise angle calibration
+fitted on the same single-subject (Aitor) recording used for evaluation.
+Cross-subject validation is required before this figure is claimed as a
+generalisation result.
+
+\newpage
+
+% =============================================================
+\section{Introduction}
+% =============================================================
+
+\subsection{Project Background}
+
+This master's thesis is conducted at Chalmers University of Technology in
+collaboration with Viscando~AB, a Swedish computer-vision company specialising
+in intelligent traffic and occupancy sensing.
+The project goal is to develop a vision-based pipeline for real-time 3D human
+pose estimation in manufacturing environments, targeted at automated
+ergonomic risk assessment.
+
+Data was collected at Viscando's partner facility.
+The primary subject is \textbf{Aitor} (height 1.69\,m), performing a scripted
+sequence of manufacturing-relevant activities: walking, sitting, squatting,
+reaching, lifting, and interacting with dark furniture.
+A simultaneous \textbf{Xsens MVN Awinda} inertial capture suit recorded
+high-frequency 3D segment positions at 240\,Hz, exported as \texttt{.mvnx} files.
+This constitutes the ground-truth reference throughout this report.
+
+The project was carried out in two phases:
+\begin{itemize}
+  \item \textbf{Stage 1} (October 2025 -- January 2026): Group phase with
+        four members (Fanbo Meng, Zishan Deng, Jiahao Li, Huining Liu).
+        Focus: camera calibration, 2D keypoint detection, stereo triangulation,
+        and initial Xsens evaluation.
+        Outputs: written report (January 30, 2026) and presentation slides
+        (January 20, 2026).
+  \item \textbf{Stage 2} (February -- April 2026): Independent phase (Fanbo Meng).
+        Focus: SKT pipeline deepening, two alternative directions (DDM, MTL),
+        and systematic comparison.
+\end{itemize}
+
+\subsection{Research Objectives and Evaluation Metrics}
+
+The ultimate application target is automated RULA (Rapid Upper Limb Assessment)
+scoring, which assigns integer ergonomic risk scores (1--7) to body postures based
+on joint angles at eight body segments.
+This drives the metric priority order:
+
+\begin{enumerate}
+  \item \textbf{Joint Angle MAE} (\si{\degr}) --- mean absolute error over
+        8 RULA-relevant joints (L/R Shoulder, Elbow, Hip, Knee) against Xsens GT.
+  \item \textbf{RULA bin accuracy} --- proportion of frames where the estimated
+        angle falls in the correct ergonomic risk bin.  A 10\degr\ error that
+        stays within the same bin has \emph{zero} impact on the risk score;
+        a 5\degr\ error crossing a bin boundary changes the risk classification.
+  \item \textbf{MPJPE} (cm) --- mean per-joint position error; reference metric.
+\end{enumerate}
+
+\textbf{Fair GT protocol:} To eliminate measurement-protocol bias, all joint
+angles are computed from Xsens 3D segment positions using the \emph{same}
+geometric formula as the vision pipeline, rather than using Xsens native angle
+outputs.  This ensures differences reflect pipeline accuracy, not formula
+discrepancies.
+
+\subsection{Data Collection Setup}
+
+\begin{itemize}
+  \item Stereo camera rig: two USB cameras, rigid mount, physical baseline $\approx 41$\,cm.
+  \item Resolution: 2048$\times$1536, frame rate: 12.5\,fps.
+  \item Video format: AVI, stereo pairs synchronised in hardware.
+  \item Xsens GT: 240\,Hz, segment positions in metres, timestamps in milliseconds.
+  \item Time alignment between camera and Xsens: determined by cross-correlation
+        of acceleration signals (best offset 17.40\,s; see Section~\ref{sec:time_align}).
+\end{itemize}
+
+\subsection{Repository Structure}
+
+\begin{center}
+\begin{tabular}{lp{5.5cm}l}
+\toprule
+Directory & Content & Status \\
+\midrule
+\texttt{01\_stereo\_triangulation/} & Direction A --- SKT pipeline & Active / Best \\
+\texttt{02\_dense\_stereo\_sgbm/}   & Direction B --- Dense disparity & Abandoned \\
+\texttt{03\_mono\_motionbert/}       & Direction C --- Monocular MTL  & Abandoned \\
+\texttt{shared/}                     & GT parser, angle utils, Kabsch, visualisation & Shared \\
+\texttt{2025\_Ergonomics\_Data/}     & Raw stereo video + Xsens timestamps & Data \\
+\texttt{Calibration\_video/}         & Calibration video pairs (cap\_0, cap\_1) & Data \\
+\bottomrule
+\end{tabular}
+\end{center}
+
+\noindent Python environment: \texttt{/opt/anaconda3/envs/pose} (Python 3.11).
+Xsens ground truth: \texttt{Xsens\_ground\_truth/Aitor-001.mvnx}.
+
+% =============================================================
+\section{Stereo Camera Calibration}
+\label{sec:calibration}
+% =============================================================
+
+\subsection{Calibration Target and Data Collection}
+
+An asymmetric circular dot grid (5$\times$9 circles, centre-to-centre spacing
+15.0\,cm) was used as the calibration target.
+Two calibration video pairs were captured (\texttt{cap\_0}, \texttt{cap\_1})
+under different board orientations and distances.
+After detection, \textbf{40 stereo frame pairs} were obtained:
+18 from \texttt{cap\_0} and 22 from \texttt{cap\_1}.
+
+\subsection{Calibration Search Strategy}
+
+Rather than tuning calibration parameters manually, a grid search was conducted
+over solver configurations, with leave-one-pair-out cross-validation:
+
+\begin{itemize}
+  \item Reprojection rejection threshold: $\{0.35, 0.50, 0.70, 1.00\}$\,px
+  \item Distortion model: rational model (14 coefficients) vs.\ standard (5)
+  \item Intrinsic fix: \texttt{fix\_intrinsic=False} (jointly optimised)
+\end{itemize}
+
+Cross-validation protocol: train on \texttt{cap\_1} frames, evaluate on
+held-out \texttt{cap\_0}, and vice versa.
+The best configuration was \textbf{threshold~=~0.35\,px, rational model enabled,
+intrinsics jointly optimised}.
+
+\subsection{Final Calibration Results}
+
+The adopted calibration is stored in \texttt{shared/camera\_params.npz}.
+Table~\ref{tab:calibration} summarises the key parameters.
+
+\begin{table}[H]
+  \centering
+  \caption{Final stereo calibration parameters (Stage 2 optimised, rational model).}
+  \label{tab:calibration}
+  \begin{tabular}{lllp{3.8cm}}
+    \toprule
+    Metric & Value & Pair & Assessment \\
+    \midrule
+    Baseline $\|T\|$ & 41.27\,cm & --- & Matches physical $\approx 41$\,cm ($< 0.3$\,\% error) \\
+    $f_x$ (left)     & 1130.27\,px & L & Consistent with right ($f_x=1129.01$\,px) \\
+    $f_y$ (left)     & 1130.35\,px & L & --- \\
+    $c_x, c_y$ (left)& 1019.32, 825.72\,px & L & Near image centre \\
+    Per-frame reproj.\ error & 0.024\,px (L), 0.021\,px (R) & cap\_0 & Excellent \\
+    Per-frame reproj.\ error & 0.023\,px (L), 0.021\,px (R) & cap\_1 & Excellent \\
+    Vertical disparity (mean) & 0.297\,px & cap\_0 & Good ($< 0.5$\,px) \\
+    Vertical disparity (mean) & 0.215\,px & cap\_1 & Good \\
+    Vertical disparity (p95)  & 1.16\,px  & cap\_0 & Acceptable \\
+    Vertical disparity (p95)  & 0.66\,px  & cap\_1 & Excellent \\
+    Board scale error & 0.03\,\% & --- & Well below 2\,\% threshold \\
+    Plane RMS & 0.11--0.12\,cm & --- & Sub-millimetre \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{calibration_evolution.png}
+  \caption{Calibration quality evolution across stages.
+           Left: baseline distance (physical reference: 41\,cm).
+           Right: reprojection error on log scale.
+           The Stage~2 systematic search achieves 54$\times$ lower reprojection
+           error than Stage~1 refined.}
+  \label{fig:calib_evolution}
+\end{figure}
+
+\subsection{Calibration History}
+
+Three calibration versions exist:
+\begin{enumerate}
+  \item \textbf{Stage 1 initial}: Baseline $\approx 47$\,cm, RMS $> 1.3$\,px.
+        Unacceptable --- caused systematic depth errors.
+  \item \textbf{Stage 1 refined}: Manual outlier rejection (frames with
+        single-camera reprojection $> 1.0$\,px discarded); solver tightened
+        (max iterations $30\to100$, epsilon $10^{-6}$).
+        Result: baseline 40.48\,cm, RMS 0.337\,px, epipolar 0.329\,px.
+  \item \textbf{Stage 2 optimised (current)}: Systematic grid search with
+        cross-validation.
+        Result: baseline \textbf{41.27\,cm}, per-frame reprojection
+        \textbf{$\approx 0.024$\,px}, vertical disparity $\approx 0.25$\,px.
+        This is the calibration used for all Stage~2 experiments.
+\end{enumerate}
+
+The rectified focal length used in SGBM depth conversion is $f_{x,\text{rect}} = 1037.6$\,px
+(after stereo rectification, which changes the effective focal length).
+
+% =============================================================
+\section{Direction A: Sparse Keypoint Triangulation (SKT)}
+\label{sec:skt}
+% =============================================================
+
+\subsection{Pipeline Overview}
+
+The SKT pipeline converts synchronised stereo video into 3D joint angle
+estimates through six sequential stages:
+\begin{center}
+  Stereo video $\to$ 2D keypoints $\to$ Temporal smoothing \\[2pt]
+  $\to$ Triangulation $\to$ Kabsch alignment $\to$ Angle calibration $\to$ RULA evaluation
+\end{center}
+
+Each stage is described in detail below.
+
+% ── 3.2 ──────────────────────────────────────────────────────
+\subsection{2D Keypoint Detection}
+\label{sec:detection}
+
+\subsubsection{Final Model: YOLOv8m-pose}
+
+The adopted 2D detector is \textbf{YOLOv8m-pose} (COCO AP $\approx 65$),
+which runs independently on the left and right camera streams.
+Output: 17-joint COCO-format keypoints with per-joint confidence scores.
+
+Person identity matching across views (cross-view tracking) uses
+confidence-score filtering combined with manual track labelling for the
+single-subject scenario.
+
+\subsubsection{RTMPose-x Comparison Experiment}
+
+RTMPose-x (COCO AP $\approx 75$, a 10-point advantage) was evaluated as a
+potential model upgrade.
+Despite the higher benchmark accuracy, it \textbf{failed significantly worse}
+than YOLOv8m on this dataset.
+
+\begin{table}[H]
+  \centering
+  \caption{2D detector comparison.  RTMPose-x remapped uses percentile-based
+           confidence remapping to match YOLOv8's confidence distribution.}
+  \label{tab:detector_comparison}
+  \begin{tabular}{lcccc}
+    \toprule
+    Configuration & Angle MAE & MPJPE & Elbow RULA & Valid frames \\
+    \midrule
+    YOLOv8m (uncalibrated)         & 21.3\degr & 34.7\,cm & 56.3\,\% & 19{,}462 \\
+    \good{YOLOv8m + angle calib.}  & \good{13.2\degr} & \good{26.0\,cm} & \good{76.3\,\%} & 18{,}081 \\
+    RTMPose-x (remapped)           & \bad{32.4\degr} & \bad{208.8\,cm} & 49.4\,\% & 6{,}256 \\
+    RTMPose-x (raw, no remap)      & \bad{48.8\degr} & \bad{269.0\,cm} & 40.0\,\% & 11{,}543 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{rtmpose_yolo_comparison.png}
+  \caption{Per-joint MAE comparison: YOLOv8m (uncalibrated and calibrated)
+           vs.\ RTMPose-x (remapped confidence).
+           Knee joints suffer catastrophic error under RTMPose-x (50--84\degr)
+           due to keypoint convention mismatch.}
+  \label{fig:rtmpose_yolo}
+\end{figure}
+
+\textbf{Root cause of RTMPose-x failure:}
+Both models use COCO 17-joint format, but their lower-limb joint localisation
+conventions differ (different anatomical reference points for knee/hip centres).
+In the wide-FOV camera setup used here, small keypoint offsets are amplified by
+radial distortion, producing catastrophically large angle errors at the knee
+(50--84\degr\ vs.\ 13--21\degr\ for YOLOv8).
+The shoulder joints are less affected because the protocol difference is smaller
+in the upper body.
+This failure mode cannot be predicted from COCO benchmark AP.
+
+\textbf{Decision:} Retain YOLOv8m-pose as the 2D detector.
+
+% ── 3.3 ──────────────────────────────────────────────────────
+\subsection{Temporal Smoothing: Adaptive OneEuro Filter}
+\label{sec:smoothing}
+
+Raw YOLOv8 keypoint detections contain significant frame-to-frame jitter.
+A simple EMA (exponential moving average) applies a fixed smoothing weight,
+which either over-smooths fast motion or fails to suppress jitter in slow motion.
+
+The pipeline instead uses an \textbf{adaptive weighting} scheme that conditions
+the blend weight on per-frame detection confidence and observed motion magnitude:
+\begin{equation}
+  w_t = \operatorname{clip}\!\left(0.18 + 0.52\,c_t + 0.22\,m_t,\; 0.15,\; 0.95\right)
+  \label{eq:ema_weight}
+\end{equation}
+where $c_t \in [0,1]$ is the joint detection confidence and
+$m_t \in [0,1]$ is the normalised motion magnitude at time $t$
+(normalised by \texttt{motion\_scale\_px}~=~12.0\,px).
+
+The smoothed position is then:
+\begin{equation}
+  \hat{p}_t = w_t\,p_t + (1 - w_t)\,\hat{p}_{t-1}
+\end{equation}
+
+Filter parameters (2D keypoints, applied before triangulation):
+\begin{itemize}[noitemsep]
+  \item \texttt{min\_cutoff}~= 1.4 (OneEuro base cutoff frequency)
+  \item \texttt{beta}~= 0.05 (derivative coupling, reduces lag at high speed)
+  \item \texttt{d\_cutoff}~= 1.0 (derivative filter cutoff)
+  \item \texttt{motion\_scale\_px}~= 12.0\,px
+  \item Weight clamp: $[0.15,\; 0.95]$ (never fully replaces or freezes signal)
+\end{itemize}
+
+The coefficients $\{0.18, 0.52, 0.22\}$ in Eq.~\eqref{eq:ema_weight} give a
+base blending of 18\,\% raw (preserving some signal even at zero confidence),
+a 52\,\% confidence-driven component (favours the new observation when detection
+is reliable), and a 22\,\% motion-driven component (reduces lag when the
+subject moves quickly).
+
+% ── 3.4 ──────────────────────────────────────────────────────
+\subsection{Missing Data Handling}
+\label{sec:missing}
+
+Keypoints are considered \emph{invalid} and excluded from all downstream
+computation when:
+\begin{itemize}[noitemsep]
+  \item Full-frame detection confidence $< 0.35$ (parameter \texttt{FULL\_FRAME\_CONF})
+  \item Crop-region detection confidence $< 0.20$ (\texttt{CROP\_CONF})
+  \item Stereo pair confidence below $0.25$ on either view (\texttt{MIN\_PAIR\_CONF})
+  \item Epipolar residual exceeds the adaptive threshold (see Section~\ref{sec:triangulation})
+  \item Reprojection error exceeds the adaptive threshold
+\end{itemize}
+
+Invalid joints propagate as \texttt{NaN} through the pipeline.
+Any frame where the required joint for an angle computation is \texttt{NaN}
+is excluded from that angle's MAE evaluation (rather than imputed).
+
+\textbf{Temporal window triangulation} (when enabled) partially fills sparse
+gaps by pooling observations over a $\pm 3$-frame window
+(\texttt{TEMPORAL\_WINDOW\_RADIUS}~=~3), requiring a minimum of 3 supporting
+frames with stereo quality $\geq 0.35$.
+Temporal contributions are weighted by an exponential decay with time constant
+0.06\,s (\texttt{TEMPORAL\_WINDOW\_DECAY\_SEC}).
+
+% ── 3.5 ──────────────────────────────────────────────────────
+\subsection{Stereo Triangulation}
+\label{sec:triangulation}
+
+\subsubsection{Confidence-Weighted DLT}
+
+Given a stereo keypoint pair $(u_L, u_R)$ with confidences $(c_L, c_R)$,
+the 3D joint position is estimated via the Direct Linear Transform (DLT).
+Each camera equation is weighted by its respective confidence:
+\begin{equation}
+  \mathbf{X}^* = \arg\min_{\mathbf{X}}
+    \left\| \mathbf{A}\,\mathbf{X} \right\|^2, \quad
+  \mathbf{A} = \begin{bmatrix} c_L\,(u_L\,P_{3L} - P_{1L}) \\
+                                c_L\,(v_L\,P_{3L} - P_{2L}) \\
+                                c_R\,(u_R\,P_{3R} - P_{1R}) \\
+                                c_R\,(v_R\,P_{3R} - P_{2R}) \end{bmatrix}
+\end{equation}
+where $P_{iK}$ denotes the $i$-th row of the projection matrix for camera $K$.
+
+\subsubsection{Quality Filters}
+
+Two adaptive quality filters reject unreliable triangulations.
+Thresholds adapt to detection confidence so that high-confidence keypoints
+are held to tighter geometric constraints:
+
+\textit{Epipolar constraint:}
+\begin{align}
+  \tau_\text{epipolar}(c) &= \text{base} + \text{conf\_gain} \times (1 - c) \\
+  &\text{with base} = 6\,\text{px},\quad \text{conf\_gain} = 18\,\text{px}
+\end{align}
+Frames exceeding the soft threshold (10\,px) are down-weighted rather than
+hard-rejected, with maximum down-weight 0.80 and decay constant 3\,px.
+
+\textit{Reprojection filter:}
+\begin{align}
+  \tau_\text{reproj}(c) &= \min\!\left(\text{base} + \text{conf\_gain}
+                           \times (1 - c),\; \tau_\text{max}\right) \\
+  &\text{with base} = 18\,\text{px},\quad
+   \text{conf\_gain} = 42\,\text{px},\quad
+   \tau_\text{max} = 80\,\text{px}
+\end{align}
+
+Additional hard constraints:
+\begin{itemize}[noitemsep]
+  \item Minimum disparity: 1.5\,px (prevents near-infinity depth estimates)
+  \item Minimum pair confidence: 0.25 on both views
+\end{itemize}
+
+% ── 3.6 ──────────────────────────────────────────────────────
+\subsection{Coordinate Alignment: Kabsch Algorithm}
+\label{sec:kabsch}
+
+The camera coordinate frame and the Xsens world frame differ by an unknown
+rigid transformation (rotation + translation).
+The Kabsch algorithm \cite{kabsch1976solution} finds the optimal rotation~$R$
+and translation~$\mathbf{t}$:
+
+\begin{equation}
+  (R^*,\, \mathbf{t}^*) = \arg\min_{R \in SO(3),\, \mathbf{t}}
+    \sum_i \| R\,\mathbf{s}_i + \mathbf{t} - \mathbf{g}_i \|^2
+\end{equation}
+
+where $\mathbf{s}_i$ and $\mathbf{g}_i$ are matched 3D joint positions from
+the SKT pipeline and Xsens GT, respectively.
+
+\textbf{Implementation} (\texttt{shared/skeleton\_video\_utils.py}):
+\begin{enumerate}
+  \item Compute centroids $\bar{\mathbf{s}}, \bar{\mathbf{g}}$ and centre both point sets.
+  \item Compute cross-covariance: $H = \tilde{S}^\top \tilde{G}$.
+  \item SVD: $H = U\Sigma V^\top$.
+  \item Rotation: $R = V U^\top$; if $\det(R) < 0$, negate the last row of $V$
+        (reflection correction).
+  \item Translation: $\mathbf{t} = \bar{\mathbf{g}} - R\,\bar{\mathbf{s}}$.
+\end{enumerate}
+
+\textbf{Elite-frame selection:} To ensure alignment is computed on
+geometrically reliable frames, the \textbf{top-150 frames} with the lowest
+lower-limb bone-length error are selected from the full sequence.
+Reference anatomical leg segment lengths (hip--knee and knee--ankle, both sides):
+$[38.6,\; 39.8,\; 40.3,\; 39.5]$\,cm.
+At least 10 valid joint pairs are required per frame to participate in alignment.
+
+% ── 3.7 ──────────────────────────────────────────────────────
+\subsection{Time Alignment}
+\label{sec:time_align}
+
+Camera timestamps and Xsens timestamps originate from different clocks.
+The temporal offset is estimated by cross-correlation of the vertical
+acceleration signal derived from both systems.
+
+Xsens segment positions are linearly interpolated onto camera timestamps
+using \texttt{scipy\allowbreak.interpolate\allowbreak.interp1d}
+(mode: \texttt{linear}, boundary: \texttt{fill\_value=NaN}).
+Duplicate Xsens timestamps (if any) are deduplicated before interpolation.
+
+The best cross-correlation offset found was \textbf{17.40\,s}
+(search space: 17.20, 17.25, 17.30, 17.40\,s),
+yielding a minimum mean error of 26.15\,cm MPJPE.
+
+% ── 3.8 ──────────────────────────────────────────────────────
+\subsection{Angle Computation and Fair GT Protocol}
+\label{sec:angle_computation}
+
+Eight RULA-relevant joint angles are computed geometrically from 3D positions:
+L/R~Shoulder flexion, L/R~Elbow flexion, L/R~Hip flexion, L/R~Knee flexion.
+
+For each angle, three 3D landmark positions define two bone vectors,
+and the angle between them is computed via the dot product:
+\begin{equation}
+  \theta = \arccos\!\left(
+    \frac{(\mathbf{p}_B - \mathbf{p}_A) \cdot (\mathbf{p}_C - \mathbf{p}_B)}
+         {\|\mathbf{p}_B - \mathbf{p}_A\|\;\|\mathbf{p}_C - \mathbf{p}_B\|}
+  \right)
+\end{equation}
+
+\textbf{Fair GT protocol:} The same formula is applied to Xsens 3D segment
+positions to compute ``ground truth'' angles, rather than using Xsens native
+joint angles (which use a different anatomical model).
+This eliminates protocol bias from the evaluation.
+
+% ── 3.9 ──────────────────────────────────────────────────────
+\subsection{Angle Calibration}
+\label{sec:angle_calib}
+
+Two-level angle calibration was developed to reduce systematic per-joint biases.
+
+\subsubsection{Global Piecewise Regression}
+
+A piecewise regression curve is fitted per joint, mapping raw estimated angles
+to corrected angles:
+\begin{equation}
+  \hat{\theta}_\text{calib} = f_j(\hat{\theta}_\text{raw})
+\end{equation}
+Parameters: 10 angle bins, smoothing radius $r = 4$.
+The calibration is trained on the Aitor recording and evaluated on the same
+recording (in-sample).
+
+\subsubsection{Quality-Aware Calibration}
+
+To address the heteroscedastic nature of pose errors (high-confidence frames
+are more accurate), frames are split by detection confidence at the 35th
+percentile (\texttt{POSE\_QA\_\allowbreak SPLIT\_\allowbreak PERCENTILE}~=~35).
+Each partition receives an independent calibration curve:
+\begin{itemize}[noitemsep]
+  \item High-quality frames ($c > c_{35}$): tighter calibration curve.
+  \item Low-quality frames ($c \leq c_{35}$): softer correction.
+\end{itemize}
+
+\subsubsection{Selective Application (Selective\_v2)}
+
+Quality-aware calibration reduces overall MAE but slightly decreases
+elbow RULA accuracy because the elbow's correction curve at high confidence
+overshoots.
+The \textbf{selective\_v2} configuration applies quality-aware calibration
+only to Shoulder, Hip, and Knee joints, while the Elbow retains global
+calibration.
+This achieves the best trade-off (12.71\degr\ angle MAE, 77.27\,\% elbow RULA).
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{angle_calibration_comparison.png}
+  \caption{Per-joint angle MAE under three calibration regimes.
+           Quality-aware calibration improves most joints further, but the
+           selective application (\emph{selective\_v2}) is preferred to
+           preserve elbow RULA accuracy.}
+  \label{fig:angle_calib}
+\end{figure}
+
+\warn{Overfit caveat:} All calibration curves were fitted on the Aitor
+recording used for evaluation.
+Generalisation to other subjects or environments is unvalidated.
+Cross-subject or leave-one-out evaluation is required before reporting the
+calibrated result as a deployment target.
+
+% ── 3.10 ─────────────────────────────────────────────────────
+\subsection{SKT Results}
+\label{sec:skt_results}
+
+\begin{table}[H]
+  \centering
+  \caption{SKT pipeline results across configurations.
+           The historical best (13.21\degr) cannot be exactly reproduced
+           because the original pose NPZ was lost; the rebuilt pipeline
+           yields 13.91\degr.  The selective\_v2 configuration is the
+           current recommended operating point.}
+  \label{tab:skt_configs}
+  \begin{tabular}{p{5.4cm}cccc}
+    \toprule
+    Configuration & Angle MAE & Fair GT MAE & MPJPE & Elbow RULA \\
+    \midrule
+    Stage 1 (YOLOv8, uncalibrated)             & 18.59\degr & ---   & $\approx$30\,cm & $\approx$60\,\% \\
+    Stage 2 rebuilt (uncalibrated, $r=4$)       & 19.79\degr & ---   & 26.32\,cm & --- \\
+    Stage 2 rebuilt + global calib (10 bins)    & 13.91\degr & ---   & 26.32\,cm & 76.34\,\% \\
+    Quality-aware calib (full, all joints)      & 12.54\degr & 13.10\degr & 26.14\,cm & 75.59\,\% \\
+    \good{Selective\_v2 (Sh/Hip/Kn QA, El global)} & 12.71\degr & 13.26\degr & --- & \good{77.27\,\%} \\
+    \warn{Historical best (reported, 2026-03-24)} & \warn{13.21\degr} & --- & \warn{26.02\,cm} & \warn{76.3\,\%} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+% ── 3.11 ─────────────────────────────────────────────────────
+\subsection{Per-Joint Analysis}
+\label{sec:skt_per_joint}
+
+\begin{table}[H]
+  \centering
+  \caption{Per-joint angle MAE for SKT (uncalibrated vs.\ calibrated) and
+           per-joint improvement from calibration.}
+  \label{tab:skt_per_joint}
+  \begin{tabular}{lcccc}
+    \toprule
+    Joint & Uncalibrated & Calibrated (global) & Improvement & Quality diag. \\
+    \midrule
+    R.\ Shoulder & 15.2\degr & 13.7\degr & $\downarrow$10\,\% & --- \\
+    L.\ Shoulder & 20.0\degr & 13.3\degr & $\downarrow$34\,\% & --- \\
+    L.\ Hip      & 16.6\degr & 10.0\degr & $\downarrow$40\,\% & --- \\
+    R.\ Hip      & 18.6\degr &  8.4\degr & $\downarrow$55\,\% & --- \\
+    L.\ Knee     & 21.3\degr & 14.3\degr & $\downarrow$33\,\% & Occlusion: 32.5\degr \\
+    R.\ Knee     & 19.4\degr & 13.1\degr & $\downarrow$33\,\% & --- \\
+    L.\ Elbow    & 28.3\degr & 16.0\degr & $\downarrow$43\,\% & Low conf.: 36.4\degr \\
+    R.\ Elbow    & 30.7\degr & 16.2\degr & $\downarrow$47\,\% & Low conf.: 28.5\degr \\
+    \midrule
+    \textbf{Mean} & 21.3\degr & 13.1\degr & $\downarrow$38\,\% & --- \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+Quality diagnostic: joints with the lowest detection confidence have the largest
+errors.
+The LeftElbow gap between low-confidence and high-confidence quartiles is
+22\degr\ (36.4\degr\ vs.\ 14.4\degr), motivating the quality-aware calibration.
+
+% ── 3.12 ─────────────────────────────────────────────────────
+\subsection{Scenario-Level Analysis}
+\label{sec:skt_scenario}
+
+\begin{table}[H]
+  \centering
+  \caption{SKT angle MAE by activity scenario (uncalibrated / calibrated).}
+  \label{tab:skt_scenario}
+  \begin{tabular}{lcc}
+    \toprule
+    Scenario & Uncalib.\ MAE & Calib.\ MAE \\
+    \midrule
+    Baseline (normal walking/standing) & 19.4\degr & 12.3\degr \\
+    Unclassified                        & 19.6\degr & 11.5\degr \\
+    Environmental disturbance           & 24.3\degr & 13.2\degr \\
+    Occlusion                           & 23.8\degr & 17.4\degr \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.85\linewidth]{scenario_mae_skt.png}
+  \caption{SKT angle MAE across activity scenarios.
+           Occlusion and environmental disturbance (dark chair interaction)
+           have the highest residual error even after calibration.}
+  \label{fig:skt_scenario}
+\end{figure}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{skt_good_01.png}
+    \caption{Good frame: clear line-of-sight, low joint error.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{skt_good_02.png}
+    \caption{Good frame: frontal pose, accurate 3D reconstruction.}
+  \end{subfigure}
+  \vspace{4pt}
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{skt_bad_01.png}
+    \caption{Bad frame: partial occlusion elevates elbow error.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{skt_bad_02.png}
+    \caption{Bad frame: dark chair interaction causes depth ambiguity.}
+  \end{subfigure}
+  \caption{SKT skeleton comparison frames: Xsens GT (blue) vs.\ SKT
+           calibrated estimate (orange).  Good frames demonstrate accurate
+           3D joint recovery; bad frames highlight residual errors under
+           occlusion and environmental disturbance.}
+  \label{fig:skt_frames}
+\end{figure}
+
+% ── 3.13 ─────────────────────────────────────────────────────
+\subsection{RULA Ergonomic Scoring}
+\label{sec:rula}
+
+RULA grand scores (1--7 integer scale) were computed from the calibrated
+SKT angles and compared to Xsens-derived RULA scores on 2{,}087 valid frames:
+
+\begin{center}
+\begin{tabular}{lc}
+  \toprule
+  Metric & Value \\
+  \midrule
+  Exact RULA score match       & 32.4\,\% \\
+  Within $\pm 1$ score         & \good{84.9\,\%} \\
+  Correct risk level           & 51.7\,\% \\
+  Group A sub-score match      & 35.2\,\% \\
+  Group B sub-score match      & 33.2\,\% \\
+  Elbow RULA bin accuracy      & \good{76.3\,\%} \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+The 84.9\,\% within-$\pm 1$ accuracy is the most operationally relevant figure:
+it means the pipeline reliably distinguishes between safe, borderline, and
+high-risk postures, even without exact score matching.
+The exact-match rate (32.4\,\%) is limited by discretisation of continuous
+angle estimates into integer RULA bins.
+
+% =============================================================
+\section{Direction B: Dense Stereo SGBM (DDM)}
+\label{sec:ddm}
+% =============================================================
+
+\subsection{Motivation and Hypothesis}
+
+Dense stereo matching (SGBM) produces a depth value for every pixel,
+potentially providing richer depth information than sparse keypoint
+triangulation --- especially for joints with low 2D detection confidence.
+The hypothesis was that per-pixel depth from SGBM would reduce triangulation
+errors for partially occluded joints.
+
+\subsection{SGBM Configuration}
+
+Semi-Global Block Matching~\cite{hirschmuller2007sgbm} was applied to
+rectified stereo pairs.
+Key parameters:
+
+\begin{center}
+\begin{tabular}{lll}
+  \toprule
+  Parameter & Value & Rationale \\
+  \midrule
+  \texttt{minDisparity}   & 100\,px & Excludes depth $> 4.3$\,m \\
+  \texttt{numDisparities} & 256\,px & Covers depth range 1.2--4.3\,m \\
+  \texttt{blockSize}      & 9\,px   & Tested: $\{9, 11, 15\}$ \\
+  Keypoint depth lookup   & $5\times5$ median & Robust to outlier pixels \\
+  Depth formula & $Z = f_{x,r} \cdot T / d$ & $f_{x,r}=1037.6$\,px, $T=41.27$\,cm \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+The depth range 1.2--4.3\,m corresponds to the disparity window:
+any pixel with disparity below the \texttt{minDisparity} floor (100\,px)
+is assigned the floor depth of $Z_\text{floor} = 1037.6 \times 0.4127 / 100 \approx 4.28$\,m.
+
+\subsection{Fill Rate Analysis}
+
+\textbf{Fill rate} is defined as the fraction of pixels with valid disparity
+(i.e., $d \geq \text{minDisparity}$) within the bounding region of the subject.
+Per-joint fill rates (mean across all frames):
+
+\begin{center}
+\begin{tabular}{lcc}
+  \toprule
+  Joint & Fill Rate & Assessment \\
+  \midrule
+  R.\ Shoulder & 81.5\,\% & \good{OK} \\
+  L.\ Shoulder & 80.2\,\% & \good{OK} \\
+  R.\ Elbow    & 77.6\,\% & \warn{Marginal} \\
+  R.\ Knee     & 76.3\,\% & \warn{Marginal} \\
+  R.\ Hip      & 75.1\,\% & \warn{Marginal} \\
+  L.\ Knee     & 72.8\,\% & \warn{Marginal} \\
+  L.\ Elbow    & 48.9\,\% & \bad{Fail} \\
+  L.\ Hip      & 39.4\,\% & \bad{Fail} \\
+  \midrule
+  Overall mean & 74.2\,\% & --- \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+The failure joints (LeftElbow, LeftHip) correspond precisely to body regions
+covered by dark, uniform-texture clothing, where SGBM cannot find reliable
+stereo matches.
+Disparity values cluster at the \texttt{minDisparity} floor (100\,px),
+collapsing all affected joints to $Z \approx 4.28$\,m.
+
+\subsection{Key Finding: Fill Rate $\neq$ Accuracy}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{ddm_fill_rate.png}
+    \caption{Fill rate distribution (block size 11).}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{ddm_scatter.png}
+    \caption{SGBM vs.\ DLT depth at joint locations.}
+  \end{subfigure}
+  \caption{Direction B diagnostic figures.
+           Left: fill rate appears healthy at 74\,\% mean, masking per-joint failures.
+           Right: SGBM--DLT depth correlation is $\approx 0.24$ at joint locations
+           (poor).}
+  \label{fig:ddm_diag}
+\end{figure}
+
+Empirically: a frame with 53\,\% fill rate achieved 17.4\degr\ joint angle
+MAE, while an 81\,\% fill-rate frame reached 32.5\degr.
+Fill rate measures scene texture density, not depth accuracy at joints.
+In this dataset, high fill rate often means the \emph{background} is textured,
+while the subject's joints remain in a texture-void region.
+
+\subsection{Results vs.\ DLT Baseline}
+
+\begin{table}[H]
+  \centering
+  \caption{Direction B (SGBM) vs.\ Direction A (DLT calibrated) comparison.}
+  \label{tab:ddm_results}
+  \begin{tabular}{lcc}
+    \toprule
+    Metric & DDM (SGBM) & SKT (DLT calib.) \\
+    \midrule
+    Joint angle MAE   & \bad{30.63\degr} & \good{13.21\degr} \\
+    Angle median      & 19.23\degr & 9.73\degr \\
+    Torso flexion MAE & \bad{57.48\degr} & \good{11.40\degr} \\
+    MPJPE             & \bad{117.5\,cm} & \good{26.0\,cm} \\
+    Elbow RULA        & \bad{50.6\,\%} & \good{76.3\,\%} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{Decision:} Direction B is abandoned as a primary pipeline.
+The interactive 3D point cloud viewer (\texttt{results/interactive\_pointcloud.html})
+is retained as a per-frame diagnosis tool.
+
+% =============================================================
+\section{Direction C: Monocular MotionBERT Lifting (MTL)}
+\label{sec:mtl}
+% =============================================================
+
+\subsection{Motivation and Hypothesis}
+
+The hypothesis was that MotionBERT's temporal lifting of 2D keypoints into 3D,
+supported by depth priors learned from large-scale training data, would serve
+as a fallback for frames where stereo quality is poor (occlusion, subject
+leaving the stereo baseline).
+
+\subsection{Pipeline Architecture}
+
+\begin{enumerate}
+  \item \textbf{Person detection:} RTMDet detects the subject bounding box
+        in each frame of the left camera video.
+  \item \textbf{2D keypoint estimation:} RTMW produces 133-keypoint
+        whole-body detections (COCO-WholeBody format).
+  \item \textbf{3D temporal lifting:} MotionBERT (DSTformer architecture,
+        42.5\,M parameters, pre-trained on Human3.6M) takes a sliding window
+        of 2D keypoint tracks as input and outputs 17-joint 3D positions.
+  \item \textbf{OpenSim integration (IK):} A TRC file of 3D marker positions
+        was input to OpenSim InverseKinematicsTool (40~DOF model).
+        However, IK-derived elbow angles proved unreliable, so all reported
+        joint angles use \textbf{direct geometric computation from TRC markers}
+        (same formula as SKT).
+  \item \textbf{Evaluation:} Kabsch alignment and time-alignment identical
+        to SKT.
+\end{enumerate}
+
+\textbf{OpenSim coordinate frame:} X-forward, Y-up, Z-right.
+
+\subsection{Preprocessing and Filtering}
+
+The TRC marker positions output by MotionBERT undergo two filtering steps
+before angle computation:
+
+\begin{enumerate}
+  \item \textbf{Butterworth low-pass filter} (cutoff 3\,Hz): A zero-phase
+        4th-order Butterworth filter removes high-frequency jitter.
+        The cutoff was reduced from an initial 6\,Hz (which caused
+        over-smoothing) to 3\,Hz.
+        Nyquist limit at 12.5\,fps: 6.25\,Hz.
+  \item \textbf{Temporal median filter} (radius 3 frames): Applied to 3D
+        marker positions before angle computation to suppress impulsive outliers.
+\end{enumerate}
+
+\textbf{Bone-length normalisation}: Disabled.
+Per-frame scale normalisation is retained to handle the scale ambiguity
+inherent in monocular 3D lifting.
+
+\subsection{Results}
+
+\begin{table}[H]
+  \centering
+  \caption{MTL quantitative results.  All errors are large primarily due to
+           coordinate frame misalignment (see Section~\ref{sec:mtl_rootcause}).}
+  \label{tab:mtl_results}
+  \begin{tabular}{ll}
+    \toprule
+    Metric & Value \\
+    \midrule
+    Angle MAE (native GT)            & 24.77\degr\ (median: 23.05\degr) \\
+    Angle MAE (Fair GT)              & $\approx$30.4\degr \\
+    RULA grand score (estimated)     & 4.31 (GT: 2.76) \\
+    High-risk rate $\geq 4$ (estimated) & \bad{87.2\,\%} (GT: 11.7\,\%) \\
+    Mean joint distance from GT      & \bad{218.15\,cm} \\
+    Mean pelvis distance             & 207.11\,cm \\
+    Depth component of error         & 109.79\,cm (34.5\,\%) \\
+    Planar component of error        & \bad{182.41\,cm (65.5\,\%)} \\
+    Frames where depth $>$ planar    & 1.4\,\% \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{mtl_good_01.png}
+    \caption{Relatively good frame: pose shape partially correct.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{mtl_good_02.png}
+    \caption{Relatively good frame: limb angles closer to GT.}
+  \end{subfigure}
+  \vspace{4pt}
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{mtl_bad_01.png}
+    \caption{Bad frame: large global XY-plane offset.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{mtl_bad_02.png}
+    \caption{Bad frame: depth and planar errors compound.}
+  \end{subfigure}
+  \caption{MTL skeleton comparison frames: Xsens GT (blue) vs.\ MTL
+           estimate (orange).  Even relatively ``good'' frames show a
+           systematic global offset caused by the 180° coordinate frame
+           mismatch (un-rotated input to MotionBERT).}
+  \label{fig:mtl_frames}
+\end{figure}
+
+\subsection{Depth vs.\ Planar Error Decomposition}
+\label{sec:mtl_decomp}
+
+To identify the dominant failure mode, the 3D joint distance error was decomposed:
+\begin{itemize}[noitemsep]
+  \item \textbf{Depth component} ($Z$-axis): error along the camera depth direction.
+  \item \textbf{Planar component} ($XY$-plane): horizontal and vertical displacement.
+\end{itemize}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{mtl_depth_decomposition.png}
+  \caption{MTL error decomposition.
+           Planar drift (65.5\,\%) dominates over depth error (34.5\,\%).
+           Only 1.4\,\% of frames have depth error exceeding planar error.
+           Root cause is rotation handling mismatch, not monocular depth failure.}
+  \label{fig:mtl_decomp}
+\end{figure}
+
+\textbf{Interpretation:} If the failure were due to monocular depth ambiguity,
+depth errors would dominate.
+Instead, planar drift dominates in 98.6\,\% of frames, pointing to a
+coordinate frame problem rather than a depth estimation problem.
+
+\subsection{Root Cause: Rotation Handling Mismatch}
+\label{sec:mtl_rootcause}
+
+The SKT pipeline applies a 180\degr\ rotation to input video frames to
+correct the physical camera mount orientation.
+MotionBERT was run on the un-rotated left camera video, producing output in
+an inverted coordinate frame.
+This rotation error manifests as large horizontal and vertical ($XY$-plane)
+displacement rather than depth-axis offset.
+
+Correcting the input rotation would substantially reduce the 218\,cm joint
+distance, but the direction was abandoned because SKT already provides
+superior results without the rotation correction burden.
+
+\subsection{Per-Joint Comparison: MTL vs.\ SKT}
+
+\begin{table}[H]
+  \centering
+  \caption{Per-joint angle MAE: SKT (uncalibrated) vs.\ MTL.
+           MTL only outperforms SKT on L.\ Shoulder ($-1.6$\degr).}
+  \label{tab:mtl_per_joint}
+  \begin{tabular}{lccc}
+    \toprule
+    Joint & SKT (uncalib.) & MTL & $\Delta$ \\
+    \midrule
+    R.\ Shoulder & 15.4\degr & 28.2\degr & \bad{$+$12.8\degr} \\
+    L.\ Shoulder & 20.0\degr & 22.5\degr & $+$2.5\degr \\
+    R.\ Elbow    & 30.7\degr & 54.9\degr & \bad{$+$24.2\degr} \\
+    L.\ Elbow    & 28.3\degr & 49.8\degr & \bad{$+$21.5\degr} \\
+    R.\ Hip      & 18.6\degr & ---         & --- \\
+    L.\ Hip      & 16.6\degr & ---         & --- \\
+    R.\ Knee     & 19.4\degr & 30.7\degr & \bad{$+$11.3\degr} \\
+    L.\ Knee     & 21.3\degr & 26.1\degr & \bad{$+$4.8\degr} \\
+    \midrule
+    Mean & 21.3\degr & \bad{35.4\degr} & \bad{$+$14.1\degr} \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+\textbf{Decision:} Direction C is abandoned.
+MTL's RULA false-positive rate (87.2\,\% flagged as high-risk vs.\ 11.7\,\% GT)
+would generate excessive ergonomic alerts in a production system.
+
+% =============================================================
+\section{Cross-Direction Comparison and Metric Discussion}
+\label{sec:comparison}
+% =============================================================
+
+\subsection{Unified Results Table}
+
+\begin{table}[H]
+  \centering
+  \caption{Cross-direction performance summary.
+           Calibrated SKT result carries overfit risk; uncalibrated is the
+           conservative generalisation estimate.}
+  \label{tab:cross_direction}
+  \small
+  \begin{tabular}{p{3.6cm}p{2.4cm}ccp{1.8cm}l}
+    \toprule
+    Direction & Method & Angle MAE & MPJPE/Dist & Elbow RULA & Status \\
+    \midrule
+    A --- SKT (calibrated)   & Stereo triang. & \good{13.21\degr\warn{*}} & \good{26.0\,cm} & \good{76.3\,\%} & Best \\
+    A --- SKT (uncalibrated) & Stereo triang. & 18.59\degr & 26.0\,cm & --- & Baseline \\
+    B --- DDM                & SGBM stereo    & \bad{30.63\degr} & \bad{117.5\,cm} & \bad{50.6\,\%} & Abandoned \\
+    C --- MTL                & Monocular BERT & \bad{30.4\degr} & \bad{218\,cm$^\dagger$} & N/A & Abandoned \\
+    \bottomrule
+    \multicolumn{6}{l}{\warn{*} Calibration fitted on same subject as evaluation --- overfit risk.} \\
+    \multicolumn{6}{l}{$^\dagger$ Mean joint distance, not MPJPE; global offset dominates.} \\
+  \end{tabular}
+\end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{direction_comparison.png}
+  \caption{Cross-direction comparison: angle MAE (left) and position error (right).
+           The right panel shows SKT MPJPE vs.\ MTL joint distance,
+           which are different metrics and not directly comparable.}
+  \label{fig:direction_comparison}
+\end{figure}
+
+\subsection{Evaluation Metric Discussion}
+
+\subsubsection{RULA Bin Accuracy vs.\ Angle MAE}
+
+Mean angle MAE is a convenient scalar summary but does not directly reflect
+ergonomic utility.
+A 10\degr\ error within the same RULA bin has zero impact on the risk score;
+a 5\degr\ error crossing a bin threshold changes the risk classification.
+\textbf{RULA bin accuracy is the recommended headline metric for future reporting.}
+
+\subsubsection{Fair GT vs.\ Native GT}
+
+Using Xsens native joint angles as ground truth inflates the apparent error by
+$\approx 5$--7\degr\ for most joints compared to Fair GT,
+because the angle definitions differ between Xsens's segment-based model and
+the vision pipeline's landmark-to-landmark vectors.
+All results in this report use Fair GT wherever available.
+
+\subsubsection{MPJPE vs.\ Mean Joint Distance}
+
+MTL's 218\,cm ``MPJPE'' is not comparable to SKT's 26\,cm MPJPE.
+MTL's figure is a mean joint distance that includes a large global offset
+(pelvis displacement 207\,cm) caused by the rotation error.
+True MPJPE (after removing the global rigid offset) would be substantially
+smaller, but the rotation issue prevents fair comparison.
+
+\subsubsection{Quality-Aware Calibration Trade-off}
+
+Quality-aware calibration reduces overall angle MAE (12.54\degr\ vs.\
+13.21\degr) but slightly decreases elbow RULA accuracy (75.6\,\% vs.\
+76.3\,\%).
+The selective\_v2 configuration recovers elbow RULA to 77.3\,\%,
+providing the best operational balance.
+
+% =============================================================
+\section{Stage 1: Group Phase (October 2025 -- January 2026)}
+\label{sec:stage1}
+% =============================================================
+
+\subsection{Team and Contributions}
+
+Stage 1 was conducted by a four-member group:
+\textbf{Fanbo Meng, Zishan Deng, Jiahao Li, and Huining Liu.}
+The focus was on establishing the foundational stereo pipeline and producing
+the MVE386 course deliverables: written report (January 30, 2026) and
+presentation slides (January 20, 2026).
+
+\subsection{Stage 1 Pipeline}
+
+The Stage 1 pipeline used:
+\begin{itemize}[noitemsep]
+  \item 2D detection: YOLOv8-Pose with exponential moving average smoothing ($\alpha = 0.8$)
+  \item Triangulation: \texttt{cv2.triangulatePoints} (standard DLT, unweighted)
+  \item Alignment: Kabsch on top-150 frames (same principle as Stage 2)
+  \item Calibration: Stage 1 refined calibration (40.48\,cm baseline, 0.337\,px RMS)
+\end{itemize}
+
+\textbf{Baseline result (normal walking, uncalibrated):} MPJPE $\approx$ 30\,cm.
+
+\subsection{Stage 1 Failure Modes}
+
+\textbf{Black Chair Catastrophe:} The most severe failure mode.
+When the subject interacts with dark-upholstered furniture, the chair merges
+visually with the operator's dark clothing, causing systematic YOLO
+misdetections followed by stereo triangulation failures.
+
+Body-part error gradient during chair interaction:
+\begin{center}
+\begin{tabular}{lc}
+  \toprule
+  Body Part & Mean MPJPE \\
+  \midrule
+  Head  & 64.12\,cm \\
+  Torso & 79.93\,cm \\
+  Legs  & 199.65\,cm \\
+  Arms  & \bad{301.12\,cm} \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+Variance during chair interaction: $\sigma \approx 1269$\,cm (catastrophic
+instability).
+Lifting a box near the chair peaks at 330\,cm MPJPE.
+
+\textbf{PA-MPJPE insight:} Pose-aligned MPJPE (PA-MPJPE) remained much lower
+than global MPJPE across all scenarios, indicating that the relative pose
+\emph{shape} was often correctly estimated even when the global 3D position
+was wrong.
+Large errors originate from extremities (arms, legs), not the central torso.
+This motivated investigating the angle calibration approach in Stage 2.
+
+% =============================================================
+\section{Lessons Learned and Discussion}
+\label{sec:lessons}
+% =============================================================
+
+\textbf{Lesson 1: Calibration quality sets the ceiling, but single-subject
+angle calibration may overfit.}
+
+The 0.024\,px per-frame reprojection error of the Stage 2 calibration enables
+metric-accurate 3D reconstruction.
+However, the 5.4\degr\ gap between uncalibrated (18.59\degr) and calibrated
+(13.21\degr) results comes from piecewise angle correction fitted on the same
+Aitor recording used for evaluation.
+The rebuilt pipeline achieves 13.91\degr, a 0.7\degr\ discrepancy from the
+historical best, attributable to experimental-condition differences (lost original
+pose NPZ file, random seed in top-150 selection).
+Cross-subject evaluation is required before 13.21\degr\ is claimed as a
+deployment performance estimate.
+
+\textbf{Lesson 2: Fill rate is not a proxy for pose accuracy in low-texture
+environments.}
+
+A 53\,\% fill-rate frame had only 17.4\degr\ MAE; an 81\,\% fill-rate frame
+reached 32.5\degr.
+Dense depth coverage is irrelevant if the disparity signal at joint locations
+is corrupted by low-texture clothing.
+For ergonomics pipelines, accuracy at joints matters --- not average scene
+coverage.
+
+\textbf{Lesson 3: For monocular lifting, coordinate frame alignment matters
+more than depth priors.}
+
+MTL's 218\,cm mean joint distance is 8.4$\times$ larger than SKT's 26\,cm
+MPJPE, yet only 34.5\,\% of that error came from the depth axis.
+Planar drift dominates in 98.6\,\% of frames, caused by a video rotation
+mismatch rather than monocular depth failure.
+Integrating a monocular fallback requires solving coordinate frame consistency
+first --- not improving depth estimation models.
+
+\textbf{Lesson 4: The elbow is the hardest joint and the most critical for
+RULA.}
+
+Both SKT (30.7\degr\ uncalibrated) and MTL (54.9\degr) have their worst
+performance at the right elbow.
+The elbow is sensitive to arm pose relative to the camera axis.
+At the same time, elbow flexion is a primary RULA Group A input.
+Quality-aware calibration must be applied selectively to the elbow to preserve
+RULA accuracy while reducing angle MAE on other joints.
+
+% =============================================================
+\section{Future Work}
+\label{sec:future}
+% =============================================================
+
+\subsection{Real-Time Deployment (Primary Milestone)}
+
+Deploy the SKT pipeline on Viscando's production hardware using:
+\begin{itemize}[noitemsep]
+  \item \textbf{Nvidia TensorRT}: export YOLOv8m-pose to TensorRT engine
+        (INT8 or FP16 quantisation); target $> 10$\,fps end-to-end.
+  \item \textbf{GStreamer / DeepStream}: hardware-accelerated dual-camera
+        capture with synchronisation; integrate triangulation and angle
+        computation as C++ or CUDA extensions.
+  \item RULA score streaming to Viscando visualisation interface.
+\end{itemize}
+
+\subsection{Calibration Generalisation Validation}
+
+Before the 13.21\degr\ calibrated result can be cited as a deployment
+target, cross-subject evaluation is required:
+\begin{itemize}[noitemsep]
+  \item Leave-one-subject-out cross-validation (requires additional subjects).
+  \item Per-deployment recalibration protocol (short 5-minute recording per
+        new operator to re-fit the angle correction curves).
+\end{itemize}
+
+\subsection{RULA-Centric Evaluation}
+
+Replace angle MAE as the headline metric with RULA bin accuracy and total
+RULA score MAE.
+This better reflects clinical utility and aligns with the application goal.
+
+\subsection{Texture Camouflage Robustness}
+
+The Black Chair interaction failure remains the most severe open problem.
+Potential approaches: domain-adaptive fine-tuning of YOLOv8 on industrial
+clothing datasets; background subtraction as pre-processing; active infrared
+illumination.
+
+\subsection{Shelved Directions}
+
+Two diagnostic experiments were conducted but not advanced:
+(1)~AFH1 hybrid pipeline (\texttt{04\_hybrid\_afh1/}): rigid transforms are
+angle-preserving, so the hybrid did not improve angle accuracy.
+(2)~Bone-length correction (\texttt{05\_bone\_correction/}): imposing bone-length
+priors on triangulated 3D positions worsened angle MAE.
+
+% =============================================================
+\clearpage
+\appendix
+% =============================================================
+
+\section{Key File Index}
+\label{app:files}
+
+\begin{center}
+\begin{tabular}{p{8.5cm}p{5cm}}
+  \toprule
+  Path & Content \\
+  \midrule
+  \texttt{shared/camera\_params.npz} & Stage 2 optimised stereo calibration \\
+  \texttt{shared/calibration\_search\_summary.json} & Calibration grid search log \\
+  \texttt{01\ldots/results/alignment\_summary.json} & Best offset 17.40\,s, MPJPE 26.15\,cm \\
+  \texttt{01\ldots/results/angle\_calibration.npz} & Historical piecewise calib.\ curves \\
+  \texttt{01\ldots/results/experiment\_log.md} & Full SKT experiment history \\
+  \texttt{01\ldots/results/calibration\_sanity\_check.md} & Board-scale and height sanity check \\
+  \texttt{03\ldots/results\_mono/\allowbreak skeleton\_comparison\_dirC.json} & MTL metrics \\
+  \texttt{03\ldots/results\_mono/depth\_diagnosis\_dirC.md} & MTL depth decomposition \\
+  \texttt{Xsens\_ground\_truth/Aitor-001.mvnx} & Xsens GT (240\,Hz, metres) \\
+  \texttt{thesis\_chapters/figures/} & All report figures (22 PNG) \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\section{Complete Algorithm Parameter Reference}
+\label{app:params}
+
+\begin{center}
+{\small
+\begin{tabular}{p{3.4cm}p{4.2cm}p{3.6cm}l}
+  \toprule
+  Parameter & Env Variable & Value & Module \\
+  \midrule
+  \multicolumn{4}{l}{\textit{Detection thresholds}} \\
+  Full-frame confidence   & \texttt{POSE\_FULL\_FRAME\_CONF}    & 0.35 & Detection \\
+  Crop confidence         & \texttt{POSE\_CROP\_CONF}           & 0.20 & Detection \\
+  Min stereo pair conf.   & \texttt{POSE\_MIN\_PAIR\_CONF}      & 0.25 & Triangulation \\
+  \midrule
+  \multicolumn{4}{l}{\textit{OneEuro temporal filter}} \\
+  Min cutoff frequency    & ---                                  & 1.4  & Smoothing \\
+  Beta (speed coupling)   & ---                                  & 0.05 & Smoothing \\
+  Derivative cutoff       & ---                                  & 1.0  & Smoothing \\
+  Motion scale            & ---                                  & 12.0\,px & Smoothing \\
+  Weight formula          & ---    & $\operatorname{clip}(0.18+0.52c+0.22m, 0.15, 0.95)$ & Smoothing \\
+  \midrule
+  \multicolumn{4}{l}{\textit{Stereo triangulation}} \\
+  Min disparity           & \texttt{POSE\_MIN\_DISPARITY\_PX}   & 1.5\,px & Triangulation \\
+  Epipolar base           & \texttt{POSE\_EPIPOLAR\_BASE\_PX}   & 6.0\,px & Triangulation \\
+  Epipolar conf.\ gain    & \texttt{POSE\_EPIPOLAR\_\allowbreak CONF\_GAIN\_PX} & 18.0\,px & Triangulation \\
+  Epipolar soft thresh.   & ---                                  & 10.0\,px & Triangulation \\
+  Epipolar max strength   & ---                                  & 0.80 & Triangulation \\
+  Reprojection base       & \texttt{POSE\_REPROJECTION\_\allowbreak BASE\_PX} & 18.0\,px & Triangulation \\
+  Reprojection conf.\ gain & \texttt{POSE\_REPROJECTION\_\allowbreak CONF\_GAIN\_PX} & 42.0\,px & Triangulation \\
+  Reprojection max        & \texttt{POSE\_REPROJECTION\_MAX\_PX} & 80.0\,px & Triangulation \\
+  \midrule
+  \multicolumn{4}{l}{\textit{Temporal window triangulation}} \\
+  Window radius           & ---    & 3 frames & Triangulation \\
+  Min support frames      & ---    & 3        & Triangulation \\
+  Min stereo quality      & ---    & 0.35     & Triangulation \\
+  Decay time constant     & ---    & 0.06\,s  & Triangulation \\
+  \midrule
+  \multicolumn{4}{l}{\textit{Coordinate alignment}} \\
+  Elite frame count       & ---    & 150      & Kabsch \\
+  Min valid pairs         & ---    & 10       & Kabsch \\
+  Reference leg lengths   & ---    & [38.6, 39.8, 40.3, 39.5]\,cm & Kabsch \\
+  \midrule
+  \multicolumn{4}{l}{\textit{Angle calibration}} \\
+  Smoothing radius        & \texttt{POSE\_ANGLE\_SMOOTH\_RADIUS} & 4 & Calibration \\
+  Calibration bins        & ---    & 10       & Calibration \\
+  QA split percentile     & \texttt{POSE\_QA\_SPLIT\_PERCENTILE} & 35 & Calib.\ (QA) \\
+  \midrule
+  \multicolumn{4}{l}{\textit{SGBM (Direction B)}} \\
+  Min disparity           & ---    & 100\,px  & SGBM \\
+  Num disparities         & ---    & 256\,px  & SGBM \\
+  Block size              & ---    & 9\,px    & SGBM \\
+  Keypoint lookup window  & ---    & $5\times5$ median & SGBM \\
+  \midrule
+  \multicolumn{4}{l}{\textit{MTL Butterworth filter}} \\
+  Cutoff frequency        & ---    & 3.0\,Hz  & MTL \\
+  Median filter radius    & ---    & 3 frames & MTL \\
+  \bottomrule
+\end{tabular}
+} % end \small
+\end{center}
+
+\section{Stage 2 Milestone Timeline}
+\label{app:timeline}
+
+\begin{center}
+\begin{tabular}{lp{10cm}}
+  \toprule
+  Date & Milestone \\
+  \midrule
+  2026-02 & Stage 2 begins.
+             Direction A deepening: quality-aware calibration, RTMPose evaluation. \\
+  2026-03-24 & Weekly report 1.
+               SKT historical best confirmed: 13.21\degr\ (calib.), 18.59\degr\ (uncalib.).
+               Fair GT framework introduced.
+               Direction B (SGBM) exploration begun. \\
+  2026-03 to 04 & DDM block-size sweep completed.
+                  MTL (MotionBERT) pipeline evaluated.
+                  Depth decomposition reveals planar drift dominates MTL error. \\
+  2026-04-13 & Weekly report 2.
+               Three-direction comparison finalised (SKT $>$ MTL $>$ DDM).
+               Historical best partially reproduced (13.91\degr\ rebuilt).
+               Interactive DDM point cloud viewer built. \\
+  2026-04-19--20 & This report compiled following supervisor Yuri's recommendation
+                   to systematically document work before pursuing new algorithms. \\
+  \bottomrule
+\end{tabular}
+\end{center}
+
+\section{Conceptual Architecture (Onboarding Reference)}
+\label{app:arch}
+
+\subsection*{Direction A --- SKT}
+\textbf{Entry:} \texttt{01\_stereo\_triangulation/src/02\_batch\_inference.py}\\
+\textbf{Input:} Synchronised stereo video (L+R) + \texttt{camera\_params.npz}.\\
+\textbf{Pipeline:} YOLOv8m-pose on both cameras $\to$ adaptive temporal smoothing
+$\to$ confidence-weighted DLT triangulation $\to$ quality filters $\to$
+3D joints (\texttt{.npz}, $N\times17\times3$, cm, left-camera frame) $\to$
+Kabsch alignment to Xsens $\to$ angle computation + calibration $\to$ RULA scoring.\\
+\textbf{Output:} \texttt{results/optimized\_pose.npz}, evaluation HTML reports.
+
+\subsection*{Direction B --- DDM}
+\textbf{Entry:} \texttt{02\_dense\_stereo\_sgbm/src/06\_sgbm\_disparity.py}\\
+\textbf{Input:} Synchronised stereo video + \texttt{camera\_params.npz}.\\
+\textbf{Pipeline:} Stereo rectification $\to$ SGBM dense disparity $\to$
+depth image $\to$ 3D point cloud $\to$ per-frame fill rate + quality metrics.\\
+\textbf{Output:} Dense disparity maps + \texttt{results/interactive\_pointcloud.html}.
+
+\subsection*{Direction C --- MTL}
+\textbf{Entry:} \texttt{03\_mono\_motionbert/RTMDet-MotionBert-OpenSim/src/main\_inference.py}\\
+\textbf{Input:} Left camera video only.\\
+\textbf{Pipeline:} RTMDet detection $\to$ RTMW 133-joint 2D $\to$
+MotionBERT temporal lifting (DSTformer, H36M) $\to$
+TRC marker positions $\to$ Butterworth + median filtering $\to$
+geometric angle computation $\to$ Kabsch evaluation.\\
+\textbf{Output:} \texttt{results\_mono/} NPZ files + \texttt{skeleton\_comparison\_dirC.json}.
+
+\noindent\textbf{Shared utilities:} \texttt{shared/utils\_mvnx.py} (GT parsing),
+\texttt{shared/pose\_angle\_utils.py} (angle computation),
+\texttt{shared/skeleton\_video\_utils.py} (Kabsch + visualisation).
+
+\bigskip
+\noindent\hrule
+\vspace{4pt}
+\noindent{\small Generated April 20, 2026 \; $\cdot$ \; Fanbo Meng \;
+$\cdot$ \; Chalmers University of Technology $\times$ Viscando AB}
+
+% =============================================================
+\newpage
+\begin{thebibliography}{9}
+
+\bibitem{kabsch1976solution}
+W.~Kabsch,
+\textit{A solution for the best rotation to relate two sets of vectors},
+Acta Crystallographica, Section A, vol.~32, pp.~922--923, 1976.
+
+\bibitem{hirschmuller2007sgbm}
+H.~Hirschm{\"u}ller,
+\textit{Stereo processing by semiglobal matching and mutual information},
+IEEE Transactions on Pattern Analysis and Machine Intelligence,
+vol.~30, no.~2, pp.~328--341, 2007.
+
+\end{thebibliography}
+
+\end{document}

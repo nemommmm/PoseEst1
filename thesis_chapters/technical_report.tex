@@ -29,7 +29,7 @@
 \usepackage{tabularx}
 
 \hypersetup{colorlinks=true, linkcolor=blue!70!black, urlcolor=blue!70!black, citecolor=green!50!black}
-\graphicspath{{figures/}{../00_pose_pipeline/runs/current_2025_ergonomics/scatter/}}
+\graphicspath{{figures/}}
 \emergencystretch=2em
 
 \definecolor{goodcolor}{rgb}{0.00,0.38,0.18}
@@ -94,7 +94,8 @@ Industrial operators repeatedly reach, lift, bend, and interact with equipment,
 and these movements can lead to musculoskeletal risk when joint postures remain
 unfavourable or when high-risk actions are repeated frequently.
 Manual assessment tools such as RULA are useful but labour-intensive, observer
-dependent, and difficult to apply continuously in production settings.
+dependent, and difficult to apply continuously in production settings
+\cite{mcatamney1993rula}.
 This motivates camera-based systems that can estimate body posture
 automatically and provide measurements that are meaningful for ergonomic
 analysis.
@@ -198,7 +199,8 @@ recover depth.
 In a calibrated stereo setup, corresponding 2D observations in the left and
 right cameras define viewing rays whose intersection gives a 3D point estimate.
 This gives stereo systems a natural metric-scale interpretation, which is
-important when physical distances and workspace geometry matter.
+important when physical distances and workspace geometry matter
+\cite{hartley2004multiple}.
 However, sparse triangulation is sensitive to 2D keypoint jitter and to
 left--right mismatch, while dense disparity methods can fail on low-texture
 clothing or visually ambiguous industrial backgrounds.
@@ -270,6 +272,23 @@ sub-pixel reprojection residuals in the calibration images.
 The calibration matrices are stored separately and are treated as fixed inputs
 for all SKT and SGBM experiments in this report.
 
+Figure~\ref{fig:calibration_evolution} summarizes the calibration refinement
+process that led to the current camera parameters.
+The first calibration attempt produced a plausible stereo geometry but a
+baseline that was too far from the measured physical baseline and a
+reprojection error above the desired threshold.
+The refined and optimized calibration reduced the reprojection error and moved
+the estimated baseline close to the physical value, which is important because
+small calibration errors are amplified when triangulated joints are used for
+angle computation.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{calibration_evolution.png}
+  \caption{Stereo calibration evolution. The current calibration balances a realistic baseline estimate with a low reprojection error, making it suitable as the fixed geometric input for SKT and SGBM.}
+  \label{fig:calibration_evolution}
+\end{figure}
+
 \subsection{2025 Ergonomics Dataset}
 
 The current evaluation uses a single-subject ergonomics recording collected in
@@ -338,6 +357,52 @@ The best position, angle, and motion-delta offsets are close to each other
 (17.27 s, 17.28 s, and 17.31 s respectively), which indicates that a constant
 offset is a reasonable alignment model for this recording.
 
+Figure~\ref{fig:offset_search} shows the score curves used by the automatic
+alignment procedure.
+The important observation is not only the selected value, but also the fact
+that the three independently computed optima fall in the same narrow time
+region.
+This reduces the risk that the final motion comparison is driven by an
+arbitrary manually selected shift.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{thesis_offset_search.png}
+  \caption{Automatic offset estimation between the camera timeline and the Xsens reference timeline. The final selected value is 17.31 s, with position-, angle-, and motion-based scores all supporting a similar alignment.}
+  \label{fig:offset_search}
+\end{figure}
+
+The aligned elbow-angle curves are also inspected visually, as shown in
+Figure~\ref{fig:angle_time_alignment}.
+The purpose of this plot is not to rank methods, but to verify that the main
+movement phases occur at comparable times after offset correction.
+Short-term differences remain, especially for SKT, but these differences are
+then treated as method behaviour rather than as a known global synchronization
+error.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{thesis_joint_angle_over_time.png}
+  \caption{Left and right elbow angles on the shared timeline after offset correction. The plot provides a qualitative synchronization check before quantitative angle and motion metrics are interpreted.}
+  \label{fig:angle_time_alignment}
+\end{figure}
+
+Finally, the first and last valid K=6 motion-delta windows are compared in
+Figure~\ref{fig:first_last_delta}.
+This is a lightweight drift sanity check: if a single constant offset were
+insufficient, one would expect the alignment quality to degrade strongly near
+the end of the recording.
+The current visual check does not remove the possibility of small residual
+clock drift, but it supports the use of a constant offset for the present
+analysis.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{thesis_k6_delta_first_last_10s.png}
+  \caption{K=6 elbow motion deltas near the beginning and end of the common valid interval. This figure is used as a practical check that the chosen constant offset remains reasonable across the recording.}
+  \label{fig:first_last_delta}
+\end{figure}
+
 % =============================================================
 \section{Methods}
 \label{sec:methods}
@@ -353,6 +418,50 @@ Merge is an external hybrid output that combines information from FastSAM3D
 and Viscando data processing.
 SGBM is an alternative dense stereo path used to test whether dense disparity
 can improve depth estimation at body joints.
+
+Figure~\ref{fig:pipeline_overview} gives the full experimental flow.
+The design choice that matters most for the thesis is the separation between
+pose estimation and evaluation: all methods are mapped onto a shared timeline,
+but they are then judged in three different spaces.
+This prevents a misleading conclusion where a method that is strong in one
+space, such as metric stereo geometry, is assumed to be equally strong in
+angle or motion consistency.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{thesis_pipeline_overview.png}
+  \caption{Overview of the thesis evaluation pipeline. Inputs are synchronized and evaluated separately in angle space, motion space, and position space before the final cross-method interpretation.}
+  \label{fig:pipeline_overview}
+\end{figure}
+
+\begin{table}[H]
+  \centering
+  \caption{Role of each evaluated pose-estimation path in the thesis.}
+  \label{tab:method_roles}
+  \small
+  \begin{tabularx}{\linewidth}{lXXX}
+    \toprule
+    Method & Input assumption & Main advantage & Main risk \\
+    \midrule
+    SKT
+    & Synchronized stereo video and calibrated cameras
+    & Metric 3D scale and explicit geometric quality signals
+    & 2D keypoint jitter and left--right mismatch are amplified by triangulation \\
+    FastSAM3D
+    & Monocular pose output provided as TRC markers
+    & Learned body/motion priors give stable angle and motion behaviour
+    & Coordinate, scale, and keypoint semantics require careful interpretation \\
+    Merge
+    & External hybrid output combining FastSAM3D and Viscando processing
+    & Tests whether hybrid processing improves agreement
+    & Current output does not preserve strong short-term motion agreement \\
+    SGBM
+    & Dense rectified stereo image pair
+    & Uses dense image evidence rather than only sparse keypoints
+    & Low-texture body regions can collapse disparity near joints \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
 
 \subsection{Sparse Keypoint Triangulation}
 
@@ -374,6 +483,14 @@ detected rather than silently converted into ergonomic scores.
 The main weakness is that each frame is still strongly dependent on 2D
 keypoint quality; small 2D jitter can be amplified by triangulation and then
 further amplified by joint-angle computation.
+
+In practice, this means that SKT is not only a reconstruction method but also
+an uncertainty-aware measurement pipeline.
+When a wrist or elbow keypoint is detected inconsistently between the two
+views, the resulting 3D joint can remain numerically valid while still
+producing a large angle jump.
+This observation motivates the later motion-delta evaluation and the
+discussion of high-delta failure cases.
 
 \subsection{FastSAM3D}
 
@@ -411,7 +528,7 @@ keypoint triangulation.
 After stereo rectification, Semi-Global Block Matching computes a disparity
 map for each frame.
 For each 2D keypoint location, the local disparity is converted to depth using
-the stereo baseline and rectified focal length.
+the stereo baseline and rectified focal length \cite{hirschmuller2007sgbm}.
 
 The motivation for SGBM is to test whether dense depth can provide a more
 robust depth estimate than sparse triangulation when 2D keypoint confidence is
@@ -422,6 +539,28 @@ regions near important joints, causing disparity values to collapse or become
 unreliable.
 SGBM is therefore kept as an alternative path and diagnostic experiment, not as
 the main pose-estimation method.
+
+Figure~\ref{fig:ddm_diagnostics} illustrates why the dense stereo path is not
+used as the main method in this thesis draft.
+Even when disparity can be estimated for parts of the scene, the body regions
+needed for ergonomic joint angles are not always reliable enough.
+This result is important because it prevents an over-simplified conclusion
+that dense stereo should automatically outperform sparse triangulation.
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.57\linewidth}
+    \includegraphics[width=\linewidth]{ddm_fill_rate.png}
+    \caption{Disparity fill-rate diagnostic.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.38\linewidth}
+    \includegraphics[width=\linewidth]{ddm_scatter.png}
+    \caption{Dense-depth comparison scatter.}
+  \end{subfigure}
+  \caption{Dense stereo diagnostics. SGBM is informative as a depth diagnostic, but low-texture clothing and furniture make dense disparity unreliable around several body joints.}
+  \label{fig:ddm_diagnostics}
+\end{figure}
 
 % =============================================================
 \section{Evaluation Framework}
@@ -470,7 +609,7 @@ Before DTW, each segment is mean-subtracted and L2-normalized so that the
 distance emphasizes motion shape rather than absolute offset or amplitude.
 This makes DTW complementary to RMSE and MAE: MAE measures amplitude error,
 whereas DTW measures whether the shape of the motion is similar under small
-temporal deviations.
+temporal deviations \cite{sakoe1978dtw}.
 
 \subsection{Position-space Evaluation}
 
@@ -479,7 +618,7 @@ For stereo methods, calibrated geometry gives metric-scale coordinates, making
 MPJPE and pelvis-relative comparisons meaningful after rigid alignment.
 For monocular FastSAM3D output, position-space comparison is more difficult
 because the output coordinate system and scale do not necessarily match the
-stereo or Xsens coordinate frames.
+stereo or Xsens coordinate frames \cite{kabsch1976solution}.
 Therefore, position-space results are used mainly to discuss the practical
 advantage of stereo geometry and the coordinate/scale limitations of monocular
 methods.
@@ -494,6 +633,42 @@ defined in the pipeline configuration.
 The important methodological principle is that smoothing is applied before
 delta computation; otherwise, the delta metric would measure filter artifacts
 rather than the motion signal itself.
+
+\begin{table}[H]
+  \centering
+  \caption{Interpretation of the evaluation tracks used in the thesis.}
+  \label{tab:evaluation_tracks}
+  \small
+  \begin{tabularx}{\linewidth}{lXXX}
+    \toprule
+    Track & Question answered & Main metrics & Main caveat \\
+    \midrule
+    Angle-space
+    & Is the posture suitable for ergonomic angle interpretation?
+    & MAE, median AE, bias, valid ratio, RULA-like bin agreement
+    & Sensitive to reference-system angle definitions and static offsets \\
+    Motion-space
+    & Do two systems describe the same short-term movement?
+    & K-frame delta correlation, delta MAE, RMSE, high-delta count, DTW
+    & Requires careful time alignment and consistent smoothing policy \\
+    Segment-level
+    & Are active movement intervals similar in range and shape?
+    & ROM error, segment MAE, DTW distance, RULA-like agreement
+    & Depends on segment detection thresholds and valid-frame coverage \\
+    Position-space
+    & Are reconstructed 3D skeletons geometrically compatible?
+    & MPJPE, pelvis-relative distance, aligned inter-method distance
+    & Monocular methods may use different coordinate and scale conventions \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+This separation is central to the thesis argument.
+For example, a method can produce good angle trends while still being
+difficult to compare in absolute 3D coordinates, or it can preserve metric
+scale while producing jittery short-term angles.
+The evaluation framework therefore reports multiple complementary quantities
+instead of selecting a single ``winner'' metric.
 
 % =============================================================
 \section{Results}
@@ -529,6 +704,20 @@ The elbow remains difficult for all vision methods.
   \end{tabular}
 \end{table}
 
+Figure~\ref{fig:angle_summary_plot} shows the same result visually.
+The bar plot is useful because the difference between SKT and FastSAM3D is
+not dramatic enough to be treated as a universal conclusion, but it is
+consistent enough to motivate the later discussion of learned pose priors.
+The Xsens-native comparison is included as an internal reference-system check,
+not as a vision method.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{thesis_angle_summary.png}
+  \caption{Angle-space summary across evaluated methods. FastSAM3D has the lowest mean and median MAE among the vision methods, while the Xsens-native check indicates the approximate lower bound of the reference-system representation difference.}
+  \label{fig:angle_summary_plot}
+\end{figure}
+
 \subsection{Motion-space Results}
 
 FastSAM3D also shows stronger motion agreement than SKT at K=6.
@@ -558,19 +747,69 @@ output does not preserve the same short-term motion pattern.
   \end{tabular}
 \end{table}
 
+Figure~\ref{fig:motion_k6_summary_plot} visualizes the K=6 correlation
+summary.
+This figure makes the main motion-space finding more apparent than the table:
+FastSAM3D is consistently above SKT, while Merge is close to zero in the
+current evaluation.
+The high Xsens-native check confirms that the K=6 metric can recover strong
+agreement when the two compared signals are expected to have the same motion
+pattern.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.92\linewidth]{thesis_motion_k6_summary.png}
+  \caption{K=6 motion-delta correlation summary. FastSAM3D shows stronger short-term motion agreement than SKT on the current dataset, whereas Merge does not preserve the same motion pattern.}
+  \label{fig:motion_k6_summary_plot}
+\end{figure}
+
 \begin{figure}[H]
   \centering
   \begin{subfigure}[b]{0.48\linewidth}
-    \includegraphics[width=\linewidth]{scatter_skt_vs_xsensfair_leftelbow_k6.png}
-    \caption{SKT vs.\ reference, left elbow.}
+    \includegraphics[width=\linewidth]{thesis_scatter_skt_vs_xsensfair_leftelbow_k6.png}
+    \caption{SKT, left elbow.}
   \end{subfigure}
   \hfill
   \begin{subfigure}[b]{0.48\linewidth}
-    \includegraphics[width=\linewidth]{scatter_fastsam3d_vs_xsensfair_leftelbow_k6.png}
-    \caption{FastSAM3D vs.\ reference, left elbow.}
+    \includegraphics[width=\linewidth]{thesis_scatter_fastsam3d_vs_xsensfair_leftelbow_k6.png}
+    \caption{FastSAM3D, left elbow.}
   \end{subfigure}
-  \caption{K=6 elbow motion-delta scatter plots. FastSAM3D follows the reference trend more consistently, while SKT shows more high-delta jitter and vertical-axis accumulation.}
+
+  \vspace{0.4cm}
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{thesis_scatter_skt_vs_xsensfair_rightelbow_k6.png}
+    \caption{SKT, right elbow.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{thesis_scatter_fastsam3d_vs_xsensfair_rightelbow_k6.png}
+    \caption{FastSAM3D, right elbow.}
+  \end{subfigure}
+  \caption{K=6 elbow motion-delta scatter plots against the Xsens-derived reference. FastSAM3D follows the ideal trend more consistently, while SKT shows more high-delta jitter and vertical-axis accumulation.}
   \label{fig:k6_elbow_scatter}
+\end{figure}
+
+The sensitivity to the K-frame interval is shown in
+Figure~\ref{fig:pearson_vs_k}.
+K=1 is the harshest setting because it measures almost instantaneous
+frame-to-frame changes and therefore exposes jitter most strongly.
+K=6 is used as the main reporting point because it reduces single-frame noise
+while still representing sub-second motion, rather than smoothing over an
+entire action.
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{thesis_pearson_vs_k_leftelbow.png}
+    \caption{Left elbow.}
+  \end{subfigure}
+  \hfill
+  \begin{subfigure}[b]{0.48\linewidth}
+    \includegraphics[width=\linewidth]{thesis_pearson_vs_k_rightelbow.png}
+    \caption{Right elbow.}
+  \end{subfigure}
+  \caption{Motion-delta correlation as a function of K. The result supports using K=6 as a practical compromise between jitter sensitivity and motion interpretability.}
+  \label{fig:pearson_vs_k}
 \end{figure}
 
 \subsection{Segment-level Results}
@@ -596,6 +835,13 @@ ROM error and very low DTW distance.
     \bottomrule
   \end{tabular}
 \end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.95\linewidth]{thesis_segment_summary.png}
+  \caption{Segment-level ROM error and DTW distance. FastSAM3D gives the strongest segment-level agreement among the vision methods, while the Xsens-native check provides a reference-system lower bound.}
+  \label{fig:segment_summary_plot}
+\end{figure}
 
 \subsection{Position-space Results}
 
@@ -624,6 +870,13 @@ inter-method distance is approximately 60.0 cm.
     \bottomrule
   \end{tabularx}
 \end{table}
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=0.9\linewidth]{thesis_position_diagnostic.png}
+  \caption{Position-space diagnostic comparison. SKT is more meaningful in metric 3D space because it is tied to calibrated stereo geometry, whereas direct FastSAM3D-to-reference distance is dominated by coordinate and scale conventions.}
+  \label{fig:position_diagnostic_plot}
+\end{figure}
 
 \subsection{Cross-method Synthesis}
 
@@ -666,6 +919,42 @@ SKT can expose epipolar error, reprojection error, disparity, and left--right
 confidence consistency, which are directly tied to the camera geometry.
 These signals can support quality gating, uncertainty reporting, or fallback
 logic in a production system.
+
+\subsection{Failure-case Analysis of High-delta Events}
+
+The scatter plots reveal several short intervals where SKT produces large
+motion deltas.
+These points should not be dismissed as generic ``noise'' because they often
+come from identifiable keypoint-chain problems.
+For elbow flexion, the relevant chain is shoulder--elbow--wrist; an unstable
+wrist or elbow detection in either camera can produce a plausible-looking 2D
+skeleton but a sharply different triangulated 3D angle.
+
+Figure~\ref{fig:skt_high_delta_cases} shows representative frames from two
+diagnostic clips.
+The purpose of these images is to connect the quantitative scatter-plot
+outliers back to the underlying visual evidence.
+In the current dataset, problematic intervals are associated with occlusion,
+distance from the camera, and inconsistent left--right keypoint behaviour.
+This suggests that the next SKT improvement should focus on quality-aware
+keypoint filtering and temporal repair rather than only on changing the final
+angle formula.
+
+\begin{figure}[H]
+  \centering
+  \begin{subfigure}[b]{0.98\linewidth}
+    \includegraphics[width=\linewidth]{thesis_skt_high_delta_left_elbow_frames.png}
+    \caption{Left-elbow high-delta interval.}
+  \end{subfigure}
+
+  \vspace{0.35cm}
+  \begin{subfigure}[b]{0.98\linewidth}
+    \includegraphics[width=\linewidth]{thesis_skt_high_delta_right_elbow_frames.png}
+    \caption{Right-elbow high-delta interval.}
+  \end{subfigure}
+  \caption{Representative SKT high-delta diagnostic frames projected onto the original video view. These examples indicate that some large motion deltas are caused by local keypoint instability around the elbow chain rather than by physically implausible whole-body motion.}
+  \label{fig:skt_high_delta_cases}
+\end{figure}
 
 \subsection{Limitations}
 
@@ -749,6 +1038,21 @@ rotation, hardware-frame-ID synchronization, timestamp parsing, camera
 calibration path, smoothing settings, and the automatic offset-search range.
 Generated outputs are stored under \texttt{00\_pose\_pipeline/runs/}.
 
+As an additional reproducibility check, the pipeline can generate residual
+lag diagnostics after the selected offset has been applied.
+Figure~\ref{fig:residual_lag_check} illustrates this check for the current
+dataset.
+It is not used as a headline result, but it records the sanity check that the
+remaining local lag does not obviously grow from the beginning to the end of
+the recording.
+
+\begin{figure}[H]
+  \centering
+  \includegraphics[width=\linewidth]{thesis_residual_lag_drift_check.png}
+  \caption{Residual lag sanity check after applying the selected constant offset. This figure supports the assumption that a constant offset is adequate for the present recording, while still acknowledging that future datasets should repeat this check.}
+  \label{fig:residual_lag_check}
+\end{figure}
+
 \section{Claim-evidence Self-review}
 
 \begin{table}[H]
@@ -761,14 +1065,20 @@ Generated outputs are stored under \texttt{00\_pose\_pipeline/runs/}.
     Claim & Evidence used in this draft & Status \\
     \midrule
     FastSAM3D is stronger than SKT in angle-space on the current dataset.
-    & Table~\ref{tab:angle_summary}: 15.4\degr\ mean MAE vs.\ 17.6\degr.
+    & Table~\ref{tab:angle_summary} and Figure~\ref{fig:angle_summary_plot}: 15.4\degr\ mean MAE vs.\ 17.6\degr.
     & Supported \\
     FastSAM3D is stronger than SKT in K=6 motion-space agreement.
-    & Table~\ref{tab:motion_summary}: mean Pearson 0.644 vs.\ 0.379; elbow-specific correlations also higher.
+    & Table~\ref{tab:motion_summary}, Figure~\ref{fig:motion_k6_summary_plot}, and Figure~\ref{fig:k6_elbow_scatter}: mean Pearson 0.644 vs.\ 0.379; elbow-specific correlations also higher.
     & Supported \\
     SKT retains a position-space and interpretability advantage.
-    & Table~\ref{tab:position_summary}; SKT uses calibrated stereo scale and exposes geometric quality signals.
+    & Table~\ref{tab:position_summary}, Figure~\ref{fig:position_diagnostic_plot}, and the SKT method design; SKT uses calibrated stereo scale and exposes geometric quality signals.
     & Supported \\
+    A constant offset is adequate for the current recording.
+    & Figure~\ref{fig:offset_search}, Figure~\ref{fig:first_last_delta}, and Figure~\ref{fig:residual_lag_check}; the three offset scores agree within a narrow range.
+    & Supported for current dataset \\
+    SKT high-delta points are connected to local keypoint-chain instability.
+    & Figure~\ref{fig:skt_high_delta_cases}; diagnostic frames show unstable elbow-chain keypoints during high-delta intervals.
+    & Supported qualitatively \\
     Results generalize to manufacturing environments broadly.
     & Only one controlled single-subject dataset is evaluated.
     & Needs evidence \\
@@ -785,6 +1095,22 @@ Generated outputs are stored under \texttt{00\_pose\_pipeline/runs/}.
 W.~Kabsch,
 \textit{A solution for the best rotation to relate two sets of vectors},
 Acta Crystallographica, Section A, vol.~32, pp.~922--923, 1976.
+
+\bibitem{mcatamney1993rula}
+L.~McAtamney and E.~N.~Corlett,
+\textit{RULA: a survey method for the investigation of work-related upper limb disorders},
+Applied Ergonomics, vol.~24, no.~2, pp.~91--99, 1993.
+
+\bibitem{hartley2004multiple}
+R.~Hartley and A.~Zisserman,
+\textit{Multiple View Geometry in Computer Vision},
+2nd ed., Cambridge University Press, 2004.
+
+\bibitem{sakoe1978dtw}
+H.~Sakoe and S.~Chiba,
+\textit{Dynamic programming algorithm optimization for spoken word recognition},
+IEEE Transactions on Acoustics, Speech, and Signal Processing,
+vol.~26, no.~1, pp.~43--49, 1978.
 
 \bibitem{hirschmuller2007sgbm}
 H.~Hirschm{\"u}ller,

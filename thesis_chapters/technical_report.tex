@@ -91,6 +91,7 @@ angle and motion tracking, whereas stereo vision remains valuable for scale,
 geometry-aware quality checks, and deployment interpretability.
 
 % =============================================================
+\newpage
 \section{Introduction}
 % =============================================================
 
@@ -1029,6 +1030,7 @@ Real-time pose models such as RTMPose make this deployment direction plausible,
 but the final system still needs to measure end-to-end latency rather than
 model inference time alone \cite{jiang2023rtmpose}.
 
+\clearpage
 % =============================================================
 \section{Conclusion and Future Work}
 \label{sec:conclusion}
@@ -1058,6 +1060,66 @@ optional temporal-model integration if the computational budget allows.
 The third step is to extend the motion-space evaluation beyond the elbow joint
 and connect pose-estimation outputs more directly to full ergonomic risk
 assessment.
+
+\subsection{Recommended Next-stage Experimental Protocol}
+
+The next experimental stage should treat the current dataset as a pilot case
+rather than as final evidence.
+The most important change is to repeat the same evaluation protocol on
+additional recordings while keeping the configuration choices explicit.
+For each new dataset, the pipeline should first validate video orientation,
+left--right frame pairing, timestamp stability, and camera calibration before
+any accuracy numbers are interpreted.
+Only after these checks pass should the automatic offset search, angle-space
+evaluation, motion-space evaluation, and segment-level evaluation be executed.
+
+The second priority is to separate algorithmic improvement from measurement
+protocol improvement.
+For example, if SKT is modified with stronger 2D keypoint filtering or a
+temporal repair module, the same K-frame motion-delta protocol should be
+rerun before and after the modification.
+This makes it possible to answer whether the new module actually reduces
+high-delta outliers, instead of only producing a smoother-looking video.
+Similarly, if FastSAM3D or another learning-based method is used as a
+comparison system, its coordinate convention and filtering state should be
+recorded before it is included in position-space analysis.
+
+\begin{center}
+  \small
+  \textbf{Recommended validation checklist for extending the thesis evaluation to new datasets}
+
+  \vspace{0.4em}
+  \begin{tabularx}{\linewidth}{p{3.2cm}XX}
+    \toprule
+    Stage & What should be checked & Why it matters \\
+    \midrule
+    Dataset validation
+    & Video orientation, frame IDs, metadata timestamps, synchronized frame count, and calibration compatibility.
+    & Prevents data-ingestion errors from being misinterpreted as pose-estimation errors. \\
+    Time alignment
+    & Automatic offset curves, residual lag at the beginning and end of the recording, and common valid intervals.
+    & Ensures that motion-space metrics compare the same physical movement period. \\
+    Method comparison
+    & Angle MAE, K-frame motion agreement, segment ROM/DTW, and position-space diagnostics for every method.
+    & Keeps the comparison multi-dimensional and avoids over-ranking methods by a single metric. \\
+    Failure analysis
+    & High-delta frames, occlusion cases, camera distance, and left--right keypoint consistency.
+    & Connects quantitative outliers to concrete visual causes and guides SKT repair work. \\
+    Deployment check
+    & End-to-end latency, GPU preprocessing, model inference time, and stability under streaming input.
+    & Tests whether the method can move from offline evaluation toward real-time ergonomic monitoring. \\
+    \bottomrule
+  \end{tabularx}
+\end{center}
+
+The final thesis version should therefore present two kinds of evidence.
+The first is quantitative agreement across several recordings and movement
+types.
+The second is diagnostic evidence showing why failures occur and which parts
+of the pipeline are responsible.
+This combination is more useful for manufacturing deployment than reporting a
+single aggregate error, because a practical ergonomic monitoring system must
+know both how accurate it is and when its output should not be trusted.
 
 \clearpage
 % =============================================================
@@ -1100,13 +1162,16 @@ the recording.
   \label{fig:residual_lag_check}
 \end{figure}
 
+\FloatBarrier
+\clearpage
 \section{Claim-evidence Self-review}
 
-\begin{table}[!htbp]
+\begin{table}[H]
   \centering
   \caption{Claim-evidence map for the current thesis draft.}
   \label{tab:claim_evidence}
   \small
+  \renewcommand{\arraystretch}{1.12}
   \begin{tabularx}{\linewidth}{p{4.0cm}Xp{1.9cm}}
     \toprule
     Claim & Evidence used in this draft & Status \\
@@ -1135,6 +1200,8 @@ the recording.
     \bottomrule
   \end{tabularx}
 \end{table}
+
+\clearpage
 
 \begin{thebibliography}{99}
 

@@ -215,6 +215,17 @@ __marimo__/
 # Custom Rules for Master Thesis Project
 # ------------------------------------------------
 
+# Claude Code local config and skills
+.claude/
+
+# VS Code workspace settings
+.vscode/
+
+# Thesis draft files (local writing, not for version control)
+thesis_outline.md
+thesis_outline_CN.md
+thesis_chapters/
+
 # Ignore large video files to prevent accidental upload
 *.avi
 *.mp4

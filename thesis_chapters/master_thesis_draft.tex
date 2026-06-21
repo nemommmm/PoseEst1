@@ -71,8 +71,7 @@ Position Error, which is not sufficient to decide whether a method is fit for
 ergonomic monitoring.
 This thesis revisits 3D human pose estimation for manufacturing settings by
 comparing a calibrated stereo keypoint triangulation pipeline (SKT) with a
-monocular learning-based pipeline (FastSAM3D) and a hybrid output that fuses
-FastSAM3D with Viscando processing (Merge); an Xsens inertial motion-capture
+monocular learning-based pipeline (FastSAM3D); an Xsens inertial motion-capture
 suit is used as an external reference system rather than as absolute ground
 truth, because its body-model calibration introduces systematic angle offsets
 that must be acknowledged in the evaluation design.
@@ -86,22 +85,23 @@ pairs over 248.8\,s, FastSAM3D achieves lower mean angle MAE than SKT across
 eight body angles (15.4\degr\ vs.\ 17.6\degr) and stronger K=6 motion-delta
 correlation with the Xsens-derived reference (mean Pearson 0.64 vs.\ 0.38;
 right-elbow Pearson 0.69 vs.\ 0.39).
-The Merge hybrid does not preserve short-term motion structure (mean K=6
-Pearson $\approx$0.01) despite plausible average amplitude, indicating that
-current fusion strategies degrade temporal coherence rather than improving
-it, and a dense stereo SGBM path is dropped from the main analysis because
-low-texture clothing collapses disparity around the relevant joints.
-SKT retains a clear position-space advantage because its 3D coordinates
-inherit metric scale from calibrated stereo geometry, whereas FastSAM3D
-requires external coordinate and scale alignment before position-space
-comparison becomes meaningful; SKT also exposes explicit per-frame quality
-signals (epipolar error, reprojection error, triangulation confidence) that
-support quality gating in deployment.
-These findings indicate that learning-based monocular pose models are
-competitive on angle and motion agreement for this dataset, but stereo
-geometry remains essential for absolute metric scale and for the
-geometry-aware quality control that ergonomic monitoring deployments
-require.
+This angle and motion advantage is attributed to FastSAM3D's learned
+body-shape and motion-continuity priors, which absorb anatomical constraints
+from large training corpora and consequently suppress the per-frame keypoint
+jitter that a frame-independent geometric triangulation pipeline propagates
+directly into its angle estimates.
+SKT, by contrast, retains a clear position-space advantage: its 3D coordinates
+inherit metric scale directly from the calibrated stereo baseline without any
+external alignment step, and the per-frame geometric quality signals it
+exposes~-- epipolar error, reprojection error, triangulation confidence~--
+provide deployment-ready reliability indicators that a monocular learning-based
+pipeline does not offer natively.
+These findings indicate that the two approaches are complementary rather than
+interchangeable: learned monocular pose estimation is the more competitive
+choice when angle accuracy and temporal motion smoothness are the primary
+requirements, while calibrated stereo triangulation remains essential when
+metric 3D coordinates and transparent per-frame reliability are needed for
+downstream ergonomic quality control.
 
 % =============================================================
 \newpage
@@ -149,9 +149,7 @@ The primary pose-estimation method developed in the thesis is Sparse
 Keypoint Triangulation (SKT), in which a 2D pose detector is run on
 synchronised left and right video streams and the matched keypoints are
 triangulated into 3D under the calibrated stereo geometry; the study then
-benchmarks SKT against a monocular learning-based pipeline (FastSAM3D), a
-hybrid output that fuses FastSAM3D with Viscando processing (Merge), and a
-dense stereo Semi-Global Block Matching (SGBM) alternative.
+benchmarks SKT against a monocular learning-based pipeline (FastSAM3D).
 
 A central methodological constraint is that no laboratory-grade optical
 motion-capture system was available for the full manufacturing recording, so
@@ -179,10 +177,9 @@ The thesis is structured around three research questions:
         an Xsens-derived reference?
   \item Under a unified evaluation protocol (shared timeline, common
         smoothing policy, identical reference), how does the geometry-based
-        SKT pipeline compare with the learning-based FastSAM3D pipeline and
-        the hybrid Merge output in (i) absolute angle accuracy, (ii)
-        K-frame motion consistency at $K\in\{1,6,12,25\}$ frames, and (iii)
-        reconstructed 3D position geometry?
+        SKT pipeline compare with the learning-based FastSAM3D pipeline in
+        (i) absolute angle accuracy and (ii) K-frame motion consistency at
+        $K\in\{1,6,12,25\}$ frames?
   \item Which pipeline properties beyond raw accuracy -- in particular
         per-frame quality signals, metric scale, and resilience to
         occlusion and low-texture industrial backgrounds -- decide whether
@@ -227,8 +224,8 @@ limitations.
 Section~\ref{sec:data_setup} describes the stereo capture system, the
 2025 ergonomics dataset, the Xsens reference data, and the cross-system
 time-synchronisation procedure.
-Section~\ref{sec:methods} presents the four pose-estimation paths (SKT,
-FastSAM3D, Merge, SGBM).
+Section~\ref{sec:methods} presents the two evaluated pose-estimation
+pipelines (SKT and FastSAM3D).
 Section~\ref{sec:evaluation} defines the three-axis evaluation framework and
 the unified filtering policy.
 Section~\ref{sec:results} reports the angle-space, motion-space,
@@ -376,11 +373,10 @@ The closest prior work compares an IMU suit with a single vision pipeline
 on industrial-style tasks \cite{quesada2026supporting} and concludes that
 vision is promising but that filtering and alignment must be reported
 carefully; the present thesis extends this line in three concrete ways.
-First, it benchmarks three independently produced vision pipelines
+First, it benchmarks two independently produced vision pipelines
 side-by-side on the same recording -- a calibrated sparse-stereo pipeline
-(SKT), a monocular learning-based pipeline (FastSAM3D), and a hybrid
-fusion output (Merge) -- so that the geometry-versus-learning tradeoff is
-quantified rather than asserted.
+(SKT) and a monocular learning-based pipeline (FastSAM3D) -- so that the
+geometry-versus-learning tradeoff is quantified rather than asserted.
 Second, it replaces the single-metric evaluation that dominates the
 pose-estimation literature with an explicit three-axis framework
 (angle / motion / position), and it makes the motion axis robust to
@@ -429,7 +425,7 @@ The current calibration was estimated from an asymmetric circular-dot
 target under a rational distortion model and yields a stereo baseline of
 41.27\,cm with sub-pixel reprojection residuals on the calibration images;
 the full intrinsic, distortion, and extrinsic matrices are reported in
-Appendix~A and are treated as fixed inputs for all SKT and SGBM
+Appendix~A and are treated as fixed inputs for all SKT
 experiments in this thesis.
 
 Figure~\ref{fig:calibration_evolution} documents the calibration refinement
@@ -447,7 +443,7 @@ angle estimates rather than amplified jitter.
 \begin{figure}[!htbp]
   \centering
   \includegraphics[width=\linewidth]{calibration_evolution.png}
-  \caption{Stereo calibration evolution. The current calibration balances a realistic baseline estimate with a low reprojection error, making it suitable as the fixed geometric input for SKT and SGBM.}
+  \caption{Stereo calibration evolution. The current calibration balances a realistic baseline estimate with a low reprojection error, making it suitable as the fixed geometric input for SKT.}
   \label{fig:calibration_evolution}
 \end{figure}
 
@@ -603,25 +599,19 @@ or multi-take recordings should repeat this check.
 
 \subsection{Overview}
 
-The thesis benchmarks four pose-estimation paths against the same Xsens
-reference and the same evaluation protocol, and the four paths are chosen
-so that the geometry-versus-learning axis and the sparse-versus-dense stereo
-axis can both be examined.
-SKT is the main contribution and represents calibrated sparse-stereo
-geometry; FastSAM3D represents the monocular learning-based alternative;
-Merge represents a hybrid that fuses FastSAM3D with Viscando processing;
-and SGBM represents the dense-stereo alternative to SKT's sparse
-triangulation.
+The thesis benchmarks two pose-estimation pipelines against the same Xsens
+reference and the same evaluation protocol: SKT, the primary calibrated
+sparse-stereo method developed in this thesis, and FastSAM3D, the monocular
+learning-based alternative.
 Figure~\ref{fig:pipeline_overview} shows the full experimental flow, and
-Table~\ref{tab:method_roles} summarises each path's input assumption, main
-advantage, and main risk so that the per-method subsections below can stay
-focused on the methodological detail.
+Table~\ref{tab:method_roles} summarises each pipeline's input assumption, main
+advantage, and main risk.
 
 The single design choice that matters most for interpreting the rest of the
 thesis is the deliberate separation between pose estimation and evaluation.
-All four methods are mapped onto the same shared timeline and judged with
-the same metrics, but those metrics are then split across three independent
-axes (angle, motion, position) rather than collapsed into a single ranking
+Both methods are mapped onto the same shared timeline and judged with
+the same metrics, but those metrics are then split across two independent
+axes (angle, motion) rather than collapsed into a single ranking
 score; this prevents the recurring failure mode in which a method that is
 strong in one space, for example metric stereo geometry, is implicitly
 assumed to be equally strong in temporal angle consistency.
@@ -650,14 +640,6 @@ assumed to be equally strong in temporal angle consistency.
     & Monocular pose output provided as TRC markers
     & Learned body/motion priors give stable angle and motion behaviour
     & Coordinate, scale, and keypoint semantics require careful interpretation \\
-    Merge
-    & External hybrid output combining FastSAM3D and Viscando processing
-    & Tests whether hybrid processing improves agreement
-    & Current output does not preserve strong short-term motion agreement \\
-    SGBM
-    & Dense rectified stereo image pair
-    & Uses dense image evidence rather than only sparse keypoints
-    & Low-texture body regions can collapse disparity near joints \\
     \bottomrule
   \end{tabularx}
 \end{table}
@@ -736,64 +718,6 @@ exact keypoint semantics; FastSAM3D is therefore evaluated primarily in
 the angle and motion axes, where these conventions cancel, while
 position-space results are reported only as coordinate/scale diagnostics
 rather than as direct pose-quality scores.
-
-\subsection{Merge (Viscando $\times$ FastSAM3D Hybrid)}
-
-Merge is included as a third external pipeline that asks a single
-methodological question: does fusing the FastSAM3D output with Viscando's
-internal processing improve the agreement with the Xsens reference, or
-does the fusion step degrade the per-frame motion signal even when the
-average geometry looks plausible?
-Merge is evaluated under exactly the same angle, motion, and position
-protocols as SKT and FastSAM3D so that the comparison is fair; in the
-current run, Merge does not improve the headline angle or motion-space
-metrics (its K=6 motion correlation is near zero on the elbow), so it is
-treated below as a diagnostic comparison rather than as a competing
-recommended method.
-
-\subsection{Dense Stereo SGBM (Alternative Stereo Path)}
-
-SGBM is included to test the natural counter-hypothesis to SKT's sparse
-triangulation: if SKT's main weakness is its dependence on a handful of
-2D keypoints per frame, then a dense-stereo depth estimate evaluated at
-those keypoints might in principle be more robust.
-After stereo rectification, Semi-Global Block Matching produces a dense
-disparity map across the image \cite{hirschmuller2007sgbm}, and each 2D
-keypoint's local disparity is then converted to a depth value through the
-stereo baseline and the rectified focal length, giving an alternative 3D
-joint position that does not rely on left/right keypoint matching at all.
-
-In the present recording the dense-stereo hypothesis fails for a specific
-and well-understood reason rather than for a tunable parameter choice,
-which is itself a useful negative result for the thesis.
-Semi-Global Block Matching requires local image texture to find reliable
-correspondences, but the dark workwear of the subject and the dark
-furniture in the scene create texture-poor regions exactly where the
-ergonomically relevant joints project; the disparity values therefore
-either collapse to invalid or fluctuate strongly between frames, and the
-resulting joint depths are not stable enough to support angle estimation
-at the level required by ergonomic monitoring.
-Figure~\ref{fig:ddm_diagnostics} reports the disparity fill-rate
-diagnostic and a depth comparison scatter that document this failure
-quantitatively; the dense-stereo path is therefore retained in the thesis
-as a diagnostic alternative rather than as a candidate main method, and
-this prevents the over-simplified conclusion that ``denser is better''
-for industrial pose estimation.
-
-\begin{figure}[!htbp]
-  \centering
-  \begin{subfigure}[b]{0.57\linewidth}
-    \includegraphics[width=\linewidth]{ddm_fill_rate.png}
-    \caption{Disparity fill-rate diagnostic.}
-  \end{subfigure}
-  \hfill
-  \begin{subfigure}[b]{0.38\linewidth}
-    \includegraphics[width=\linewidth]{ddm_scatter.png}
-    \caption{Dense-depth comparison scatter.}
-  \end{subfigure}
-  \caption{Dense stereo diagnostics. SGBM is informative as a depth diagnostic, but low-texture clothing and furniture make dense disparity unreliable around several body joints.}
-  \label{fig:ddm_diagnostics}
-\end{figure}
 
 \clearpage
 % =============================================================
@@ -892,7 +816,7 @@ any monocular pipeline must do before its 3D output becomes deployable.
 
 \subsection{Filtering Policy}
 
-The four evaluation tracks above are well-defined only if the per-system
+The evaluation tracks above are well-defined only if the per-system
 filtering policy is itself controlled, because temporal smoothing
 applied at different strengths to different systems can quietly inflate
 or deflate motion-space agreement without changing any reported number
@@ -957,14 +881,14 @@ instead of selecting a single ``winner'' metric.
 \subsection{Angle-space Results}
 
 In the angle-space track, the monocular learning-based FastSAM3D pipeline
-is the strongest of the three evaluated vision methods, but the margin
-over SKT is small enough that the result must be read with the Xsens
-reference-system caveat in mind rather than as a universal verdict.
+outperforms SKT, but the margin is small enough that the result must be
+read with the Xsens reference-system caveat in mind rather than as a
+universal verdict.
 Averaged across the eight evaluated joint angles, FastSAM3D reaches a mean
 MAE of 15.4\degr\ against the Xsens-derived reference, compared with
-17.6\degr\ for SKT and 24.2\degr\ for the Merge hybrid; the corresponding
-median MAEs (14.4\degr, 17.9\degr, 22.4\degr) preserve the same ranking,
-and FastSAM3D also has the highest valid-pair ratio.
+17.6\degr\ for SKT; the corresponding median MAEs (14.4\degr\ vs.\
+17.9\degr) preserve the same ranking, and FastSAM3D also has the higher
+valid-pair ratio (0.905 vs.\ 0.746).
 The Xsens-native check sits at 4.7\degr\ MAE, an order of magnitude below
 the vision methods, and is reported in the same table only as a
 reference-system internal anchor rather than as a competing pose method.
@@ -995,8 +919,7 @@ offset.
     \midrule
     SKT & 17.6 & 17.9 & 0.746 & 0.540 \\
     \good{FastSAM3D} & \good{15.4} & \good{14.4} & \good{0.905} & \good{0.553} \\
-    Merge & 24.2 & 22.4 & 0.905 & 0.440 \\
-    Xsens native check & 4.7 & 3.7 & 0.905 & 0.886 \\
+    \textit{Xsens native check} & \textit{4.7} & \textit{3.7} & \textit{0.905} & \textit{0.886} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -1033,11 +956,6 @@ At the elbow -- the joint that the motion-space track is designed to
 adjudicate -- FastSAM3D reaches Pearson correlations of 0.54 (left) and
 0.69 (right) against SKT's 0.39 / 0.39, a comparable shape-agreement gap
 on the joint that the angle-space analysis flagged as ambiguous.
-The Merge hybrid behaves qualitatively differently from both: its K=6
-Pearson is essentially zero on the elbow, even though its angle MAE
-(24.2\degr) and its average ROM amplitude in the segment analysis are not
-catastrophic, which is the symptom of a fusion pipeline that preserves
-average geometry while disrupting frame-to-frame temporal coherence.
 The Xsens-native check returns the expected $\sim$0.96 mean correlation,
 confirming that the K=6 metric can recover near-perfect agreement when
 the two compared signals genuinely measure the same motion.
@@ -1054,17 +972,15 @@ the two compared signals genuinely measure the same motion.
     \midrule
     SKT & 0.379 & 0.334 & 0.392 & 0.386 \\
     \good{FastSAM3D} & \good{0.644} & \good{0.635} & \good{0.542} & \good{0.689} \\
-    Merge & 0.006 & 0.027 & 0.016 & 0.081 \\
-    Xsens native check & 0.965 & 0.936 & 0.988 & 0.993 \\
+    \textit{Xsens native check} & \textit{0.965} & \textit{0.936} & \textit{0.988} & \textit{0.993} \\
     \bottomrule
   \end{tabular}
 \end{table}
 
 Figure~\ref{fig:motion_k6_summary_plot} visualises the K=6 correlation
 summary and makes the main finding immediately legible: FastSAM3D is
-consistently above SKT across the eight evaluated angles, while Merge sits
-near zero throughout, and the Xsens-native check provides the visual
-upper bound that anchors the scale of the plot.
+consistently above SKT across the eight evaluated angles, and the Xsens-native
+check provides the visual upper bound that anchors the scale of the plot.
 The per-elbow scatter plots in Figure~\ref{fig:k6_elbow_scatter} then make
 the same comparison at the frame level rather than the summary level:
 FastSAM3D's scatter clusters along the ideal diagonal with limited vertical
@@ -1077,7 +993,7 @@ constant noise floor.
 \begin{figure}[!htbp]
   \centering
   \includegraphics[width=0.92\linewidth]{thesis_motion_k6_summary.png}
-  \caption{K=6 motion-delta correlation summary. FastSAM3D shows stronger short-term motion agreement than SKT on the current dataset, whereas Merge does not preserve the same motion pattern.}
+  \caption{K=6 motion-delta correlation summary. FastSAM3D shows stronger short-term motion agreement than SKT on the current dataset.}
   \label{fig:motion_k6_summary_plot}
 \end{figure}
 
@@ -1145,19 +1061,11 @@ quantity most directly comparable to a ``movement size'' an ergonomist
 would estimate manually, and per-segment normalised DTW distance, which
 quantifies how similar the shape of motion through each segment is once
 amplitude and offset are removed.
-Aggregated over the detected active segments (39 for SKT, 45 for the
-external methods), FastSAM3D has both the lowest mean ROM error (14.9\degr)
-and the lowest mean DTW distance (0.0355), compared with SKT (26.9\degr;
-0.0435), Merge (30.0\degr; 0.0772), and the Xsens-native check
-(4.8\degr; 0.0062).
-Two patterns are worth highlighting before the cross-method synthesis.
-First, Merge's high DTW distance reinforces its low K=6 Pearson: the
-fusion process disrupts shape-of-motion agreement more strongly than it
-disrupts mean amplitude, so a method that looks acceptable in segment
-ROM alone (30.0\degr is comparable to SKT's 26.9\degr) is in fact further
-from the reference in shape than the table's first column suggests.
-Second, the Xsens-native DTW distance ($\sim$6$\times 10^{-3}$) sets the
-lower bound that the normalised DTW metric can reach on this dataset, so
+Aggregated over the detected active segments (39 for SKT, 45 for
+FastSAM3D), FastSAM3D has both the lower mean ROM error (14.9\degr\ vs.\
+26.9\degr\ for SKT) and the lower mean DTW distance (0.0355 vs.\ 0.0435).
+The Xsens-native DTW distance ($\sim$6$\times 10^{-3}$) sets the lower
+bound that the normalised DTW metric can reach on this dataset, so
 FastSAM3D's $\sim$3.5$\times 10^{-2}$ is approximately six times the
 reference floor, which is the right order of magnitude to claim
 ``competitive'' rather than ``saturated''.
@@ -1172,8 +1080,7 @@ reference floor, which is the right order of magnitude to claim
     \midrule
     SKT & 39 & 26.9 & 0.0435 \\
     \good{FastSAM3D} & 45 & \good{14.9} & \good{0.0355} \\
-    Merge & 45 & 30.0 & 0.0772 \\
-    Xsens native check & 45 & 4.8 & 0.0062 \\
+    \textit{Xsens native check} & \textit{45} & \textit{4.8} & \textit{0.0062} \\
     \bottomrule
   \end{tabular}
 \end{table}
@@ -1246,65 +1153,43 @@ than leaves implicit.
 
 \subsection{Cross-method Synthesis}
 
-Reading the four tracks together produces a more nuanced verdict than any
-of them gives on its own, and this is the central reason the thesis
-chose a three-axis evaluation rather than a single-metric ranking.
+Reading the two evaluation tracks together produces a more complete picture
+than either gives on its own.
 Table~\ref{tab:cross_method_synthesis} consolidates the headline numbers
-for the three vision methods (with the Xsens-native check shown alongside
-as a reference-system floor).
-The pattern that emerges is consistent across all four tracks but does
-not produce a single winner.
-FastSAM3D leads the angle-space (lower MAE) and motion-space (higher
-correlation) tracks and also the segment-level shape and ROM tracks,
-which together indicate that learned body and motion priors do suppress
-the per-frame and per-segment jitter that hurts a frame-independent
+for SKT and FastSAM3D (with the Xsens-native check shown alongside as a
+reference-system floor).
+FastSAM3D leads on the angle-space (lower MAE) and motion-space (higher
+correlation) tracks, which together indicate that learned body and motion
+priors suppress the per-frame jitter that hurts a frame-independent
 sparse stereo reconstruction on this dataset.
-SKT lags FastSAM3D on angle and motion but retains the position-space
-track outright, because its 3D coordinates carry metric scale by
-construction and because the per-frame geometric quality signals it
-exposes (epipolar error, reprojection error, triangulation confidence)
-are exactly the signals that downstream ergonomic quality gating
-requires.
+SKT lags FastSAM3D on angle and motion but its 3D coordinates carry metric
+scale by construction, and the per-frame geometric quality signals it exposes
+(epipolar error, reprojection error, triangulation confidence) are exactly
+the signals that downstream ergonomic quality gating requires.
 
 \begin{table}[!htbp]
   \centering
-  \caption{Cross-method headline synthesis. Values consolidate the four evaluation tracks. Best vision-method value per column is highlighted; the Xsens-native row is a reference-system internal check, not a competing method.}
+  \caption{SKT vs FastSAM3D headline synthesis across evaluation tracks. Best value per column is highlighted; the Xsens-native row is a reference-system internal check, not a competing method.}
   \label{tab:cross_method_synthesis}
-  \footnotesize
-  \setlength{\tabcolsep}{3pt}
-  \resizebox{\linewidth}{!}{%
-  \begin{tabular}{lcccccl}
+  \small
+  \begin{tabular}{lccccl}
     \toprule
-    Method & Angle MAE & RULA bin & Motion $r$ & Segment ROM & Segment DTW & Metric scale \\
-           & (\degr) $\downarrow$ & agree.\ $\uparrow$ & K=6 $\uparrow$ & err.\ (\degr) $\downarrow$ & dist.\ $\downarrow$ & \\
+    Method & Angle MAE (\degr) $\downarrow$ & RULA bin agree.\ $\uparrow$ & Motion $r$ K=6 $\uparrow$ & Segment ROM (\degr) $\downarrow$ & Metric scale \\
     \midrule
     SKT
-    & 17.6 & 0.540 & 0.379 & 26.9 & 0.0435 & \good{Calibrated} \\
+    & 17.6 & 0.540 & 0.379 & 26.9 & \good{Calibrated} \\
     \good{FastSAM3D}
-    & \good{15.4} & \good{0.553} & \good{0.644} & \good{14.9} & \good{0.0355} & Needs alignment \\
-    Merge
-    & 24.2 & 0.440 & 0.006 & 30.0 & 0.0772 & Needs alignment \\
-    Xsens native (ref.)
-    & \textit{4.7} & \textit{0.886} & \textit{0.965} & \textit{4.8} & \textit{0.0062} & --- \\
+    & \good{15.4} & \good{0.553} & \good{0.644} & \good{14.9} & Needs alignment \\
+    \textit{Xsens native (ref.)}
+    & \textit{4.7} & \textit{0.886} & \textit{0.965} & \textit{4.8} & \textit{---} \\
     \bottomrule
-  \end{tabular}%
-  }
+  \end{tabular}
 \end{table}
 
-The two remaining methods support, rather than contradict, this verdict.
-Merge fails on every track except segment count, demonstrating that
-straightforward fusion of FastSAM3D with Viscando processing does not
-recover the headline numbers on this recording and in fact actively
-degrades short-term motion agreement.
-SGBM (not in the table because its evaluation is qualitative on this
-recording, see Section~\ref{sec:methods}) confirms that dense disparity
-is not automatically better than sparse triangulation when the relevant
-body regions lack reliable image texture.
-The overall pattern is therefore: \emph{the learning-based monocular
-pipeline wins the agreement tracks; the calibrated stereo pipeline wins
-the deployment-geometry track; and neither replaces the other.}
-This split, rather than a clean single-method recommendation, is the
-substantive result of the cross-method synthesis and is what
+The overall pattern is: \emph{the learning-based monocular pipeline wins
+the angle and motion agreement tracks; the calibrated stereo pipeline
+retains the deployment-geometry advantage; and neither replaces the other.}
+This split is the substantive result of the synthesis and is what
 Section~\ref{sec:discussion} examines in operational terms.
 
 \clearpage
@@ -1489,14 +1374,10 @@ ergonomic monitoring using a three-axis framework -- angle-space,
 motion-space, and position-space -- against an Xsens reference whose
 calibration limitation is explicitly quantified rather than ignored.
 On the single-subject manufacturing recording used here, the
-learning-based monocular FastSAM3D pipeline delivers the better
+learning-based monocular FastSAM3D pipeline delivers better
 agreement-track numbers (mean angle MAE 15.4\degr\ vs.\ 17.6\degr; mean
 K=6 motion Pearson 0.64 vs.\ 0.38; segment ROM error 14.9\degr\ vs.\
-26.9\degr) than the calibrated stereo SKT pipeline; the hybrid Merge
-output fails to recover this advantage and in fact disrupts short-term
-motion coherence, and the dense-stereo SGBM alternative is dropped from
-the main analysis because dark workwear collapses disparity around the
-relevant joints.
+26.9\degr) than the calibrated stereo SKT pipeline.
 SKT nevertheless retains the only metric-scale 3D output among the
 evaluated pipelines and is the only pipeline that exposes per-frame
 geometric quality signals usable for downstream quality gating, so it
@@ -1616,7 +1497,7 @@ output should not be trusted.
 \label{app:calibration}
 
 The numerical calibration values reported below are the optimised parameters
-that all SKT and SGBM experiments in the thesis use as fixed input; the
+that all SKT experiments in the thesis use as fixed input; the
 binary form is stored at \texttt{shared/camera\_params.npz} and is loaded
 directly by the pose pipeline.
 The intrinsic matrices follow the OpenCV convention $K = [[f_x, 0, c_x];
@@ -1809,11 +1690,8 @@ Section~\ref{sec:conclusion} is restricted to the claims marked
     SKT high-delta points are caused by local keypoint-chain instability.
     & Figure~\ref{fig:skt_high_delta_cases}: diagnostic frames show partial wrist occlusion, large camera distance, and inconsistent left/right elbow-chain detection during the high-delta intervals.
     & Supported qualitatively \\
-    Merge does not preserve short-term motion structure.
-    & Table~\ref{tab:motion_summary} and Table~\ref{tab:cross_method_synthesis}: mean K=6 Pearson $\approx$0.006 despite plausible mean ROM amplitude.
-    & Supported \\
-    The cross-method ranking is robust to smoothing and segmentation parameters.
-    & Appendix~\ref{app:sensitivity}: sensitivity tables across smoothing windows and activity thresholds preserve the FastSAM3D $>$ SKT $>$ Merge ranking.
+    The SKT vs FastSAM3D ranking is robust to smoothing and segmentation parameters.
+    & Appendix~\ref{app:sensitivity}: sensitivity tables across smoothing windows and activity thresholds preserve the FastSAM3D $>$ SKT ranking.
     & Supported \\
     Results generalise to manufacturing environments broadly.
     & Only one controlled single-subject dataset is evaluated.

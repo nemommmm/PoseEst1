@@ -237,6 +237,7 @@ thesis_chapters/
 # Ignore confidential data folders
 2025_Ergonomics_Data/
 Calibration_video/
+2026_Assar_Data/
 
 # Partner/proprietary motion-capture and pose data
 *.mvnx

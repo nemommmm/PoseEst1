@@ -119,13 +119,14 @@ def score_offset(
         if position_rmse is not None:
             position_score = -position_rmse
 
+    # Use median across joints so one bad joint can't dominate the aggregate score.
     return {
         "offset_s": float(offset_s),
         "position_score": position_score,
         "position_rmse_cm": position_rmse,
-        "angle_score": float(np.mean(angle_scores)) if angle_scores else None,
-        "angle_rmse_deg": float(np.mean(angle_errors)) if angle_errors else None,
-        "motion_delta_score": float(np.mean(motion_scores)) if motion_scores else None,
+        "angle_score": float(np.median(angle_scores)) if angle_scores else None,
+        "angle_rmse_deg": float(np.median(angle_errors)) if angle_errors else None,
+        "motion_delta_score": float(np.median(motion_scores)) if motion_scores else None,
         "angle_pair_count": int(len(angle_scores)),
         "motion_pair_count": int(len(motion_scores)),
     }
@@ -182,6 +183,19 @@ def plot_scores(rows: list[dict], out_path: Path) -> None:
     plt.close(fig)
 
 
+def _peak_significance(rows: list[dict], key: str, best_row: dict | None) -> float | None:
+    """Return (peak - median) / std across all finite values of key; None if insufficient data."""
+    if best_row is None:
+        return None
+    values = np.asarray([row[key] for row in rows if row.get(key) is not None and np.isfinite(row[key])], dtype=np.float64)
+    if len(values) < 5:
+        return None
+    std = float(np.std(values))
+    if std == 0.0:
+        return None
+    return float((float(best_row[key]) - float(np.median(values))) / std)
+
+
 def estimate_offset(config: dict, run_dir: Path) -> Path:
     """Estimate and save temporal offset summary."""
     _, skt_keypoints, _ = load_skt_keypoints(config, run_dir)
@@ -202,16 +216,42 @@ def estimate_offset(config: dict, run_dir: Path) -> Path:
 
     mvnx_path = resolve_path(refs.get("xsens_mvnx"), must_exist=False)
     xsens_sampler = build_xsens_keypoint_interpolator(mvnx_path) if mvnx_path and mvnx_path.exists() else None
-    search_range = offset_cfg.get("search_range_seconds", [0.0, 30.0])
-    coarse_offsets = candidate_offsets(float(search_range[0]), float(search_range[1]), float(offset_cfg.get("coarse_step_seconds", 0.1)))
-    motion_k = int(offset_cfg.get("motion_k_frames", 6))
+
+    search_range = offset_cfg.get("search_range_seconds", [-60.0, 60.0])
+    coarse_step = float(offset_cfg.get("coarse_step_seconds", 0.1))
+    coarse_offsets = candidate_offsets(float(search_range[0]), float(search_range[1]), coarse_step)
+
+    # Convert time-based K to frame count using actual video fps.
+    if len(video_time) > 1:
+        fps = 1.0 / float(np.median(np.diff(video_time)))
+    else:
+        fps = 25.0
+    motion_k_s = float(offset_cfg.get("motion_k_seconds", 0.5))
+    motion_k = max(1, round(motion_k_s * fps))
+    print(f"[offset] fps={fps:.2f}, motion_k={motion_k} frames ({motion_k_s:.2f}s)")
 
     coarse_rows = run_search(coarse_offsets, video_time, skt_keypoints, skt_angles, fair_interps, xsens_sampler, angle_names, motion_k)
     coarse_best = best_by(coarse_rows, "motion_delta_score") or best_by(coarse_rows, "angle_score") or best_by(coarse_rows, "position_score")
-    center = float(coarse_best["offset_s"]) if coarse_best else float(offset_cfg.get("initial_reference_seconds") or 0.0)
+    if coarse_best is None:
+        raise RuntimeError(
+            "Offset coarse search failed: no finite score from any method across the entire search range. "
+            "Check that the Xsens recording overlaps with the video and that xsens_fair_angles / xsens_mvnx paths are correct."
+        )
+    center = float(coarse_best["offset_s"])
+
     fine_window = float(offset_cfg.get("fine_window_seconds", 0.5))
-    fine_start = max(float(search_range[0]), center - fine_window)
-    fine_end = min(float(search_range[1]), center + fine_window)
+    # Clamp fine window to search range but do NOT shrink it if peak is near the boundary —
+    # instead warn and let the result stand rather than silently truncating.
+    fine_start = center - fine_window
+    fine_end = center + fine_window
+    if fine_start < float(search_range[0]) or fine_end > float(search_range[1]):
+        print(
+            f"[offset] WARNING: coarse peak at {center:.2f}s is within {fine_window}s of search boundary "
+            f"[{search_range[0]}, {search_range[1]}]. Fine window clamped; consider widening search_range_seconds."
+        )
+        fine_start = max(fine_start, float(search_range[0]))
+        fine_end = min(fine_end, float(search_range[1]))
+
     fine_offsets = candidate_offsets(fine_start, fine_end, float(offset_cfg.get("fine_step_seconds", 0.01)))
     fine_rows = run_search(fine_offsets, video_time, skt_keypoints, skt_angles, fair_interps, xsens_sampler, angle_names, motion_k)
 
@@ -228,7 +268,16 @@ def estimate_offset(config: dict, run_dir: Path) -> Path:
             selected_source = item
             break
     if selected is None:
-        raise RuntimeError("Offset search failed: no finite score from any method.")
+        raise RuntimeError("Offset fine search failed: no finite score from any method.")
+
+    # Warn when the peak is not clearly distinguished from the background noise.
+    sig = _peak_significance(fine_rows, "motion_delta_score", best_motion)
+    if sig is not None and sig < 3.0:
+        print(
+            f"[offset] WARNING: motion_delta peak significance={sig:.1f}σ (< 3σ). "
+            "The estimated offset may be unreliable — the score curve has a weak or flat peak. "
+            "Check offset_search_scores.png for the shape."
+        )
 
     rows = coarse_rows + [dict(row, phase="fine") for row in fine_rows]
     for row in coarse_rows:
@@ -251,7 +300,10 @@ def estimate_offset(config: dict, run_dir: Path) -> Path:
         "search_range_seconds": search_range,
         "coarse_step_seconds": float(offset_cfg.get("coarse_step_seconds", 0.1)),
         "fine_step_seconds": float(offset_cfg.get("fine_step_seconds", 0.01)),
-        "initial_reference_seconds": offset_cfg.get("initial_reference_seconds"),
+        "motion_k_seconds": motion_k_s,
+        "motion_k_frames": motion_k,
+        "video_fps": round(fps, 4),
+        "peak_significance_sigma": sig,
         "best_rows": {
             "position": best_position,
             "angle": best_angle,

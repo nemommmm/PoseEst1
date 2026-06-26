@@ -1,0 +1,85 @@
+dataset:
+  name: current_2025_ergonomics
+  description: Current 2025 ergonomics stereo-video dataset.
+  left_video: 2025_Ergonomics_Data/0_video_left.avi
+  right_video: 2025_Ergonomics_Data/1_video_right.avi
+  left_metadata: 2025_Ergonomics_Data/0_video_left.txt
+  right_metadata: 2025_Ergonomics_Data/1_video_right.txt
+  rotate_180: true
+  sync_by: hardware_frame_id
+  timestamp_format: seconds_microseconds_columns
+
+calibration:
+  camera_params: shared/camera_params_2025.npz
+
+skt:
+  use_existing_npz: true
+  existing_npz: 01_stereo_triangulation/results/historical_best_20260324/recovered_baseline/optimized_pose.npz
+  output_npz: skt_pose_optimized.npz
+  model_path: 01_stereo_triangulation/src/yolov8m-pose.pt
+  confidence_threshold: 0.35
+  min_pair_confidence: 0.25
+  max_reprojection_px: 80.0
+  max_frames:
+
+references:
+  xsens_mvnx: ../Xsens_ground_truth/Aitor-001.mvnx
+  xsens_fair_angles: shared/fair_gt_angles.npz
+  fastsam_trc: ../10 Aitor/fastsam3d_2.trc
+  merge_trc: ../10 Aitor/merged_output_2.trc
+  include_xsens_native: true
+
+offset:
+  search_range_seconds: [0.0, 30.0]    # known range for this dataset; expand if offset ever falls outside
+  coarse_step_seconds: 0.10
+  fine_window_seconds: 0.50
+  fine_step_seconds: 0.01
+  selection_priority: [motion_delta, angle, position]
+  motion_k_seconds: 0.5               # ~6 frames at 12.5 fps; time-based so it survives fps changes
+  min_pairs: 80
+
+evaluation:
+  angle_names: [LeftShoulder, RightShoulder, LeftElbow, RightElbow, LeftHip, RightHip, LeftKnee, RightKnee]
+  k_frame_list: [1, 6, 12, 25]
+  camera_smooth_window_ms: 200.0
+  xsens_extra_smoothing: false
+  skt_quality_filter:
+    enabled: true
+    min_triang_conf: 0.20
+    max_epipolar_px: 10.0
+    max_reprojection_px: 10.0
+    joint_indices: [5, 6, 7, 8, 9, 10]
+  max_gap_frames: 5
+  anomaly_delta_deg: 30.0
+  active_delta_threshold_deg: 1.0
+  noise_floor_threshold_deg: 0.5
+  rula_bins:
+    LeftElbow: [60, 100]
+    RightElbow: [60, 100]
+    LeftShoulder: [20, 45, 90]
+    RightShoulder: [20, 45, 90]
+
+segment:
+  activity_lag_frames: 12
+  activity_threshold_deg: 10.0
+  min_duration_s: 1.5
+  min_reference_rom_deg: 15.0
+  merge_gap_s: 2.0
+  min_valid_ratio: 0.5
+  dtw_preprocess: mean_l2
+
+scatter:
+  k: 6
+  targets: [SKT, FastSAM3D, Merge, XsensNative]
+  active_threshold_deg:
+
+video:
+  enabled: false
+  start_time_s: 100.0
+  end_time_s: 160.0
+  fps: 12.5
+  compare_systems: [SKT, FastSAM3D]
+
+outputs:
+  runs_dir: 00_pose_pipeline_v2/runs
+  run_tag: current_2025_ergonomics

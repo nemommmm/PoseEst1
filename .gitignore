@@ -264,6 +264,7 @@ Calibration_video/
 03_FastSAM3D/data/easyergo_uploaded/
 shared/recovered_methods/
 00_pose_pipeline/runs/
+00_pose_pipeline_v2/runs/
 
 # macOS / generated artifacts
 .DS_Store

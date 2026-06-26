@@ -10,6 +10,7 @@ from __future__ import annotations
 import csv
 import json
 import math
+import shutil
 import sys
 import time
 from dataclasses import dataclass
@@ -65,8 +66,13 @@ class YoloDetector:
         from ultralytics import YOLO
 
         resolved = resolve_path(model_ref, must_exist=False)
-        model_arg = str(resolved) if resolved is not None and resolved.exists() else model_ref
+        model_arg = str(resolved) if resolved is not None and resolved.exists() else Path(model_ref).name
         self.model = YOLO(model_arg)
+        if resolved is not None and not resolved.exists():
+            downloaded = Path.cwd() / Path(model_ref).name
+            if downloaded.exists() and downloaded.resolve() != resolved.resolve():
+                resolved.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(downloaded), str(resolved))
         self.conf_threshold = float(conf_threshold)
         self.center_weight = float(center_weight)
         self.image_width = int(image_width)
@@ -279,9 +285,13 @@ def compare_2d_models(config: dict, run_dir: Path) -> Path:
     time_s, synced, _, _ = build_synced_timeline(left_meta, right_meta, dataset.get("timestamp_format", "seconds_microseconds_columns"))
     frame_stride = max(1, int(diag_cfg.get("frame_stride", 2)))
     max_frames = diag_cfg.get("max_frames", 160)
-    frames = list(range(0, len(synced), frame_stride))
-    if max_frames:
-        frames = frames[: int(max_frames)]
+    all_frames = list(range(0, len(synced), frame_stride))
+    if max_frames and len(all_frames) > int(max_frames):
+        sample_idx = np.linspace(0, len(all_frames) - 1, int(max_frames))
+        frames = [all_frames[int(round(idx))] for idx in sample_idx]
+    else:
+        frames = all_frames
+    frames = sorted(set(frames))
 
     reader = StereoFrameReader(left_video, right_video, synced, rotate_180=bool(dataset.get("rotate_180", False)))
     ok, first_l, _ = reader.read_synced(frames[0])

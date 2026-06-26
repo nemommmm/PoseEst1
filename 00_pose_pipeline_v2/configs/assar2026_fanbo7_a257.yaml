@@ -81,6 +81,31 @@ model_diagnostic:
       confidence_threshold: 0.35
       valid_conf_threshold: 0.25
       center_person_weight: 5.0
+    - name: YOLO11s-pose
+      kind: yolo
+      model: 00_pose_pipeline_v2/model_weights/yolo11s-pose.pt
+      confidence_threshold: 0.35
+      valid_conf_threshold: 0.25
+      center_person_weight: 5.0
+    - name: YOLO11m-pose
+      kind: yolo
+      model: 00_pose_pipeline_v2/model_weights/yolo11m-pose.pt
+      confidence_threshold: 0.35
+      valid_conf_threshold: 0.25
+      center_person_weight: 5.0
+    - name: YOLO11l-pose
+      kind: yolo
+      model: 00_pose_pipeline_v2/model_weights/yolo11l-pose.pt
+      confidence_threshold: 0.35
+      valid_conf_threshold: 0.25
+      center_person_weight: 5.0
+    - name: YOLO11x-pose
+      kind: yolo
+      model: 00_pose_pipeline_v2/model_weights/yolo11x-pose.pt
+      enabled: false
+      confidence_threshold: 0.35
+      valid_conf_threshold: 0.25
+      center_person_weight: 5.0
     - name: RTMPose-balanced
       kind: rtmpose
       mode: balanced

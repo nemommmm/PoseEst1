@@ -250,6 +250,7 @@ Calibration_video/
 # Binary arrays generated from partner data or pose pipelines
 *.npz
 *.npy
+*.pt
 
 # Exceptions: calibration params and search logs must be tracked for reproducibility.
 # Only the final named files are tracked; *_candidate.npz (intermediate drafts) are excluded.

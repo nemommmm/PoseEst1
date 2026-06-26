@@ -36,6 +36,8 @@ Run the Fanbo7 right-elbow baseline and FastSAM3D-referenced evaluation:
 | `offset` | Automatically estimate the temporal offset between the video timeline and Xsens timeline. |
 | `angle` | Run traditional angle evaluation with MAE, bias, and RULA-like agreement. |
 | `fasteval` | Evaluate selected systems against FastSAM3D as the right-elbow reference. |
+| `modeldiag` | Compare 2D pose detectors on sampled stereo frames without replacing SKT. |
+| `filter_ablation` | Compare filter, angle-postprocess, keypoint smoothing, and right-arm bone-constraint variants. |
 | `motion` | Run K-frame motion-delta evaluation with motion agreement, high-delta counts, and path ratios. |
 | `segment` | Run activity-segment ROM, DTW, and RULA-like agreement analysis. |
 | `scatter` | Generate K-frame delta scatter plots. |
@@ -49,3 +51,5 @@ Run the Fanbo7 right-elbow baseline and FastSAM3D-referenced evaluation:
 - `docs/dataset_parameters.md`: checklist of dataset-specific parameters to verify before running a new dataset.
 - `runs/<dataset>/alignment_summary.json`: automatic time-offset search output.
 - `runs/<dataset>/eval_vs_fastsam/summary.json`: FastSAM3D-referenced SKT comparison summary.
+- `runs/<dataset>/model_diagnostic/summary.json`: Stage 1 2D detector consistency diagnostic.
+- `runs/<dataset>/filter_ablation/summary.json`: Stage 2-4 lightweight postprocess ablation.

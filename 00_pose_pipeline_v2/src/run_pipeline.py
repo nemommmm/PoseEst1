@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     parser.add_argument("--stages", default="validate,offset,angle,motion",
-                        help="Comma-separated stages: validate,skt,offset,angle,fasteval,motion,segment,scatter,video or all.")
+                        help="Comma-separated stages: validate,skt,offset,angle,fasteval,modeldiag,filter_ablation,motion,segment,scatter,video or all.")
     return parser.parse_args()
 
 
@@ -30,7 +30,7 @@ def parse_stages(raw: str) -> list[str]:
     """Parse stage list."""
     stages = [item.strip().lower() for item in raw.split(",") if item.strip()]
     if "all" in stages:
-        return ["validate", "skt", "offset", "angle", "fasteval", "motion", "segment", "scatter", "video"]
+        return ["validate", "skt", "offset", "angle", "fasteval", "modeldiag", "filter_ablation", "motion", "segment", "scatter", "video"]
     return stages
 
 
@@ -80,6 +80,14 @@ def main() -> None:
             from eval_vs_fastsam import evaluate_vs_fastsam
 
             evaluate_vs_fastsam(config, run_dir)
+        elif stage in {"modeldiag", "compare_2d_models"}:
+            from compare_2d_models import compare_2d_models
+
+            compare_2d_models(config, run_dir)
+        elif stage in {"filter_ablation", "filterdiag"}:
+            from eval_filter_ablation import evaluate_filter_ablation
+
+            evaluate_filter_ablation(config, run_dir)
         elif stage == "motion":
             from eval_motion_delta import evaluate_motion_delta
 

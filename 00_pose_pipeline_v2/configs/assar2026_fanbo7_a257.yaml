@@ -63,6 +63,37 @@ evaluation:
   rula_bins:
     RightElbow: [60, 100]
 
+model_diagnostic:
+  frame_stride: 4
+  max_frames: 40
+  jump_threshold_deg: 10.0
+  jump_context_radius: 2
+  candidates:
+    - name: YOLOv8m-current
+      kind: yolo
+      model: 01_stereo_triangulation/src/yolov8m-pose.pt
+      confidence_threshold: 0.35
+      valid_conf_threshold: 0.25
+      center_person_weight: 5.0
+    - name: YOLO11n-pose
+      kind: yolo
+      model: 00_pose_pipeline_v2/model_weights/yolo11n-pose.pt
+      confidence_threshold: 0.35
+      valid_conf_threshold: 0.25
+      center_person_weight: 5.0
+    - name: RTMPose-balanced
+      kind: rtmpose
+      mode: balanced
+      device: cpu
+      min_detection_conf: 0.20
+      valid_conf_threshold: 0.25
+    - name: Sapiens-pose-placeholder
+      kind: sapiens
+      enabled: false
+
+filter_ablation:
+  jump_threshold_deg: 10.0
+
 segment:
   activity_lag_frames: 12
   activity_threshold_deg: 10.0

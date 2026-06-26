@@ -27,6 +27,16 @@ Run the Fanbo7 right-elbow baseline and FastSAM3D-referenced evaluation:
   --stages validate,offset,angle,fasteval
 ```
 
+Export the current best YOLO11l full-replacement candidate for review:
+
+```bash
+/opt/anaconda3/envs/pose/bin/python 00_pose_pipeline_v2/src/export_candidate_timeseries.py \
+  --config 00_pose_pipeline_v2/configs/assar2026_fanbo7_a257.yaml \
+  --run-dir 00_pose_pipeline_v2/runs/assar2026_fanbo7_a257_yolo11l_full_skt \
+  --variant-name hard_filter_keypoint_savgol \
+  --candidate-label YOLO11l_SKT_keypoint_savgol
+```
+
 ## Pipeline Stages
 
 | Stage | Purpose |
@@ -43,6 +53,11 @@ Run the Fanbo7 right-elbow baseline and FastSAM3D-referenced evaluation:
 | `scatter` | Generate K-frame delta scatter plots. |
 | `video` | Generate raw-video plus skeleton comparison videos. |
 
+`export_candidate_timeseries.py` is a standalone review helper rather than a
+pipeline stage. It is intended for finalized candidate runs where the SKT NPZ
+already exists and only the selected postprocess variant needs to be exported as
+a figure and summary.
+
 ## Important Files
 
 - `configs/current_2025_ergonomics.yaml`: reproducible configuration for the current dataset.
@@ -53,3 +68,4 @@ Run the Fanbo7 right-elbow baseline and FastSAM3D-referenced evaluation:
 - `runs/<dataset>/eval_vs_fastsam/summary.json`: FastSAM3D-referenced SKT comparison summary.
 - `runs/<dataset>/model_diagnostic/summary.json`: Stage 1 2D detector consistency diagnostic.
 - `runs/<dataset>/filter_ablation/summary.json`: Stage 2-4 lightweight postprocess ablation.
+- `runs/<dataset>/candidate_eval/`: exported angle trace and summary for the selected candidate model/postprocess combination.

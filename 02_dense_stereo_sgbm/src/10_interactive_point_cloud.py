@@ -36,7 +36,7 @@ from pose_angle_utils import compute_semantic_joint_angles, build_fair_gt_interp
 
 DATA_DIR = PROJECT_ROOT / "2025_Ergonomics_Data"
 RESULTS_DIR = METHOD_DIR / "results"
-PARAM_PATH = SHARED_DIR / "camera_params.npz"
+PARAM_PATH = SHARED_DIR / "camera_params_2025.npz"
 DEFAULT_REF_NPZ = PROJECT_ROOT / "01_stereo_triangulation" / "results" / "yolo_3d_raw.npz"
 DEFAULT_SUMMARY = RESULTS_DIR / "point_cloud_summary_audit.json"
 GT_COMPARISON_JSON = PROJECT_ROOT / "01_stereo_triangulation" / "results" / "skeleton_comparison_dirA.json"

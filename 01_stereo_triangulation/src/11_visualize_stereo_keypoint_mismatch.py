@@ -33,7 +33,7 @@ DEFAULT_RESULTS_DIR = os.path.join(_METHOD_DIR, "results")
 RESULTS_DIR = os.environ.get("POSE_RESULTS_DIR", DEFAULT_RESULTS_DIR)
 if not os.path.isabs(RESULTS_DIR):
     RESULTS_DIR = os.path.join(_METHOD_DIR, RESULTS_DIR)
-PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params.npz")
+PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params_2025.npz")
 RESULT_PATH = os.environ.get(
     "POSE_INPUT_PATH",
     os.path.join(DEFAULT_RESULTS_DIR, os.environ.get("POSE_INPUT_FILENAME", "yolo_3d_optimized.npz")),

@@ -33,7 +33,7 @@ SHARED_DIR = PROJECT_ROOT / "shared"
 if str(SHARED_DIR) not in sys.path:
     sys.path.insert(0, str(SHARED_DIR))
 
-DEFAULT_CAMERA_PARAMS = SHARED_DIR / "camera_params.npz"
+DEFAULT_CAMERA_PARAMS = SHARED_DIR / "camera_params_2025.npz"
 DEFAULT_LEFT_VIDEO = PROJECT_ROOT / "2025_Ergonomics_Data" / "0_video_left.avi"
 DEFAULT_RIGHT_VIDEO = PROJECT_ROOT / "2025_Ergonomics_Data" / "1_video_right.avi"
 DEFAULT_LEFT_META = PROJECT_ROOT / "2025_Ergonomics_Data" / "0_video_left.txt"

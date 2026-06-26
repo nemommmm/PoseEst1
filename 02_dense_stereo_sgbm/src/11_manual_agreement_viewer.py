@@ -44,7 +44,7 @@ from pose_angle_utils import compute_semantic_joint_angles, build_fair_gt_interp
 # ---------------------------------------------------------------------------
 
 DATA_DIR = PROJECT_ROOT / "2025_Ergonomics_Data"
-PARAM_PATH = SHARED_DIR / "camera_params.npz"
+PARAM_PATH = SHARED_DIR / "camera_params_2025.npz"
 MVNX_PATH = PROJECT_ROOT.parent / "Xsens_ground_truth" / "Aitor-001.mvnx"
 GT_JSON_PATH = (
     PROJECT_ROOT / "01_stereo_triangulation" / "results" / "skeleton_comparison_dirA.json"

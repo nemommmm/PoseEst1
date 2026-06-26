@@ -1,20 +1,20 @@
 dataset:
-  name: current_2025_ergonomics
-  description: Current 2025 ergonomics stereo-video dataset.
-  left_video: 2025_Ergonomics_Data/0_video_left.avi
-  right_video: 2025_Ergonomics_Data/1_video_right.avi
-  left_metadata: 2025_Ergonomics_Data/0_video_left.txt
-  right_metadata: 2025_Ergonomics_Data/1_video_right.txt
+  name: assar2026_fanbo1_a255
+  description: 2026 Assar dataset, Fanbo1 walking forward, A255 stereo camera.
+  left_video: 2026_Assar_Data/A255/Video/cap_0_0.avi
+  right_video: 2026_Assar_Data/A255/Video/cap_0_1.avi
+  left_metadata: 2026_Assar_Data/A255/Video/cap_0_0.txt
+  right_metadata: 2026_Assar_Data/A255/Video/cap_0_1.txt
   rotate_180: true
   sync_by: hardware_frame_id
   timestamp_format: seconds_microseconds_columns
 
 calibration:
-  camera_params: shared/camera_params_2025.npz
+  camera_params: shared/camera_params_A255.npz
 
 skt:
   use_existing_npz: true
-  existing_npz: 01_stereo_triangulation/results/historical_best_20260324/recovered_baseline/optimized_pose.npz
+  existing_npz: 00_pose_pipeline/runs/2026_assar_skt_reconstruction_new_calib/A255_cap00/skt_pose_optimized.npz
   output_npz: skt_pose_optimized.npz
   model_path: 01_stereo_triangulation/src/yolov8m-pose.pt
   confidence_threshold: 0.35
@@ -23,20 +23,25 @@ skt:
   max_frames:
 
 references:
-  xsens_mvnx: ../Xsens_ground_truth/Aitor-001.mvnx
-  xsens_fair_angles: shared/fair_gt_angles.npz
-  fastsam_trc: ../10 Aitor/fastsam3d_2.trc
-  merge_trc: ../10 Aitor/merged_output_2.trc
+  xsens_mvnx: 2026_Assar_Data/Xsens MVNX/Fanbo-001.mvnx
+  xsens_fair_angles:
+  fastsam_trc: 2026_Assar_Data/TRC FastSAM3D/markers_Fanbo1_2026-06-16 15-18-30_ff1bf8dc772c4dc68518080f7cf4bc5d.trc
+  merge_trc:
   include_xsens_native: true
+  # From A25_note.md: place the Webcam/FastSAM3D timeline at about 11 s on the A255 stereo timeline.
+  trc_time_offsets_seconds:
+    FastSAM3D: 11.0
 
 offset:
-  search_range_seconds: [0.0, 30.0]    # known range for this dataset; expand if offset ever falls outside
+  # A25_note.md gives an approximate 11 s offset for Fanbo1.
+  # The walking action is weak for unconstrained automatic synchronization, so search locally first.
+  search_range_seconds: [8.0, 14.0]
   coarse_step_seconds: 0.10
   fine_window_seconds: 0.50
   fine_step_seconds: 0.01
   selection_priority: [motion_delta, angle, position]
-  motion_k_seconds: 0.5               # ~6 frames at 12.5 fps; time-based so it survives fps changes
-  min_pairs: 80
+  motion_k_seconds: 0.5
+  min_pairs: 40
 
 evaluation:
   angle_names: [LeftShoulder, RightShoulder, LeftElbow, RightElbow, LeftHip, RightHip, LeftKnee, RightKnee]
@@ -49,6 +54,11 @@ evaluation:
     max_epipolar_px: 10.0
     max_reprojection_px: 10.0
     joint_indices: [5, 6, 7, 8, 9, 10]
+  depth_consistency_filter:
+    enabled: true
+    max_depth_deviation_cm: 15.0
+    # Only check arm joints (shoulder-elbow-wrist); legs have large natural depth swings during walking.
+    limb_triplets: [[5,7,9], [6,8,10]]
   max_gap_frames: 5
   anomaly_delta_deg: 30.0
   active_delta_threshold_deg: 1.0
@@ -70,16 +80,16 @@ segment:
 
 scatter:
   k: 6
-  targets: [SKT, FastSAM3D, Merge, XsensNative]
+  targets: [SKT, FastSAM3D, XsensNative]
   active_threshold_deg:
 
 video:
   enabled: false
-  start_time_s: 100.0
-  end_time_s: 160.0
+  start_time_s: 0.0
+  end_time_s: 20.0
   fps: 12.5
   compare_systems: [SKT, FastSAM3D]
 
 outputs:
   runs_dir: 00_pose_pipeline/runs
-  run_tag: current_2025_ergonomics
+  run_tag: assar2026_fanbo1_a255_angle_test

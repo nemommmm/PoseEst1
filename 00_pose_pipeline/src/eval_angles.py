@@ -39,7 +39,11 @@ def prepare_angles(config: dict, run_dir: Path, offset_s: float) -> tuple[np.nda
         processed = {}
         for name, values in raw.items():
             filled, _ = fill_short_gaps(values, time_s, max_gap)
-            processed[name] = moving_average(filled, radius)
+            smoothed = moving_average(filled, radius)
+            # Preserve NaN positions from after fill_short_gaps so that moving_average
+            # cannot bleed valid values into quality-filtered (or unfillable) NaN frames.
+            smoothed[~np.isfinite(filled)] = np.nan
+            processed[name] = smoothed
         all_angles[system] = processed
 
     fair_path = resolve_path(refs.get("xsens_fair_angles"), must_exist=False)

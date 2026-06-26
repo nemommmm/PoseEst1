@@ -38,9 +38,9 @@ USE_CLUSTERING = os.environ.get("CALIB_USE_CLUSTERING", "1") == "1"
 PROMOTE_IF_IMPROVED = os.environ.get("CALIB_PROMOTE_IF_IMPROVED", "1") == "1"
 
 SHARED_DIR = os.path.join(PROJECT_ROOT, "shared")
-OUTPUT_PATH = os.environ.get("CALIB_OUTPUT_PATH", os.path.join(SHARED_DIR, "camera_params.npz"))
-CANDIDATE_OUTPUT_PATH = os.environ.get("CALIB_CANDIDATE_OUTPUT_PATH", os.path.join(SHARED_DIR, "camera_params_candidate.npz"))
-SUMMARY_PATH = os.environ.get("CALIB_SUMMARY_PATH", os.path.join(SHARED_DIR, "calibration_search_summary.json"))
+OUTPUT_PATH = os.environ.get("CALIB_OUTPUT_PATH", os.path.join(SHARED_DIR, "camera_params_2025.npz"))
+CANDIDATE_OUTPUT_PATH = os.environ.get("CALIB_CANDIDATE_OUTPUT_PATH", os.path.join(SHARED_DIR, "camera_params_2025_candidate.npz"))
+SUMMARY_PATH = os.environ.get("CALIB_SUMMARY_PATH", os.path.join(SHARED_DIR, "calibration_search_summary_2025.json"))
 
 CONFIG_GRID = [
     {"reprojection_threshold_px": threshold, "use_rational_model": use_rational, "fix_intrinsic": fix_intrinsic}

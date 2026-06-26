@@ -9,6 +9,19 @@ evaluation**. For a new dataset, start by copying
 `configs/template_new_dataset.yaml` and updating only the required paths and
 dataset-specific settings.
 
+## Known Datasets
+
+| Dataset tag | Config file | Stereo source | Xsens source | Calibration |
+|---|---|---|---|---|
+| `current_2025_ergonomics` | `configs/current_2025_ergonomics.yaml` | `2025_Ergonomics_Data/0_video_left/right.avi` | `../Xsens_ground_truth/Aitor-001.mvnx` | `shared/camera_params_2025.npz` |
+| *(2026 A255 — TBD)* | copy from template | `2026_Assar_Data/A255/Video/cap_{n}_0/1.avi` | `2026_Assar_Data/Xsens MVNX/Fanbo-00{n}.mvnx` | `shared/camera_params_A255.npz` |
+| *(2026 A257 — TBD)* | copy from template | `2026_Assar_Data/A257/Video/cap_{n}_0/1.avi` | `2026_Assar_Data/Xsens MVNX/Fanbo-00{n}.mvnx` | `shared/camera_params_A257.npz` |
+
+For the 2026 Assar dataset there are **9 sessions** (Fanbo1–9), each recorded simultaneously
+from A255, A257, a monocular webcam, and Xsens.  Each session needs its own yaml config
+(one per session per camera location).  See `2026_Assar_Data/video_note.md` for the
+session-to-stereo-recording index mapping.
+
 ## Current Dataset Defaults
 
 | Parameter | Current Value | Reason |

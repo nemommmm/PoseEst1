@@ -71,10 +71,15 @@ def trc_to_coco17(marker_names: list[str], positions_cm: np.ndarray) -> tuple[np
     return keypoints, missing
 
 
-def interpolate_keypoints(source_time: np.ndarray, keypoints: np.ndarray, target_time: np.ndarray) -> np.ndarray:
+def interpolate_keypoints(
+    source_time: np.ndarray,
+    keypoints: np.ndarray,
+    target_time: np.ndarray,
+    source_time_offset_s: float = 0.0,
+) -> np.ndarray:
     """Interpolate keypoints onto a target timeline."""
     source_time = np.asarray(source_time, dtype=np.float64)
-    source_time = source_time - source_time[0]
+    source_time = source_time - source_time[0] + float(source_time_offset_s)
     target_time = np.asarray(target_time, dtype=np.float64)
     out = np.full((len(target_time), keypoints.shape[1], keypoints.shape[2]), np.nan, dtype=np.float64)
     unique_time, unique_idx = np.unique(source_time, return_index=True)
@@ -96,6 +101,7 @@ def load_trc_on_timeline(
     corrected_time: np.ndarray,
     synced,
     left_rows: list[dict[str, float | int]],
+    source_time_offset_s: float = 0.0,
 ) -> tuple[np.ndarray, dict[str, object]]:
     """Load and align one TRC source to the corrected stereo timeline."""
     timestamps, marker_names, positions, fps, units = load_trc(path)
@@ -108,7 +114,7 @@ def load_trc_on_timeline(
         aligned = keypoints[left_indices]
         mode = "left_metadata_frame_index"
     else:
-        aligned = interpolate_keypoints(timestamps, keypoints, corrected_time)
+        aligned = interpolate_keypoints(timestamps, keypoints, corrected_time, source_time_offset_s)
         mode = "trc_timestamp_interpolation"
     valid = np.isfinite(aligned).all(axis=2)
     summary = {
@@ -119,6 +125,7 @@ def load_trc_on_timeline(
         "source_fps": float(fps),
         "units": units,
         "alignment_mode": mode,
+        "source_time_offset_s": float(source_time_offset_s),
         "missing_coco17_joints": missing,
         "valid_left_elbow_chain_ratio": float(np.mean(valid[:, [5, 7, 9]].all(axis=1))),
         "valid_right_elbow_chain_ratio": float(np.mean(valid[:, [6, 8, 10]].all(axis=1))),

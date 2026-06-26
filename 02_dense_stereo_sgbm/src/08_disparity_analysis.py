@@ -42,7 +42,7 @@ from utils import StereoDataLoader
 SRC_DIR = _SRC_DIR
 DATA_DIR = os.path.join(PROJECT_ROOT, "2025_Ergonomics_Data")
 RESULTS_DIR = os.path.join(_METHOD_DIR, "results")
-PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params.npz")
+PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params_2025.npz")
 # Reference triangulation results from Direction A (cross-method dependency)
 NPZ_PATH = os.path.join(PROJECT_ROOT, "01_stereo_triangulation", "results", "yolo_3d_raw.npz")
 

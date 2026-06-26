@@ -35,7 +35,7 @@ from utils import StereoDataLoader
 
 DATA_DIR = PROJECT_ROOT / "2025_Ergonomics_Data"
 RESULTS_DIR = METHOD_DIR / "results"
-PARAM_PATH = SHARED_DIR / "camera_params.npz"
+PARAM_PATH = SHARED_DIR / "camera_params_2025.npz"
 DEFAULT_NPZ = RESULTS_DIR / "yolo_3d_raw_yolov8m_sgbm.npz"
 
 SGBM_MIN_DISPARITY = int(os.environ.get("POSE_SGBM_MIN_DISPARITY", "100"))

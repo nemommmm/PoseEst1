@@ -28,7 +28,7 @@ DEFAULT_FINAL_POSE_NPZ = (
     / "recovered_baseline"
     / "optimized_pose.npz"
 )
-DEFAULT_CAMERA_PARAMS = PROJECT_ROOT / "shared" / "camera_params.npz"
+DEFAULT_CAMERA_PARAMS = PROJECT_ROOT / "shared" / "camera_params_2025.npz"
 OUTPUT_DIR = METHOD_DIR / "results" / "skt_for_aitor"
 TRC_FINAL_OUT = OUTPUT_DIR / "markers_skt_coco17_mm.trc"
 SUMMARY_JSON = OUTPUT_DIR / "skt_coordinate_audit.json"

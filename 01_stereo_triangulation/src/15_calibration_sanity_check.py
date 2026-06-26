@@ -31,7 +31,7 @@ VIDEO_PAIRS = [
 ]
 PATTERN_SIZE = (5, 9)
 GRID_SPACING_CM = 15.0
-CAMERA_PARAMS_PATH = PROJECT_ROOT / "shared" / "camera_params.npz"
+CAMERA_PARAMS_PATH = PROJECT_ROOT / "shared" / "camera_params_2025.npz"
 POSE_INPUT_PATH = (
     PROJECT_ROOT
     / "01_stereo_triangulation"

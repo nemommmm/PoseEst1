@@ -24,7 +24,7 @@ DEFAULT_INPUT_LEFT = PROJECT_ROOT / "2025_Ergonomics_Data" / "0_video_left.avi"
 DEFAULT_INPUT_RIGHT = PROJECT_ROOT / "2025_Ergonomics_Data" / "1_video_right.avi"
 DEFAULT_OUTPUT_LEFT = METHOD_DIR / "results" / "easyergo_ready" / "0_video_left_rectified.avi"
 DEFAULT_OUTPUT_RIGHT = METHOD_DIR / "results" / "easyergo_ready" / "1_video_right_rectified.avi"
-DEFAULT_PARAM_PATH = PROJECT_ROOT / "shared" / "camera_params.npz"
+DEFAULT_PARAM_PATH = PROJECT_ROOT / "shared" / "camera_params_2025.npz"
 
 
 def parse_args() -> argparse.Namespace:

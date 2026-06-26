@@ -25,7 +25,7 @@ if not os.path.isabs(OUTPUT_DIR):
 os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 SRC_DIR = _SRC_DIR
-PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params.npz")
+PARAM_PATH = os.path.join(PROJECT_ROOT, "shared", "camera_params_2025.npz")
 OUTPUT_TAG = os.environ.get("POSE_OUTPUT_TAG", "").strip()
 MODEL_NAME = os.environ.get("POSE_MODEL_NAME", "yolov8n-pose.pt")
 MODEL_PATH = os.path.join(SRC_DIR, MODEL_NAME)

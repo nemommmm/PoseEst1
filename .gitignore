@@ -251,6 +251,15 @@ Calibration_video/
 *.npz
 *.npy
 
+# Exceptions: calibration params and search logs must be tracked for reproducibility.
+# Only the final named files are tracked; *_candidate.npz (intermediate drafts) are excluded.
+!shared/camera_params_2025.npz
+!shared/camera_params_A255.npz
+!shared/camera_params_A257.npz
+!shared/calibration_search_summary_2025.json
+!shared/calibration_search_summary_A255.json
+!shared/calibration_search_summary_A257.json
+
 # Known partner-data / generated-result locations
 03_FastSAM3D/data/easyergo_uploaded/
 shared/recovered_methods/

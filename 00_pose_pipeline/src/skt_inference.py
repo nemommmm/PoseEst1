@@ -13,8 +13,18 @@ from common.config import resolve_path, section
 from stereo_loader import StereoFrameReader, build_synced_timeline
 
 
-def choose_person(result) -> tuple[np.ndarray, np.ndarray] | None:
-    """Choose the largest/highest-confidence detected person from a YOLO result."""
+def choose_person(
+    result,
+    img_width: int = 0,
+    center_weight: float = 0.0,
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Choose the best detected person from a YOLO result.
+
+    When center_weight > 0 the score is boosted for people whose bounding-box
+    centre is close to the horizontal image centre.  This is useful for
+    multi-person scenes where the subject of interest stands in front of the
+    camera (center of frame) while bystanders are off to the sides.
+    """
     if result.boxes is None or result.keypoints is None or len(result.boxes) == 0:
         return None
     boxes = result.boxes.xyxy.cpu().numpy().astype(np.float64)
@@ -23,7 +33,13 @@ def choose_person(result) -> tuple[np.ndarray, np.ndarray] | None:
     conf = result.keypoints.conf.cpu().numpy().astype(np.float64)
     areas = np.maximum(boxes[:, 2] - boxes[:, 0], 0) * np.maximum(boxes[:, 3] - boxes[:, 1], 0)
     mean_conf = np.nanmean(conf, axis=1)
-    idx = int(np.argmax(scores * 0.5 + mean_conf * 0.3 + areas / max(np.nanmax(areas), 1.0) * 0.2))
+    base_score = scores * 0.5 + mean_conf * 0.3 + areas / max(np.nanmax(areas), 1.0) * 0.2
+    if center_weight > 0.0 and img_width > 0:
+        box_cx = 0.5 * (boxes[:, 0] + boxes[:, 2])
+        # 1.0 at image centre, 0.0 at left/right edge
+        center_bonus = 1.0 - np.abs(box_cx - img_width / 2.0) / (img_width / 2.0)
+        base_score = base_score + center_weight * center_bonus
+    idx = int(np.argmax(base_score))
     return keypoints[idx], conf[idx]
 
 
@@ -136,13 +152,14 @@ def run_skt(config: dict, run_dir: Path) -> Path:
     min_pair_conf = float(skt.get("min_pair_confidence", 0.25))
     max_reproj_px = float(skt.get("max_reprojection_px", 80.0))
     conf_threshold = float(skt.get("confidence_threshold", 0.35))
+    center_weight = float(skt.get("center_person_weight", 0.0))
 
     for idx in tqdm(range(len(synced)), desc="SKT", unit="frame"):
         ok, frame_l, frame_r = reader.read_synced(idx)
         if not ok or frame_l is None or frame_r is None:
             break
-        det_l = choose_person(model(frame_l, conf=conf_threshold, verbose=False)[0])
-        det_r = choose_person(model(frame_r, conf=conf_threshold, verbose=False)[0])
+        det_l = choose_person(model(frame_l, conf=conf_threshold, verbose=False)[0], img_width=width, center_weight=center_weight)
+        det_r = choose_person(model(frame_r, conf=conf_threshold, verbose=False)[0], img_width=width, center_weight=center_weight)
         pts_l = np.full((17, 2), np.nan, dtype=np.float64)
         pts_r = np.full((17, 2), np.nan, dtype=np.float64)
         conf_l = np.full(17, np.nan, dtype=np.float64)

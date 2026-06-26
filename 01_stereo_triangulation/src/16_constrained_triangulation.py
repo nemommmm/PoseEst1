@@ -20,7 +20,7 @@ PROJECT_ROOT = METHOD_DIR.parent
 sys.path.insert(0, str(PROJECT_ROOT / "shared"))
 
 
-CAMERA_PARAMS_PATH = PROJECT_ROOT / "shared" / "camera_params.npz"
+CAMERA_PARAMS_PATH = PROJECT_ROOT / "shared" / "camera_params_2025.npz"
 DATA_DIR = PROJECT_ROOT / "2025_Ergonomics_Data"
 INPUT_POSE_PATH = (
     PROJECT_ROOT

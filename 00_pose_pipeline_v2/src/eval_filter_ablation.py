@@ -64,15 +64,28 @@ def _smooth_angles(values: np.ndarray, time_s: np.ndarray, max_gap: int, smooth_
     return smoothed
 
 
+def _keypoint_max_gap_frames(variant: dict, config: dict, time_s: np.ndarray) -> int:
+    """Resolve keypoint-domain repair gap from either frames or seconds."""
+    if "keypoint_max_gap_seconds" in variant:
+        diffs = np.diff(np.asarray(time_s, dtype=np.float64))
+        finite = diffs[np.isfinite(diffs) & (diffs > 0)]
+        if len(finite) == 0:
+            return int(section(config, "evaluation").get("max_gap_frames", 5))
+        return max(1, int(round(float(variant["keypoint_max_gap_seconds"]) / float(np.median(finite)))))
+    return int(variant.get("keypoint_max_gap_frames", section(config, "evaluation").get("max_gap_frames", 5)))
+
+
 def smooth_keypoints_savgol(
     keypoints: np.ndarray,
     time_s: np.ndarray,
     max_gap: int,
     window: int,
     polyorder: int,
-) -> np.ndarray:
+    return_fill_flags: bool = False,
+) -> np.ndarray | tuple[np.ndarray, np.ndarray]:
     """Smooth 3D keypoints per coordinate after bounded short-gap interpolation."""
     out = np.asarray(keypoints, dtype=np.float64).copy()
+    fill_flags = np.zeros(out.shape, dtype=bool)
     window = max(3, int(window))
     if window % 2 == 0:
         window += 1
@@ -80,7 +93,8 @@ def smooth_keypoints_savgol(
     for joint_idx in range(out.shape[1]):
         for axis_idx in range(out.shape[2]):
             series = out[:, joint_idx, axis_idx]
-            filled, _ = fill_short_gaps(series, time_s, max_gap)
+            filled, flags = fill_short_gaps(series, time_s, max_gap)
+            fill_flags[:, joint_idx, axis_idx] = flags
             finite = np.isfinite(filled)
             smoothed = np.full_like(filled, np.nan)
             for start, end in _contiguous_true_ranges(finite):
@@ -95,7 +109,93 @@ def smooth_keypoints_savgol(
                     continue
                 smoothed[start:end] = savgol_filter(segment, window_length=local_window, polyorder=polyorder, mode="interp")
             out[:, joint_idx, axis_idx] = smoothed
+    if return_fill_flags:
+        return out, fill_flags
     return out
+
+
+def apply_quality_aware_repair_filter(
+    keypoints: np.ndarray,
+    payload: np.lib.npyio.NpzFile,
+    config: dict,
+    variant: dict,
+) -> tuple[np.ndarray, dict[str, int | float | bool]]:
+    """Mask invalid observations while preserving short repairable gaps.
+
+    Hard filtering treats every threshold violation as unusable. This helper
+    uses three quality states instead:
+
+    - valid: normal high-quality stereo observation.
+    - repairable: high-confidence observation with moderate geometry mismatch.
+    - invalid: low-confidence, severe mismatch, or non-finite observation.
+
+    Repairable points are temporarily set to NaN so bounded keypoint-domain
+    interpolation can reconstruct them using neighboring valid frames.
+    """
+    quality_cfg = section(config, "evaluation").get("skt_quality_filter", {})
+    files = set(payload.files)
+    left_key = "triang_conf_left" if "triang_conf_left" in files else "conf_left"
+    right_key = "triang_conf_right" if "triang_conf_right" in files else "conf_right"
+    required = {left_key, right_key, "epipolar_error"}
+    if not required.issubset(files):
+        missing = sorted(required.difference(files))
+        raise RuntimeError(f"Cannot enable quality-aware repair; missing arrays: {missing}")
+
+    filtered = np.asarray(keypoints, dtype=np.float64).copy()
+    n_frames = len(filtered)
+    conf_left = np.asarray(payload[left_key], dtype=np.float64)[:n_frames]
+    conf_right = np.asarray(payload[right_key], dtype=np.float64)[:n_frames]
+    min_pair_conf = np.minimum(conf_left, conf_right)
+    epipolar = np.asarray(payload["epipolar_error"], dtype=np.float64)[:n_frames]
+    if "reprojection_error" in files:
+        reprojection = np.asarray(payload["reprojection_error"], dtype=np.float64)[:n_frames]
+    else:
+        reprojection = np.full_like(epipolar, np.nan)
+
+    min_conf = float(variant.get("min_conf", quality_cfg.get("min_triang_conf", 0.2)))
+    repair_min_conf = float(variant.get("repair_min_conf", 0.5))
+    valid_epipolar_px = float(variant.get("valid_epipolar_px", quality_cfg.get("max_epipolar_px", 10.0)))
+    repair_epipolar_px = float(variant.get("repair_epipolar_px", 20.0))
+    use_reprojection = bool(variant.get("use_reprojection_quality", True))
+    valid_reprojection_px = float(variant.get("valid_reprojection_px", quality_cfg.get("max_reprojection_px", 10.0)))
+    repair_reprojection_px = float(variant.get("repair_reprojection_px", max(20.0, 2.0 * valid_reprojection_px)))
+    joint_indices = [int(v) for v in variant.get("joint_indices", quality_cfg.get("joint_indices", [5, 6, 7, 8, 9, 10]))]
+
+    stats: dict[str, int | float | bool] = {
+        "quality_mode": "quality_aware_repair",
+        "min_conf": min_conf,
+        "repair_min_conf": repair_min_conf,
+        "valid_epipolar_px": valid_epipolar_px,
+        "repair_epipolar_px": repair_epipolar_px,
+        "use_reprojection_quality": use_reprojection,
+        "valid_reprojection_px": valid_reprojection_px,
+        "repair_reprojection_px": repair_reprojection_px,
+    }
+    for joint_idx in joint_indices:
+        raw_finite = np.isfinite(filtered[:, joint_idx, :]).all(axis=1)
+        conf = min_pair_conf[:, joint_idx]
+        epi = epipolar[:, joint_idx]
+        reproj = reprojection[:, joint_idx]
+        valid_conf = np.isfinite(conf) & (conf >= min_conf)
+        repair_conf = np.isfinite(conf) & (conf >= repair_min_conf)
+        valid_geometry = np.isfinite(epi) & (epi <= valid_epipolar_px)
+        repair_geometry = np.isfinite(epi) & (epi <= repair_epipolar_px)
+        if use_reprojection:
+            valid_geometry &= np.isfinite(reproj) & (reproj <= valid_reprojection_px)
+            repair_geometry &= np.isfinite(reproj) & (reproj <= repair_reprojection_px)
+
+        valid = raw_finite & valid_conf & valid_geometry
+        repairable = raw_finite & repair_conf & repair_geometry & ~valid
+        invalid = raw_finite & ~(valid | repairable)
+        filtered[repairable | invalid, joint_idx, :] = np.nan
+
+        prefix = f"joint_{joint_idx}"
+        stats[f"{prefix}_valid_frames"] = int(np.sum(valid))
+        stats[f"{prefix}_repairable_frames"] = int(np.sum(repairable))
+        stats[f"{prefix}_invalid_frames"] = int(np.sum(invalid))
+        stats[f"{prefix}_missing_frames"] = int(np.sum(~raw_finite))
+        stats[f"{prefix}_masked_frames"] = int(np.sum(repairable | invalid))
+    return filtered, stats
 
 
 def estimate_right_arm_bone_priors(keypoints: np.ndarray) -> dict[str, float]:
@@ -167,29 +267,45 @@ def _prepare_skt_variant(
     if not variant.get("depth_filter", True):
         variant_cfg = _set_nested(variant_cfg, ("evaluation", "depth_consistency_filter", "enabled"), False)
 
-    quality_stats: dict[str, int] = {}
+    quality_stats: dict[str, object] = {}
     depth_stats: dict[str, int] = {}
+    quality_mode = str(variant.get("quality_mode", "hard"))
     if variant.get("quality_filter", True):
-        keypoints, quality_stats = apply_skt_quality_filter(keypoints, payload, variant_cfg)
+        if quality_mode == "repair":
+            keypoints, quality_stats = apply_quality_aware_repair_filter(keypoints, payload, variant_cfg, variant)
+        elif quality_mode == "hard":
+            keypoints, quality_stats = apply_skt_quality_filter(keypoints, payload, variant_cfg)
+        else:
+            raise ValueError(f"Unsupported quality_mode: {quality_mode}")
     if variant.get("depth_filter", True):
         keypoints, depth_stats = apply_depth_consistency_filter(keypoints, variant_cfg)
 
     keypoint_postprocess = str(variant.get("keypoint_postprocess", "none"))
+    keypoint_max_gap = _keypoint_max_gap_frames(variant, config, time_s)
     postprocess_meta: dict[str, object] = {}
     if keypoint_postprocess == "savgol":
-        keypoints = smooth_keypoints_savgol(
+        smoothed = smooth_keypoints_savgol(
             keypoints,
             time_s,
-            max_gap=int(variant.get("keypoint_max_gap_frames", section(config, "evaluation").get("max_gap_frames", 5))),
+            max_gap=keypoint_max_gap,
             window=int(variant.get("savgol_window", 7)),
             polyorder=int(variant.get("savgol_polyorder", 2)),
+            return_fill_flags=quality_mode == "repair",
         )
+        if quality_mode == "repair":
+            keypoints, fill_flags = smoothed
+            joint_fill_flags = np.all(fill_flags, axis=2)
+            for joint_idx in [int(v) for v in variant.get("joint_indices", section(config, "evaluation").get("skt_quality_filter", {}).get("joint_indices", []))]:
+                postprocess_meta[f"joint_{joint_idx}_short_gap_repaired_frames"] = int(np.sum(joint_fill_flags[:, joint_idx]))
+        else:
+            keypoints = smoothed
         postprocess_meta["keypoint_postprocess"] = "savgol"
+        postprocess_meta["keypoint_max_gap_frames"] = keypoint_max_gap
     elif keypoint_postprocess == "right_arm_bone_savgol":
         keypoints = smooth_keypoints_savgol(
             keypoints,
             time_s,
-            max_gap=int(variant.get("keypoint_max_gap_frames", section(config, "evaluation").get("max_gap_frames", 5))),
+            max_gap=keypoint_max_gap,
             window=int(variant.get("savgol_window", 7)),
             polyorder=int(variant.get("savgol_polyorder", 2)),
         )
@@ -201,6 +317,7 @@ def _prepare_skt_variant(
             max_nfev=int(variant.get("max_nfev", 25)),
         )
         postprocess_meta["keypoint_postprocess"] = "right_arm_bone_savgol"
+        postprocess_meta["keypoint_max_gap_frames"] = keypoint_max_gap
         postprocess_meta["bone_priors_cm"] = priors
     elif keypoint_postprocess != "none":
         raise ValueError(f"Unsupported keypoint_postprocess: {keypoint_postprocess}")
@@ -228,6 +345,7 @@ def _prepare_skt_variant(
     meta = {
         "quality_stats": quality_stats,
         "depth_stats": depth_stats,
+        "quality_mode": quality_mode if variant.get("quality_filter", True) else "disabled",
         **postprocess_meta,
         "angle_postprocess": postprocess,
         "smooth_radius_frames": radius,
@@ -294,6 +412,19 @@ def default_variants() -> list[dict[str, object]]:
             "depth_filter": True,
             "keypoint_postprocess": "savgol",
             "angle_postprocess": "none",
+        },
+        {
+            "name": "quality_aware_repair_keypoint_savgol",
+            "quality_filter": True,
+            "quality_mode": "repair",
+            "depth_filter": True,
+            "keypoint_postprocess": "savgol",
+            "angle_postprocess": "none",
+            "keypoint_max_gap_seconds": 0.5,
+            "repair_min_conf": 0.5,
+            "repair_epipolar_px": 20.0,
+            "repair_reprojection_px": 20.0,
+            "use_reprojection_quality": True,
         },
         {
             "name": "no_filter_keypoint_savgol",

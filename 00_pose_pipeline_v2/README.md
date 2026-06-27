@@ -33,8 +33,8 @@ Export the current best YOLO11l full-replacement candidate for review:
 /opt/anaconda3/envs/pose/bin/python 00_pose_pipeline_v2/src/export_candidate_timeseries.py \
   --config 00_pose_pipeline_v2/configs/assar2026_fanbo7_a257.yaml \
   --run-dir 00_pose_pipeline_v2/runs/assar2026_fanbo7_a257_yolo11l_full_skt \
-  --variant-name hard_filter_keypoint_savgol \
-  --candidate-label YOLO11l_SKT_keypoint_savgol
+  --variant-name quality_aware_repair_keypoint_savgol \
+  --candidate-label YOLO11l_SKT_quality_aware_repair
 ```
 
 ## Pipeline Stages
@@ -47,7 +47,7 @@ Export the current best YOLO11l full-replacement candidate for review:
 | `angle` | Run traditional angle evaluation with MAE, bias, and RULA-like agreement. |
 | `fasteval` | Evaluate selected systems against FastSAM3D as the right-elbow reference. |
 | `modeldiag` | Compare 2D pose detectors on sampled stereo frames without replacing SKT. |
-| `filter_ablation` | Compare filter, angle-postprocess, keypoint smoothing, and right-arm bone-constraint variants. |
+| `filter_ablation` | Compare hard filtering, quality-aware repair, angle postprocess, keypoint smoothing, and right-arm bone-constraint variants. |
 | `motion` | Run K-frame motion-delta evaluation with motion agreement, high-delta counts, and path ratios. |
 | `segment` | Run activity-segment ROM, DTW, and RULA-like agreement analysis. |
 | `scatter` | Generate K-frame delta scatter plots. |

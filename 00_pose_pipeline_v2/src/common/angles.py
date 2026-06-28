@@ -224,7 +224,7 @@ def odd_window_from_ms(time_s: np.ndarray, window_ms: float) -> tuple[int, int, 
     if finite.size == 0 or window_ms <= 0:
         return 1, 0, 0.0
     median_dt_ms = float(np.nanmedian(finite) * 1000.0)
-    frames = max(1, int(round(window_ms / median_dt_ms)))
+    frames = max(1, int(math.ceil(window_ms / median_dt_ms)))
     if frames % 2 == 0:
-        frames = frames - 1 if frames > 1 else 1
+        frames += 1
     return frames, (frames - 1) // 2, frames * median_dt_ms

@@ -1,0 +1,67 @@
+dataset:
+  name: current_2025_ergonomics_yolo11l_historical
+  description: 2025 ergonomics dataset evaluated with YOLO11l on the historical-optimized SKT pipeline (02_batch_inference.py).
+  left_video: 2025_Ergonomics_Data/0_video_left.avi
+  right_video: 2025_Ergonomics_Data/1_video_right.avi
+  left_metadata: 2025_Ergonomics_Data/0_video_left.txt
+  right_metadata: 2025_Ergonomics_Data/1_video_right.txt
+  rotate_180: true
+  sync_by: hardware_frame_id
+  timestamp_format: seconds_microseconds_columns
+
+calibration:
+  camera_params: shared/camera_params_2025.npz
+
+skt:
+  use_existing_npz: true
+  existing_npz: 01_stereo_triangulation/results/yolo11l_full_historical/yolo_3d_optimized_yolo11l_full_historical.npz
+  output_npz: skt_pose_optimized.npz
+  model_path: 01_stereo_triangulation/src/yolo11l-pose.pt
+  confidence_threshold: 0.35
+  min_pair_confidence: 0.25
+  max_reprojection_px: 80.0
+  max_frames:
+
+references:
+  xsens_mvnx: ../Xsens_ground_truth/Aitor-001.mvnx
+  xsens_fair_angles: shared/fair_gt_angles.npz
+  fastsam_trc: ../10 Aitor/fastsam3d_2.trc
+  merge_trc: ../10 Aitor/merged_output_2.trc
+  include_xsens_native: true
+
+offset:
+  search_range_seconds: [0.0, 30.0]
+  coarse_step_seconds: 0.10
+  fine_window_seconds: 0.50
+  fine_step_seconds: 0.01
+  selection_priority: [motion_delta, angle, position]
+  motion_k_seconds: 0.5
+  min_pairs: 80
+
+evaluation:
+  angle_names: [LeftShoulder, RightShoulder, LeftElbow, RightElbow, LeftHip, RightHip, LeftKnee, RightKnee]
+  k_frame_list: [1, 6, 12, 25]
+  camera_smooth_window_ms: 200.0
+  xsens_extra_smoothing: false
+  skt_quality_filter:
+    enabled: true
+    min_triang_conf: 0.20
+    max_epipolar_px: 10.0
+    max_reprojection_px: 10.0
+    joint_indices: [5, 6, 7, 8, 9, 10]
+  max_gap_frames: 5
+  anomaly_delta_deg: 30.0
+  active_delta_threshold_deg: 1.0
+  noise_floor_threshold_deg: 0.5
+  rula_bins:
+    LeftElbow: [60, 100]
+    RightElbow: [60, 100]
+    LeftShoulder: [20, 45, 90]
+    RightShoulder: [20, 45, 90]
+
+filter_ablation:
+  jump_threshold_deg: 10.0
+
+outputs:
+  runs_dir: 00_pose_pipeline_v2/runs
+  run_tag: current_2025_ergonomics_yolo11l_historical

@@ -148,6 +148,8 @@ class StereoFrameReader:
         self.cap_r = cv2.VideoCapture(str(self.right_video))
         if not self.cap_l.isOpened() or not self.cap_r.isOpened():
             raise IOError("Could not open stereo videos.")
+        self._left_pos = 0
+        self._right_pos = 0
 
     def read_synced(self, idx: int) -> tuple[bool, np.ndarray | None, np.ndarray | None]:
         """Read one synchronized frame pair by synced-frame index."""
@@ -156,6 +158,37 @@ class StereoFrameReader:
         self.cap_r.set(cv2.CAP_PROP_POS_FRAMES, item.right_idx)
         ok_l, frame_l = self.cap_l.read()
         ok_r, frame_r = self.cap_r.read()
+        self._left_pos = item.left_idx + (1 if ok_l else 0)
+        self._right_pos = item.right_idx + (1 if ok_r else 0)
+        if not ok_l or not ok_r:
+            return False, None, None
+        if self.rotate_180:
+            frame_l = cv2.rotate(frame_l, cv2.ROTATE_180)
+            frame_r = cv2.rotate(frame_r, cv2.ROTATE_180)
+        return True, frame_l, frame_r
+
+    def _read_video_frame(self, cap: cv2.VideoCapture, target_idx: int, pos_attr: str) -> tuple[bool, np.ndarray | None]:
+        """Read a video frame, preferring forward sequential reads over seek."""
+        current_pos = int(getattr(self, pos_attr))
+        if target_idx < current_pos:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
+            current_pos = target_idx
+        frame = None
+        ok = False
+        while current_pos <= target_idx:
+            ok, frame = cap.read()
+            if not ok:
+                setattr(self, pos_attr, current_pos)
+                return False, None
+            current_pos += 1
+        setattr(self, pos_attr, current_pos)
+        return True, frame
+
+    def read_synced_sequential(self, idx: int) -> tuple[bool, np.ndarray | None, np.ndarray | None]:
+        """Read one synchronized frame pair using forward-only reads when possible."""
+        item = self.synced[idx]
+        ok_l, frame_l = self._read_video_frame(self.cap_l, item.left_idx, "_left_pos")
+        ok_r, frame_r = self._read_video_frame(self.cap_r, item.right_idx, "_right_pos")
         if not ok_l or not ok_r:
             return False, None, None
         if self.rotate_180:

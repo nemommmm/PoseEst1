@@ -1,4 +1,4 @@
-"""Independent sparse keypoint triangulation (SKT) stage for 00_pose_pipeline."""
+"""Sparse keypoint triangulation (SKT) inference for 00_pose_pipeline_v2."""
 
 from __future__ import annotations
 
@@ -10,7 +10,26 @@ from tqdm import tqdm
 from ultralytics import YOLO
 
 from common.config import resolve_path, section
+from common.person_tracking import (
+    DetectionCandidate,
+    StereoSanityConfig,
+    TrackState,
+    TrackingConfig,
+    extract_candidates,
+    select_candidate,
+    stereo_sanity_check,
+    infer_tracked_pose,
+)
+from common.triangulation import (
+    TemporalWindowConfig,
+    TriangulationConfig,
+    rectify_points,
+    retriangulate_sequence,
+    temporal_window_rescue_rectified,
+)
 from stereo_loader import StereoFrameReader, build_synced_timeline
+
+NUM_COCO_JOINTS = 17
 
 
 def choose_person(
@@ -18,92 +37,49 @@ def choose_person(
     img_width: int = 0,
     center_weight: float = 0.0,
 ) -> tuple[np.ndarray, np.ndarray] | None:
-    """Choose the best detected person from a YOLO result.
-
-    When center_weight > 0 the score is boosted for people whose bounding-box
-    centre is close to the horizontal image centre.  This is useful for
-    multi-person scenes where the subject of interest stands in front of the
-    camera (center of frame) while bystanders are off to the sides.
-    """
-    if result.boxes is None or result.keypoints is None or len(result.boxes) == 0:
+    """Backward-compatible single-frame person selector for diagnostics."""
+    cfg = TrackingConfig(enabled=False, center_person_weight=center_weight)
+    candidates = extract_candidates(result)
+    frame_shape = (1, max(int(img_width), 1), 3)
+    candidate, _ = select_candidate(candidates, None, frame_shape, cfg)
+    if candidate is None:
         return None
-    boxes = result.boxes.xyxy.cpu().numpy().astype(np.float64)
-    scores = result.boxes.conf.cpu().numpy().astype(np.float64)
-    keypoints = result.keypoints.xy.cpu().numpy().astype(np.float64)
-    conf = result.keypoints.conf.cpu().numpy().astype(np.float64)
-    areas = np.maximum(boxes[:, 2] - boxes[:, 0], 0) * np.maximum(boxes[:, 3] - boxes[:, 1], 0)
-    mean_conf = np.nanmean(conf, axis=1)
-    base_score = scores * 0.5 + mean_conf * 0.3 + areas / max(np.nanmax(areas), 1.0) * 0.2
-    if center_weight > 0.0 and img_width > 0:
-        box_cx = 0.5 * (boxes[:, 0] + boxes[:, 2])
-        # 1.0 at image centre, 0.0 at left/right edge
-        center_bonus = 1.0 - np.abs(box_cx - img_width / 2.0) / (img_width / 2.0)
-        base_score = base_score + center_weight * center_bonus
-    idx = int(np.argmax(base_score))
-    return keypoints[idx], conf[idx]
+    return candidate.keypoints, candidate.conf
 
 
-def rectify_points(points: np.ndarray, mtx: np.ndarray, dist: np.ndarray, rect_r: np.ndarray, proj_p: np.ndarray) -> np.ndarray:
-    """Rectify 2D keypoints into stereo-rectified pixel coordinates."""
-    out = np.full_like(points, np.nan, dtype=np.float64)
-    valid = np.isfinite(points).all(axis=1)
-    if not np.any(valid):
-        return out
-    pts = points[valid].reshape(-1, 1, 2).astype(np.float64)
-    rect = cv2.undistortPoints(pts, mtx, dist, R=rect_r, P=proj_p).reshape(-1, 2)
-    out[valid] = rect
-    return out
+def _empty_keypoints() -> np.ndarray:
+    """Return an empty COCO-17 2D keypoint array."""
+    return np.full((NUM_COCO_JOINTS, 2), np.nan, dtype=np.float64)
 
 
-def triangulate_pose(
-    p1: np.ndarray,
-    p2: np.ndarray,
-    left: np.ndarray,
-    right: np.ndarray,
-    conf_l: np.ndarray,
-    conf_r: np.ndarray,
-    min_pair_conf: float,
-    max_reproj_px: float,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
-    """Triangulate one COCO-17 pose with basic reprojection quality metrics."""
-    pose = np.full((17, 3), np.nan, dtype=np.float64)
-    reproj = np.full(17, np.nan, dtype=np.float64)
-    pair_conf = np.full(17, np.nan, dtype=np.float64)
-    epi = np.full(17, np.nan, dtype=np.float64)
-    disparity = np.full(17, np.nan, dtype=np.float64)
-    for idx in range(17):
-        if not (np.isfinite(left[idx]).all() and np.isfinite(right[idx]).all()):
-            continue
-        c = min(float(conf_l[idx]) if np.isfinite(conf_l[idx]) else 0.0, float(conf_r[idx]) if np.isfinite(conf_r[idx]) else 0.0)
-        pair_conf[idx] = c
-        epi[idx] = abs(float(left[idx, 1] - right[idx, 1]))
-        disparity[idx] = float(left[idx, 0] - right[idx, 0])
-        if c < min_pair_conf:
-            continue
-        homog = cv2.triangulatePoints(p1, p2, left[idx].reshape(2, 1), right[idx].reshape(2, 1)).ravel()
-        if abs(float(homog[3])) < 1e-9:
-            continue
-        point = homog[:3] / homog[3]
-        if not np.isfinite(point).all():
-            continue
-        proj_l = p1 @ np.r_[point, 1.0]
-        proj_r = p2 @ np.r_[point, 1.0]
-        if abs(proj_l[2]) < 1e-9 or abs(proj_r[2]) < 1e-9:
-            continue
-        pl = proj_l[:2] / proj_l[2]
-        pr = proj_r[:2] / proj_r[2]
-        err = 0.5 * (np.linalg.norm(pl - left[idx]) + np.linalg.norm(pr - right[idx]))
-        reproj[idx] = float(err)
-        if err <= max_reproj_px:
-            pose[idx] = point
-    stereo_quality = pair_conf.copy()
-    finite_reproj = np.isfinite(reproj)
-    stereo_quality[finite_reproj] = pair_conf[finite_reproj] / (1.0 + reproj[finite_reproj] / max(max_reproj_px, 1e-6))
-    return pose, reproj, pair_conf, epi, disparity, stereo_quality
+def _empty_conf() -> np.ndarray:
+    """Return an empty COCO-17 confidence array."""
+    return np.full(NUM_COCO_JOINTS, np.nan, dtype=np.float64)
+
+
+def _candidate_payload(candidate: DetectionCandidate | None) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return keypoints, confidence, and bbox arrays for a candidate."""
+    if candidate is None:
+        return _empty_keypoints(), _empty_conf(), np.full(4, np.nan, dtype=np.float64)
+    return (
+        np.asarray(candidate.keypoints, dtype=np.float64),
+        np.asarray(candidate.conf, dtype=np.float64),
+        np.asarray(candidate.bbox, dtype=np.float64),
+    )
+
+
+def _variant_name(tri_cfg: TriangulationConfig, tw_cfg: TemporalWindowConfig, tracking_cfg: TrackingConfig) -> str:
+    """Build a compact SKT variant label for saved NPZ metadata."""
+    parts = ["v2_tracked" if tracking_cfg.enabled else "v2_untracked", "weighted_dlt"]
+    if tri_cfg.enforce_epipolar_constraint:
+        parts.append("soft_epipolar")
+    if tw_cfg.enabled:
+        parts.append("window_rescue")
+    return "_".join(parts)
 
 
 def run_skt(config: dict, run_dir: Path) -> Path:
-    """Run independent SKT inference or reuse an existing configured NPZ."""
+    """Run SKT inference or reuse an existing configured NPZ."""
     skt = section(config, "skt")
     if skt.get("use_existing_npz", False):
         path = resolve_path(skt.get("existing_npz"), must_exist=True)
@@ -121,7 +97,11 @@ def run_skt(config: dict, run_dir: Path) -> Path:
     model_path = resolve_path(skt.get("model_path"), must_exist=True)
     assert left_video and right_video and left_meta and right_meta and camera_params and model_path
 
-    time_s, synced, _, _ = build_synced_timeline(left_meta, right_meta, dataset.get("timestamp_format", "seconds_microseconds_columns"))
+    time_s, synced, _, _ = build_synced_timeline(
+        left_meta,
+        right_meta,
+        dataset.get("timestamp_format", "seconds_microseconds_columns"),
+    )
     max_frames = skt.get("max_frames")
     if max_frames:
         synced = synced[: int(max_frames)]
@@ -138,71 +118,144 @@ def run_skt(config: dict, run_dir: Path) -> Path:
     height, width = frame_l.shape[:2]
     r1, r2, p1, p2, _, _, _ = cv2.stereoRectify(mtx_l, dist_l, mtx_r, dist_r, (width, height), r, t, alpha=0)
 
+    tracking_cfg = TrackingConfig.from_skt_config(skt)
+    sanity_cfg = StereoSanityConfig.from_skt_config(skt)
+    tri_cfg = TriangulationConfig.from_skt_config(skt)
+    tw_cfg = TemporalWindowConfig.from_skt_config(skt)
+
     model = YOLO(str(model_path))
-    keypoints = []
-    reproj_all = []
-    pair_conf_all = []
-    epi_all = []
-    disp_all = []
-    quality_all = []
-    conf_l_all = []
-    conf_r_all = []
-    left_2d_all = []
-    right_2d_all = []
-    min_pair_conf = float(skt.get("min_pair_confidence", 0.25))
-    max_reproj_px = float(skt.get("max_reprojection_px", 80.0))
-    conf_threshold = float(skt.get("confidence_threshold", 0.35))
-    center_weight = float(skt.get("center_person_weight", 0.0))
+    track_l = TrackState()
+    track_r = TrackState()
+
+    left_2d_raw: list[np.ndarray] = []
+    right_2d_raw: list[np.ndarray] = []
+    left_rect: list[np.ndarray] = []
+    right_rect: list[np.ndarray] = []
+    conf_l_raw: list[np.ndarray] = []
+    conf_r_raw: list[np.ndarray] = []
+    bbox_l_all: list[np.ndarray] = []
+    bbox_r_all: list[np.ndarray] = []
+    track_score_l: list[float] = []
+    track_score_r: list[float] = []
+    track_source_l: list[str] = []
+    track_source_r: list[str] = []
+    sanity_ok_all: list[bool] = []
+    sanity_reason_all: list[str] = []
 
     for idx in tqdm(range(len(synced)), desc="SKT", unit="frame"):
-        ok, frame_l, frame_r = reader.read_synced(idx)
+        ok, frame_l, frame_r = reader.read_synced_sequential(idx)
         if not ok or frame_l is None or frame_r is None:
             break
-        det_l = choose_person(model(frame_l, conf=conf_threshold, verbose=False)[0], img_width=width, center_weight=center_weight)
-        det_r = choose_person(model(frame_r, conf=conf_threshold, verbose=False)[0], img_width=width, center_weight=center_weight)
-        pts_l = np.full((17, 2), np.nan, dtype=np.float64)
-        pts_r = np.full((17, 2), np.nan, dtype=np.float64)
-        conf_l = np.full(17, np.nan, dtype=np.float64)
-        conf_r = np.full(17, np.nan, dtype=np.float64)
-        if det_l is not None:
-            pts_l, conf_l = det_l
-        if det_r is not None:
-            pts_r, conf_r = det_r
+
+        cand_l, track_l = infer_tracked_pose(model, frame_l, track_l, idx, tracking_cfg)
+        cand_r, track_r = infer_tracked_pose(model, frame_r, track_r, idx, tracking_cfg)
+        pts_l, conf_l, bbox_l = _candidate_payload(cand_l)
+        pts_r, conf_r, bbox_r = _candidate_payload(cand_r)
+
         rect_l = rectify_points(pts_l, mtx_l, dist_l, r1, p1)
         rect_r = rectify_points(pts_r, mtx_r, dist_r, r2, p2)
-        pose, reproj, pair_conf, epi, disparity, quality = triangulate_pose(
-            p1, p2, rect_l, rect_r, conf_l, conf_r, min_pair_conf, max_reproj_px
-        )
-        keypoints.append(pose)
-        reproj_all.append(reproj)
-        pair_conf_all.append(pair_conf)
-        epi_all.append(epi)
-        disp_all.append(disparity)
-        quality_all.append(quality)
-        conf_l_all.append(conf_l)
-        conf_r_all.append(conf_r)
-        left_2d_all.append(pts_l)
-        right_2d_all.append(pts_r)
+        sanity_ok, sanity_reason = stereo_sanity_check(cand_l, cand_r, rect_l, rect_r, sanity_cfg)
+        if not sanity_ok:
+            rect_l = _empty_keypoints()
+            rect_r = _empty_keypoints()
+
+        left_2d_raw.append(pts_l)
+        right_2d_raw.append(pts_r)
+        left_rect.append(rect_l)
+        right_rect.append(rect_r)
+        conf_l_raw.append(conf_l)
+        conf_r_raw.append(conf_r)
+        bbox_l_all.append(bbox_l)
+        bbox_r_all.append(bbox_r)
+        track_score_l.append(float(track_l.last_score))
+        track_score_r.append(float(track_r.last_score))
+        track_source_l.append(str(track_l.last_source))
+        track_source_r.append(str(track_r.last_source))
+        sanity_ok_all.append(bool(sanity_ok))
+        sanity_reason_all.append(str(sanity_reason))
+
     reader.release()
 
-    n = len(keypoints)
+    n_frames = len(left_rect)
+    if n_frames == 0:
+        raise RuntimeError("SKT inference produced no frames.")
+
+    timestamps = time_s[:n_frames]
+    left_rect_arr = np.asarray(left_rect, dtype=np.float64)
+    right_rect_arr = np.asarray(right_rect, dtype=np.float64)
+    conf_l_arr = np.asarray(conf_l_raw, dtype=np.float64)
+    conf_r_arr = np.asarray(conf_r_raw, dtype=np.float64)
+
+    pass1 = retriangulate_sequence(p1, p2, left_rect_arr, right_rect_arr, conf_l_arr, conf_r_arr, tri_cfg)
+    final = pass1
+    rescue_mask_left = np.zeros(left_rect_arr.shape[:2], dtype=bool)
+    rescue_mask_right = np.zeros(right_rect_arr.shape[:2], dtype=bool)
+    if tw_cfg.enabled:
+        (
+            rescued_left,
+            rescued_right,
+            rescued_conf_left,
+            rescued_conf_right,
+            rescue_mask_left,
+            rescue_mask_right,
+        ) = temporal_window_rescue_rectified(
+            left_rect_arr,
+            right_rect_arr,
+            conf_l_arr,
+            conf_r_arr,
+            timestamps,
+            pass1["keypoints"],
+            pass1["stereo_quality"],
+            tw_cfg,
+        )
+        final = retriangulate_sequence(p1, p2, rescued_left, rescued_right, rescued_conf_left, rescued_conf_right, tri_cfg)
+        final["keypoints_left_rect_raw"] = pass1["keypoints_left_rect"]
+        final["keypoints_right_rect_raw"] = pass1["keypoints_right_rect"]
+        final["reprojection_error_pass1"] = pass1["reprojection_error"]
+        final["stereo_quality_pass1"] = pass1["stereo_quality"]
+        final["pair_confidence_pass1"] = pass1["pair_confidence"]
+
     out_path = run_dir / skt.get("output_npz", "skt_pose_optimized.npz")
     np.savez(
         out_path,
-        timestamps=time_s[:n],
-        keypoints=np.asarray(keypoints, dtype=np.float64),
-        reprojection_error=np.asarray(reproj_all, dtype=np.float64),
-        epipolar_error=np.asarray(epi_all, dtype=np.float64),
-        disparity_px=np.asarray(disp_all, dtype=np.float64),
-        stereo_quality=np.asarray(quality_all, dtype=np.float64),
-        pair_confidence=np.asarray(pair_conf_all, dtype=np.float64),
-        conf_left=np.asarray(conf_l_all, dtype=np.float64),
-        conf_right=np.asarray(conf_r_all, dtype=np.float64),
-        keypoints_left_2d=np.asarray(left_2d_all, dtype=np.float64),
-        keypoints_right_2d=np.asarray(right_2d_all, dtype=np.float64),
+        timestamps=timestamps,
+        keypoints=final["keypoints"],
+        reprojection_error=final["reprojection_error"],
+        epipolar_error=final["epipolar_error"],
+        epipolar_error_pre=final["epipolar_error_pre"],
+        disparity_px=final["disparity_px"],
+        stereo_quality=final["stereo_quality"],
+        pair_confidence=final["pair_confidence"],
+        keypoints_left_2d_raw=np.asarray(left_2d_raw, dtype=np.float64),
+        keypoints_right_2d_raw=np.asarray(right_2d_raw, dtype=np.float64),
+        keypoints_left_2d=np.asarray(left_2d_raw, dtype=np.float64),
+        keypoints_right_2d=np.asarray(right_2d_raw, dtype=np.float64),
+        keypoints_left_rect=final["keypoints_left_rect"],
+        keypoints_right_rect=final["keypoints_right_rect"],
+        keypoints_left_rect_raw=final.get("keypoints_left_rect_raw", pass1["keypoints_left_rect"]),
+        keypoints_right_rect_raw=final.get("keypoints_right_rect_raw", pass1["keypoints_right_rect"]),
+        conf_left=conf_l_arr,
+        conf_right=conf_r_arr,
+        triang_conf_left=final["triang_conf_left"],
+        triang_conf_right=final["triang_conf_right"],
+        bbox_left=np.asarray(bbox_l_all, dtype=np.float64),
+        bbox_right=np.asarray(bbox_r_all, dtype=np.float64),
+        track_score_left=np.asarray(track_score_l, dtype=np.float64),
+        track_score_right=np.asarray(track_score_r, dtype=np.float64),
+        track_source_left=np.asarray(track_source_l),
+        track_source_right=np.asarray(track_source_r),
+        stereo_sanity_ok=np.asarray(sanity_ok_all, dtype=bool),
+        stereo_sanity_reason=np.asarray(sanity_reason_all),
+        epipolar_shift_left_px=final["epipolar_shift_left_px"],
+        epipolar_shift_right_px=final["epipolar_shift_right_px"],
+        temporal_rescue_left=rescue_mask_left,
+        temporal_rescue_right=rescue_mask_right,
+        reprojection_error_pass1=final.get("reprojection_error_pass1", pass1["reprojection_error"]),
+        stereo_quality_pass1=final.get("stereo_quality_pass1", pass1["stereo_quality"]),
+        pair_confidence_pass1=final.get("pair_confidence_pass1", pass1["pair_confidence"]),
         model_name=np.asarray(str(model_path.name)),
-        postprocess_variant=np.asarray("00_pose_pipeline_simple_skt"),
-        reprojection_threshold_px=np.asarray(max_reproj_px, dtype=np.float64),
+        postprocess_variant=np.asarray(_variant_name(tri_cfg, tw_cfg, tracking_cfg)),
+        reprojection_threshold_px=np.asarray(tri_cfg.reprojection_max_px, dtype=np.float64),
     )
     print(f"[skt] saved {out_path}")
     return out_path

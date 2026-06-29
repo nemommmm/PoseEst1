@@ -63,11 +63,11 @@ skt:
 references:
   xsens_mvnx: 2026_Assar_Data/Xsens MVNX/Fanbo-004.mvnx
   xsens_fair_angles:
-  fastsam_trc: "2026_Assar_Data/TRC FastSAM3D/markers_Fanbo4_2026-06-16 15-23-27_5495264fbb67420d865b8b28ab041d69.trc"
+  fastsam_trc: "2026_Assar_Data/TRC FastSAM3D/markers_629.trc"
   merge_trc:
   include_xsens_native: true
   trc_time_offsets_seconds:
-    FastSAM3D: 5.4
+    FastSAM3D: 1.16
 
 offset:
   # A25_note.md: Fanbo4 time offset ~5s on A257.

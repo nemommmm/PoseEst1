@@ -51,6 +51,10 @@ class DatasetSpec:
 
 
 DEFAULT_DATASETS = {
+    "fanbo3": DatasetSpec(
+        name="fanbo3",
+        config_path=Path("00_pose_pipeline_v2/configs/assar2026_fanbo3_a255.yaml"),
+    ),
     "fanbo4": DatasetSpec(
         name="fanbo4",
         config_path=Path("00_pose_pipeline_v2/configs/assar2026_fanbo4_a257.yaml"),
@@ -364,6 +368,52 @@ def summarize_dataset(
             angle_names=eval_angle_names,
             jump_threshold=jump_threshold,
             bones=baseline_bones,
+        )
+    )
+
+    quality_filtered, _ = apply_skt_quality_filter(raw_keypoints, payload, config)
+    savgol_no_depth = smooth_keypoints_savgol(
+        quality_filtered,
+        time_s,
+        max_gap=int(section(config, "evaluation").get("max_gap_frames", 5)),
+        window=int(savgol_window),
+        polyorder=int(savgol_polyorder),
+    )
+    savgol_no_depth_angles = process_angles(savgol_no_depth, time_s, config, eval_angle_names)
+    rows.extend(
+        metric_rows_for_variant(
+            dataset_name=spec.name,
+            variant="savgol_only_no_depth_filter",
+            lam=None,
+            time_s=time_s,
+            target_angles=savgol_no_depth_angles,
+            reference_angles=all_angles["FastSAM3D"],
+            angle_names=eval_angle_names,
+            jump_threshold=jump_threshold,
+            bones=bone_stats(savgol_no_depth, priors),
+        )
+    )
+
+    quality_depth_filtered, _ = apply_depth_consistency_filter(quality_filtered, config)
+    savgol_depth = smooth_keypoints_savgol(
+        quality_depth_filtered,
+        time_s,
+        max_gap=int(section(config, "evaluation").get("max_gap_frames", 5)),
+        window=int(savgol_window),
+        polyorder=int(savgol_polyorder),
+    )
+    savgol_depth_angles = process_angles(savgol_depth, time_s, config, eval_angle_names)
+    rows.extend(
+        metric_rows_for_variant(
+            dataset_name=spec.name,
+            variant="savgol_only_with_current_depth_filter",
+            lam=None,
+            time_s=time_s,
+            target_angles=savgol_depth_angles,
+            reference_angles=all_angles["FastSAM3D"],
+            angle_names=eval_angle_names,
+            jump_threshold=jump_threshold,
+            bones=bone_stats(savgol_depth, priors),
         )
     )
 

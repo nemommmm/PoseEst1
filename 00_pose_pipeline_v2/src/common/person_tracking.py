@@ -300,18 +300,24 @@ def stereo_sanity_check(
     if height_ratio < min_ratio or height_ratio > max_ratio:
         return False, "bbox_height_ratio"
 
-    if abs(float(left_bbox[1] - right_bbox[1])) > cfg.max_bbox_top_y_diff_px:
-        return False, "bbox_top_y"
-
     left_cy = bbox_center(left_bbox)[1]
     right_cy = bbox_center(right_bbox)[1]
     max_center_diff = cfg.max_bbox_center_y_diff_ratio * max(left_h, right_h)
-    if abs(float(left_cy - right_cy)) > max_center_diff:
-        return False, "bbox_center_y"
+    bbox_top_y_diff = abs(float(left_bbox[1] - right_bbox[1]))
+    bbox_center_y_diff = abs(float(left_cy - right_cy))
 
     valid_rect = np.isfinite(rect_left).all(axis=1) & np.isfinite(rect_right).all(axis=1)
     if np.count_nonzero(valid_rect) >= 4:
         median_y_diff = float(np.nanmedian(np.abs(rect_left[valid_rect, 1] - rect_right[valid_rect, 1])))
         if median_y_diff > cfg.max_rectified_joint_y_median_px:
             return False, "rectified_joint_y"
+        # Rectified joint geometry is the primary stereo-consistency signal.
+        # Raw, unrectified bounding-box top coordinates can differ slightly
+        # between camera views even when the keypoints triangulate correctly.
+        return True, "ok_rectified"
+
+    if bbox_top_y_diff > cfg.max_bbox_top_y_diff_px:
+        return False, "bbox_top_y"
+    if bbox_center_y_diff > max_center_diff:
+        return False, "bbox_center_y"
     return True, "ok"

@@ -36,6 +36,7 @@ from common.dataset import (
 )
 from common.metrics import jsonable, mae, median_abs_error, rmse
 from eval_angles import prepare_angles
+from eval_filter_ablation import smooth_keypoints_savgol
 from eval_vs_fastsam import angular_acc_rms, count_jumps
 from estimate_offset import load_selected_offset
 
@@ -112,6 +113,18 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=10.0,
         help="Consecutive-frame angle jump threshold.",
+    )
+    parser.add_argument(
+        "--savgol-window",
+        type=int,
+        default=7,
+        help="Odd Savitzky-Golay keypoint smoothing window for bone->Savgol variants.",
+    )
+    parser.add_argument(
+        "--savgol-polyorder",
+        type=int,
+        default=2,
+        help="Savitzky-Golay polynomial order for bone->Savgol variants.",
     )
     return parser.parse_args()
 
@@ -313,6 +326,8 @@ def summarize_dataset(
     lambdas: Iterable[float],
     trim_percentile: float,
     jump_threshold: float,
+    savgol_window: int,
+    savgol_polyorder: int,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Run the offline bone ablation for one dataset."""
     config = load_config(resolve_project_path(spec.config_path))
@@ -373,6 +388,28 @@ def summarize_dataset(
             )
         )
 
+        constrained_savgol = smooth_keypoints_savgol(
+            constrained,
+            time_s,
+            max_gap=int(section(config, "evaluation").get("max_gap_frames", 5)),
+            window=int(savgol_window),
+            polyorder=int(savgol_polyorder),
+        )
+        constrained_savgol_angles = process_angles(constrained_savgol, time_s, config, eval_angle_names)
+        rows.extend(
+            metric_rows_for_variant(
+                dataset_name=spec.name,
+                variant="soft_bone_no_depth_filter_savgol",
+                lam=float(lam),
+                time_s=time_s,
+                target_angles=constrained_savgol_angles,
+                reference_angles=all_angles["FastSAM3D"],
+                angle_names=eval_angle_names,
+                jump_threshold=jump_threshold,
+                bones=bone_stats(constrained_savgol, priors),
+            )
+        )
+
         constrained_depth, _ = apply_depth_consistency_filter(constrained, config)
         constrained_depth_angles = process_angles(constrained_depth, time_s, config, eval_angle_names)
         rows.extend(
@@ -386,6 +423,28 @@ def summarize_dataset(
                 angle_names=eval_angle_names,
                 jump_threshold=jump_threshold,
                 bones=bone_stats(constrained_depth, priors),
+            )
+        )
+
+        constrained_depth_savgol = smooth_keypoints_savgol(
+            constrained_depth,
+            time_s,
+            max_gap=int(section(config, "evaluation").get("max_gap_frames", 5)),
+            window=int(savgol_window),
+            polyorder=int(savgol_polyorder),
+        )
+        constrained_depth_savgol_angles = process_angles(constrained_depth_savgol, time_s, config, eval_angle_names)
+        rows.extend(
+            metric_rows_for_variant(
+                dataset_name=spec.name,
+                variant="soft_bone_with_current_depth_filter_savgol",
+                lam=float(lam),
+                time_s=time_s,
+                target_angles=constrained_depth_savgol_angles,
+                reference_angles=all_angles["FastSAM3D"],
+                angle_names=eval_angle_names,
+                jump_threshold=jump_threshold,
+                bones=bone_stats(constrained_depth_savgol, priors),
             )
         )
 
@@ -429,6 +488,8 @@ def main() -> None:
             lambdas=args.lambdas,
             trim_percentile=float(args.trim_percentile),
             jump_threshold=float(args.jump_threshold_deg),
+            savgol_window=int(args.savgol_window),
+            savgol_polyorder=int(args.savgol_polyorder),
         )
         all_rows.extend(rows)
         details.append(info)
@@ -440,6 +501,8 @@ def main() -> None:
         "lambdas": args.lambdas,
         "trim_percentile": args.trim_percentile,
         "jump_threshold_deg": args.jump_threshold_deg,
+        "savgol_window": args.savgol_window,
+        "savgol_polyorder": args.savgol_polyorder,
         "details": details,
         "rows": all_rows,
     }

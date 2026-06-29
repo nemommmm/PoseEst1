@@ -67,7 +67,7 @@ references:
   merge_trc:
   include_xsens_native: true
   trc_time_offsets_seconds:
-    FastSAM3D: 5.0
+    FastSAM3D: 5.4
 
 offset:
   # A25_note.md: Fanbo4 time offset ~5s on A257.

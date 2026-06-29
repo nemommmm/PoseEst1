@@ -14,13 +14,51 @@ calibration:
 
 skt:
   use_existing_npz: false
+  existing_npz:
   output_npz: skt_pose_optimized.npz
-  model_path: 01_stereo_triangulation/src/yolov8m-pose.pt
+  model_path: 00_pose_pipeline_v2/model_weights/yolo11l-pose.pt
   confidence_threshold: 0.35
   min_pair_confidence: 0.25
   max_reprojection_px: 80.0
   max_frames:
   center_person_weight: 5.0
+  target_x_fraction: 0.42
+  triangulation:
+    enforce_epipolar_constraint: true
+    epipolar_soft_threshold_px: 10.0
+    epipolar_soft_max_strength: 0.80
+    epipolar_correction_decay_px: 3.0
+    epipolar_base_px: 6.0
+    epipolar_conf_gain_px: 18.0
+    reprojection_base_px: 18.0
+    reprojection_conf_gain_px: 42.0
+    reprojection_max_px: 80.0
+    min_pair_conf: 0.25
+    min_disparity_px: 1.5
+  temporal_window:
+    enabled: true
+    radius: 3
+    min_support: 3
+    min_stereo_quality: 0.35
+    decay_sec: 0.06
+    conf_floor: 0.12
+    support_conf_scale: 0.75
+  tracking:
+    enabled: true
+    full_frame_conf: 0.35
+    crop_conf: 0.20
+    crop_expand: 1.55
+    max_misses: 8
+    refull_interval: 30
+    min_crop_accept_score: 0.62
+    center_person_weight: 5.0
+    target_x_fraction: 0.42
+  stereo_sanity:
+    enabled: true
+    max_bbox_top_y_diff_px: 30.0
+    bbox_height_ratio_range: [0.6, 1.67]
+    max_bbox_center_y_diff_ratio: 0.2
+    max_rectified_joint_y_median_px: 30.0
 
 references:
   xsens_mvnx: 2026_Assar_Data/Xsens MVNX/Fanbo-004.mvnx
@@ -86,4 +124,4 @@ video:
 
 outputs:
   runs_dir: 00_pose_pipeline_v2/runs
-  run_tag: assar2026_fanbo4_a257_elbow_test
+  run_tag: assar2026_fanbo4_a257_stage1_geometry

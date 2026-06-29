@@ -48,6 +48,7 @@ class TrackingConfig:
     refull_interval: int = 30
     min_crop_accept_score: float = 0.62
     center_person_weight: float = 0.0
+    target_x_fraction: float = 0.5
 
     @classmethod
     def from_skt_config(cls, skt_cfg: dict) -> "TrackingConfig":
@@ -62,6 +63,7 @@ class TrackingConfig:
             refull_interval=int(tracking.get("refull_interval", 30)),
             min_crop_accept_score=float(tracking.get("min_crop_accept_score", 0.62)),
             center_person_weight=float(tracking.get("center_person_weight", skt_cfg.get("center_person_weight", 0.0))),
+            target_x_fraction=float(tracking.get("target_x_fraction", skt_cfg.get("target_x_fraction", 0.5))),
         )
 
 
@@ -196,7 +198,8 @@ def score_candidate(candidate: DetectionCandidate, prev_bbox: np.ndarray | None,
     )
     if cfg.center_person_weight > 0.0 and w > 0:
         center_x = bbox_center(candidate.bbox)[0]
-        center_bonus = 1.0 - abs(center_x - w * 0.5) / max(w * 0.5, 1.0)
+        target_x = w * float(np.clip(cfg.target_x_fraction, 0.0, 1.0))
+        center_bonus = 1.0 - abs(center_x - target_x) / max(w * 0.5, 1.0)
         base_score += cfg.center_person_weight * max(center_bonus, 0.0)
 
     if prev_bbox is None:

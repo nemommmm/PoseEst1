@@ -46,6 +46,16 @@ class PositionFlags:
     stats: dict[str, float | int]
 
 
+@dataclass(frozen=True)
+class AdaptiveLambda:
+    """Per-frame bone-prior strength derived from stereo depth uncertainty."""
+
+    values: np.ndarray
+    sigma_z_cm: np.ndarray
+    depth_cm: np.ndarray
+    stats: dict[str, float | int]
+
+
 def contiguous_true_ranges(mask: np.ndarray) -> list[tuple[int, int]]:
     """Return [start, end) ranges for contiguous True values."""
     ranges: list[tuple[int, int]] = []
@@ -216,6 +226,81 @@ def flag_positions(
     )
 
 
+def depth_adaptive_lambda(
+    keypoints: np.ndarray,
+    *,
+    fx_px: float,
+    baseline_cm: float,
+    sigma_disparity_px: float = 0.5,
+    lambda_base: float = 0.3,
+    sigma_z_ref_cm: float = 0.55,
+    exponent: float = 1.3,
+    min_lambda: float = 0.15,
+    max_lambda: float = 1.8,
+    joint_indices: tuple[int, ...] = tuple(range(5, 17)),
+) -> AdaptiveLambda:
+    """Compute per-frame bone lambda from stereo depth uncertainty.
+
+    ``lambda_base`` is the bone strength at ``sigma_z_ref_cm``. Since this code
+    uses lambda as the bone residual weight, noisier depth measurements increase
+    the effective lambda.
+    """
+    positions = np.asarray(keypoints, dtype=np.float64)
+    depth = np.nanmedian(positions[:, list(joint_indices), 2], axis=1)
+    finite_depth = depth[np.isfinite(depth)]
+    fallback_depth = float(np.nanmedian(finite_depth)) if len(finite_depth) else 250.0
+    safe_depth = np.where(np.isfinite(depth), depth, fallback_depth)
+    fx_px = max(float(fx_px), 1.0)
+    baseline_cm = max(float(baseline_cm), 1.0)
+    sigma_z = (safe_depth ** 2 / (fx_px * baseline_cm)) * float(sigma_disparity_px)
+    scale = (sigma_z / max(float(sigma_z_ref_cm), 1e-6)) ** float(exponent)
+    lam = float(lambda_base) * scale
+    lam = np.clip(lam, float(min_lambda), float(max_lambda))
+    finite = np.isfinite(lam)
+    if np.any(finite):
+        values = lam[finite]
+        sigma_values = sigma_z[finite]
+        depth_values = safe_depth[finite]
+        stats = {
+            "lambda_mean": float(np.mean(values)),
+            "lambda_median": float(np.median(values)),
+            "lambda_p10": float(np.percentile(values, 10)),
+            "lambda_p90": float(np.percentile(values, 90)),
+            "lambda_min": float(np.min(values)),
+            "lambda_max": float(np.max(values)),
+            "lambda_at_min_count": int(np.sum(np.isclose(values, float(min_lambda)))),
+            "lambda_at_max_count": int(np.sum(np.isclose(values, float(max_lambda)))),
+            "sigma_z_mean_cm": float(np.mean(sigma_values)),
+            "sigma_z_median_cm": float(np.median(sigma_values)),
+            "sigma_z_p10_cm": float(np.percentile(sigma_values, 10)),
+            "sigma_z_p90_cm": float(np.percentile(sigma_values, 90)),
+            "depth_mean_cm": float(np.mean(depth_values)),
+            "depth_median_cm": float(np.median(depth_values)),
+            "depth_p10_cm": float(np.percentile(depth_values, 10)),
+            "depth_p90_cm": float(np.percentile(depth_values, 90)),
+        }
+    else:
+        stats = {
+            "lambda_mean": math.nan,
+            "lambda_median": math.nan,
+            "lambda_p10": math.nan,
+            "lambda_p90": math.nan,
+            "lambda_min": math.nan,
+            "lambda_max": math.nan,
+            "lambda_at_min_count": 0,
+            "lambda_at_max_count": 0,
+            "sigma_z_mean_cm": math.nan,
+            "sigma_z_median_cm": math.nan,
+            "sigma_z_p10_cm": math.nan,
+            "sigma_z_p90_cm": math.nan,
+            "depth_mean_cm": math.nan,
+            "depth_median_cm": math.nan,
+            "depth_p10_cm": math.nan,
+            "depth_p90_cm": math.nan,
+        }
+    return AdaptiveLambda(values=lam, sigma_z_cm=sigma_z, depth_cm=safe_depth, stats=stats)
+
+
 def solve_chain_soft_constraint(
     pose: np.ndarray,
     chain: tuple[str, int, int, int, str, str],
@@ -264,21 +349,23 @@ def soft_bone_constrain_positions(
     keypoints: np.ndarray,
     priors: dict[str, float],
     *,
-    lam: float = 1.0,
+    lam: float | np.ndarray = 1.0,
     measurement_weight: np.ndarray | None = None,
     flagged_prior_boost: float = 1.0,
 ) -> np.ndarray:
     """Apply per-frame soft limb-length constraints to all configured chains."""
     corrected = np.asarray(keypoints, dtype=np.float64).copy()
+    lambda_values = np.asarray(lam, dtype=np.float64) if np.ndim(lam) else None
     for frame_idx in range(len(corrected)):
         pose = corrected[frame_idx]
         frame_weight = None if measurement_weight is None else measurement_weight[frame_idx]
+        frame_lam = float(lambda_values[frame_idx]) if lambda_values is not None else float(lam)
         for chain in LIMB_CHAINS:
             pose = solve_chain_soft_constraint(
                 pose=pose,
                 chain=chain,
                 priors=priors,
-                lam=lam,
+                lam=frame_lam,
                 observation_weight=frame_weight,
                 flagged_prior_boost=flagged_prior_boost,
             )
@@ -389,4 +476,3 @@ def kf_rts_smooth_positions(
                 min_weight=min_weight,
             )
     return out
-

@@ -27,6 +27,7 @@ from common.config import load_config, resolve_path, section
 from common.dataset import load_skt_keypoints
 from common.metrics import jsonable, mae, median_abs_error, rmse
 from common.position_postprocess import (
+    depth_adaptive_lambda,
     flag_positions,
     kf_rts_smooth_positions,
     soft_bone_constrain_positions,
@@ -72,6 +73,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--measurement-std", type=float, default=2.0)
     parser.add_argument("--jump-threshold-deg", type=float, default=10.0)
     parser.add_argument("--trim-percentile", type=float, default=25.0)
+    parser.add_argument("--sigma-disparity-px", type=float, default=0.5)
+    parser.add_argument("--adaptive-lambda-base", type=float, default=0.3)
+    parser.add_argument("--adaptive-sigma-z-ref-cm", type=float, default=0.55)
+    parser.add_argument("--adaptive-exponent", type=float, default=1.3)
+    parser.add_argument("--adaptive-min-lambda", type=float, default=0.15)
+    parser.add_argument("--adaptive-max-lambda", type=float, default=1.8)
     return parser.parse_args()
 
 
@@ -114,6 +121,16 @@ def all_finite_weight(keypoints: np.ndarray) -> np.ndarray:
     """Return unit measurement weight for finite joint positions."""
     finite = np.isfinite(keypoints).all(axis=2)
     return finite.astype(np.float64)
+
+
+def camera_geometry_from_config(config: dict) -> tuple[float, float]:
+    """Return mean focal length and stereo baseline from the calibration file."""
+    calibration = section(config, "calibration")
+    params_path = resolve_path(calibration.get("camera_params"), must_exist=True)
+    payload = np.load(params_path)
+    fx_px = float(0.5 * (payload["mtx_l"][0, 0] + payload["mtx_r"][0, 0]))
+    baseline_cm = float(np.linalg.norm(payload["T"].reshape(-1)))
+    return fx_px, baseline_cm
 
 
 def metric_rows_for_variant(
@@ -176,11 +193,29 @@ def build_variants(
     process_accel_std: float,
     measurement_std: float,
     trim_percentile: float,
+    sigma_disparity_px: float,
+    adaptive_lambda_base: float,
+    adaptive_sigma_z_ref_cm: float,
+    adaptive_exponent: float,
+    adaptive_min_lambda: float,
+    adaptive_max_lambda: float,
 ) -> tuple[dict[str, np.ndarray], dict[str, dict[str, object]]]:
     """Create position-level ablation variants from raw SKT keypoints."""
     flags = flag_positions(raw_keypoints, time_s, payload, trim_percentile=trim_percentile)
     priors = flags.bone_priors_cm
     unit_weight = all_finite_weight(raw_keypoints)
+    fx_px, baseline_cm = camera_geometry_from_config(config)
+    adaptive = depth_adaptive_lambda(
+        raw_keypoints,
+        fx_px=fx_px,
+        baseline_cm=baseline_cm,
+        sigma_disparity_px=sigma_disparity_px,
+        lambda_base=adaptive_lambda_base,
+        sigma_z_ref_cm=adaptive_sigma_z_ref_cm,
+        exponent=adaptive_exponent,
+        min_lambda=adaptive_min_lambda,
+        max_lambda=adaptive_max_lambda,
+    )
     variants: dict[str, np.ndarray] = {
         "raw_positions": raw_keypoints,
     }
@@ -237,9 +272,41 @@ def build_variants(
         "kf_rts_smooth": True,
         **{f"flag_{key}": value for key, value in flags.stats.items()},
     }
+    adaptive_flag_bone = soft_bone_constrain_positions(
+        raw_keypoints,
+        priors,
+        lam=adaptive.values,
+        measurement_weight=flags.measurement_weight,
+        flagged_prior_boost=1.0,
+    )
+    adaptive_flag_bone_smooth = kf_rts_smooth_positions(
+        adaptive_flag_bone,
+        time_s,
+        flags.measurement_weight,
+        process_accel_std_cm_s2=process_accel_std,
+        measurement_std_cm=measurement_std,
+    )
+    variants["adaptive_flag_bone_smooth"] = adaptive_flag_bone_smooth
+    meta["adaptive_flag_bone_smooth"] = {
+        "velocity_flag": True,
+        "bone_correct": True,
+        "kf_rts_smooth": True,
+        "adaptive_lambda": True,
+        "fx_px": fx_px,
+        "baseline_cm": baseline_cm,
+        "sigma_disparity_px": sigma_disparity_px,
+        "adaptive_lambda_base": adaptive_lambda_base,
+        "adaptive_sigma_z_ref_cm": adaptive_sigma_z_ref_cm,
+        "adaptive_exponent": adaptive_exponent,
+        "adaptive_min_lambda": adaptive_min_lambda,
+        "adaptive_max_lambda": adaptive_max_lambda,
+        **{f"flag_{key}": value for key, value in flags.stats.items()},
+        **{f"adaptive_{key}": value for key, value in adaptive.stats.items()},
+    }
     for variant_meta in meta.values():
         variant_meta.update({
             "bone_lambda": bone_lambda,
+            "adaptive_lambda": bool(variant_meta.get("adaptive_lambda", False)),
             "process_accel_std_cm_s2": process_accel_std,
             "measurement_std_cm": measurement_std,
         })
@@ -254,6 +321,12 @@ def summarize_dataset(
     measurement_std: float,
     jump_threshold: float,
     trim_percentile: float,
+    sigma_disparity_px: float,
+    adaptive_lambda_base: float,
+    adaptive_sigma_z_ref_cm: float,
+    adaptive_exponent: float,
+    adaptive_min_lambda: float,
+    adaptive_max_lambda: float,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Run the position-level ablation for one dataset."""
     config = load_config(resolve_project_path(spec.config_path))
@@ -301,6 +374,12 @@ def summarize_dataset(
         process_accel_std=process_accel_std,
         measurement_std=measurement_std,
         trim_percentile=trim_percentile,
+        sigma_disparity_px=sigma_disparity_px,
+        adaptive_lambda_base=adaptive_lambda_base,
+        adaptive_sigma_z_ref_cm=adaptive_sigma_z_ref_cm,
+        adaptive_exponent=adaptive_exponent,
+        adaptive_min_lambda=adaptive_min_lambda,
+        adaptive_max_lambda=adaptive_max_lambda,
     )
     for variant_name, positions in variants.items():
         angles = process_angles(positions, time_s, config, eval_angle_names)
@@ -377,6 +456,12 @@ def main() -> None:
             measurement_std=float(args.measurement_std),
             jump_threshold=float(args.jump_threshold_deg),
             trim_percentile=float(args.trim_percentile),
+            sigma_disparity_px=float(args.sigma_disparity_px),
+            adaptive_lambda_base=float(args.adaptive_lambda_base),
+            adaptive_sigma_z_ref_cm=float(args.adaptive_sigma_z_ref_cm),
+            adaptive_exponent=float(args.adaptive_exponent),
+            adaptive_min_lambda=float(args.adaptive_min_lambda),
+            adaptive_max_lambda=float(args.adaptive_max_lambda),
         )
         all_rows.extend(rows)
         details.append(info)
@@ -392,6 +477,12 @@ def main() -> None:
             "measurement_std_cm": args.measurement_std,
             "jump_threshold_deg": args.jump_threshold_deg,
             "trim_percentile": args.trim_percentile,
+            "sigma_disparity_px": args.sigma_disparity_px,
+            "adaptive_lambda_base": args.adaptive_lambda_base,
+            "adaptive_sigma_z_ref_cm": args.adaptive_sigma_z_ref_cm,
+            "adaptive_exponent": args.adaptive_exponent,
+            "adaptive_min_lambda": args.adaptive_min_lambda,
+            "adaptive_max_lambda": args.adaptive_max_lambda,
             "reference": "FastSAM3D comparison trajectory; not absolute ground truth.",
         },
         "details": details,

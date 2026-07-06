@@ -68,6 +68,59 @@ DEFAULT_DATASETS = {
         name="2025_ergonomics",
         config_path=Path("00_pose_pipeline_v2/configs/current_2025_ergonomics.yaml"),
     ),
+    # ---- Pipeline × Model ablation cells (Amrit ablation study) ----
+    "fanbo7_v1_yolov8m": DatasetSpec(
+        name="fanbo7_v1_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo7_v1_yolov8m_eval.yaml"),
+    ),
+    "fanbo7_v1_yolo11l": DatasetSpec(
+        name="fanbo7_v1_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo7_v1_yolo11l.yaml"),
+    ),
+    "fanbo7_v2_yolov8m": DatasetSpec(
+        name="fanbo7_v2_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo7_v2_yolov8m.yaml"),
+    ),
+    "fanbo7_v2_yolo11l": DatasetSpec(
+        name="fanbo7_v2_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/assar2026_fanbo7_a257.yaml"),
+        run_dir=Path("00_pose_pipeline_v2/runs/assar2026_fanbo7_a257_stage1_geometry"),
+    ),
+    "fanbo4_v1_yolov8m": DatasetSpec(
+        name="fanbo4_v1_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo4_v1_yolov8m_eval.yaml"),
+    ),
+    "fanbo4_v1_yolo11l": DatasetSpec(
+        name="fanbo4_v1_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo4_v1_yolo11l.yaml"),
+    ),
+    "fanbo4_v2_yolov8m": DatasetSpec(
+        name="fanbo4_v2_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo4_v2_yolov8m.yaml"),
+    ),
+    "fanbo4_v2_yolo11l": DatasetSpec(
+        name="fanbo4_v2_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/assar2026_fanbo4_a257.yaml"),
+        run_dir=Path("00_pose_pipeline_v2/runs/assar2026_fanbo4_a257_stage1_geometry"),
+    ),
+    # ---- fanbo3 walking ablation cells ----
+    "fanbo3_v1_yolov8m": DatasetSpec(
+        name="fanbo3_v1_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo3_v1_yolov8m.yaml"),
+    ),
+    "fanbo3_v1_yolo11l": DatasetSpec(
+        name="fanbo3_v1_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo3_v1_yolo11l.yaml"),
+    ),
+    "fanbo3_v2_yolov8m": DatasetSpec(
+        name="fanbo3_v2_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo3_v2_yolov8m.yaml"),
+    ),
+    "fanbo3_v2_yolo11l": DatasetSpec(
+        name="fanbo3_v2_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/assar2026_fanbo3_a255.yaml"),
+        run_dir=Path("00_pose_pipeline_v2/runs/assar2026_fanbo3_a255_walking"),
+    ),
 }
 
 DEFAULT_PRIORS_CM = {

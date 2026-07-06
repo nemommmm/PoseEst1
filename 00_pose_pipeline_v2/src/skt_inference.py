@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
 
 import cv2
@@ -141,14 +142,19 @@ def run_skt(config: dict, run_dir: Path) -> Path:
     track_source_r: list[str] = []
     sanity_ok_all: list[bool] = []
     sanity_reason_all: list[str] = []
+    yolo_time_ms_all: list[float] = []
+    frame_time_ms_all: list[float] = []
 
     for idx in tqdm(range(len(synced)), desc="SKT", unit="frame"):
+        frame_t0 = time.perf_counter()
         ok, frame_l, frame_r = reader.read_synced_sequential(idx)
         if not ok or frame_l is None or frame_r is None:
             break
 
+        yolo_t0 = time.perf_counter()
         cand_l, track_l = infer_tracked_pose(model, frame_l, track_l, idx, tracking_cfg)
         cand_r, track_r = infer_tracked_pose(model, frame_r, track_r, idx, tracking_cfg)
+        yolo_time_ms_all.append((time.perf_counter() - yolo_t0) * 1000.0)
         pts_l, conf_l, bbox_l = _candidate_payload(cand_l)
         pts_r, conf_r, bbox_r = _candidate_payload(cand_r)
 
@@ -173,6 +179,7 @@ def run_skt(config: dict, run_dir: Path) -> Path:
         track_source_r.append(str(track_r.last_source))
         sanity_ok_all.append(bool(sanity_ok))
         sanity_reason_all.append(str(sanity_reason))
+        frame_time_ms_all.append((time.perf_counter() - frame_t0) * 1000.0)
 
     reader.release()
 
@@ -246,6 +253,8 @@ def run_skt(config: dict, run_dir: Path) -> Path:
         track_source_right=np.asarray(track_source_r),
         stereo_sanity_ok=np.asarray(sanity_ok_all, dtype=bool),
         stereo_sanity_reason=np.asarray(sanity_reason_all),
+        yolo_time_ms=np.asarray(yolo_time_ms_all, dtype=np.float64),
+        frame_time_ms=np.asarray(frame_time_ms_all, dtype=np.float64),
         epipolar_shift_left_px=final["epipolar_shift_left_px"],
         epipolar_shift_right_px=final["epipolar_shift_right_px"],
         temporal_rescue_left=rescue_mask_left,

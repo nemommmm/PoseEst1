@@ -201,3 +201,18 @@ test-time augmentation cannot recover the real-time requirement and were not
 run after this failure. Per the project rule, the MeTRAbs integration was
 rolled back; the isolated external environment, ignored run evidence, and this
 negative-result log were retained.
+
+## 2026-07-12 — EasyMocap / SMPL Readiness Gate
+
+EasyMocap commit `e681319` was cloned under the persistent external directory.
+Its CUDA SMPL module imported successfully with PyTorch 2.8 / CUDA 12.8. A
+reproducible dependency setup, licensed-asset validator, private-path ignore
+rules, and bilingual download instructions were added.
+
+The formal SMPL fitting experiment did not start because neither the local
+workspace nor `/workspace/model_assets/smpl/` contains a licensed neutral SMPL
+model. The setup script exits with code 2 at this expected asset gate. No model
+parameters were downloaded from unofficial sources, and no Xsens-derived
+signal was used. Once the user supplies `SMPL_NEUTRAL.pkl` under the documented
+persistent path, the CUDA zero-pose validation must pass before any 40-frame
+fitting gate is allowed to run.

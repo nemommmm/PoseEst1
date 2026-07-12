@@ -86,10 +86,21 @@ class YoloDetector:
 class RtmposeDetector:
     """RTMLib Body wrapper."""
 
-    def __init__(self, mode: str, device: str, min_detection_conf: float) -> None:
+    def __init__(
+        self,
+        mode: str,
+        device: str,
+        min_detection_conf: float,
+        one_stage: bool = False,
+    ) -> None:
         from rtmlib import Body
 
-        self.body = Body(mode=mode, backend="onnxruntime", device=device)
+        self.body = Body(
+            pose="rtmo" if one_stage else None,
+            mode=mode,
+            backend="onnxruntime",
+            device=device,
+        )
         self.min_detection_conf = float(min_detection_conf)
 
     def detect(self, image: np.ndarray) -> tuple[np.ndarray, np.ndarray] | None:
@@ -164,6 +175,13 @@ def instantiate_detector(candidate: dict, image_width: int) -> tuple[Detector | 
                 mode=str(candidate.get("mode", "balanced")),
                 device=str(candidate.get("device", "cpu")),
                 min_detection_conf=float(candidate.get("min_detection_conf", 0.20)),
+            ), ""
+        if kind == "rtmo":
+            return RtmposeDetector(
+                mode=str(candidate.get("mode", "balanced")),
+                device=str(candidate.get("device", "cpu")),
+                min_detection_conf=float(candidate.get("min_detection_conf", 0.20)),
+                one_stage=True,
             ), ""
         if kind == "sapiens":
             return None, "Sapiens wrapper is not implemented in v2 Stage 1"

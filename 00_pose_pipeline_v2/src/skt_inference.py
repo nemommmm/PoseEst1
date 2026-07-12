@@ -7,6 +7,7 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import torch
 from tqdm import tqdm
 from ultralytics import YOLO
 
@@ -31,6 +32,24 @@ from common.triangulation import (
 from stereo_loader import StereoFrameReader, build_synced_timeline
 
 NUM_COCO_JOINTS = 17
+
+
+def configure_deterministic_cuda(enabled: bool = True) -> bool:
+    """Configure reproducible CUDA inference and return whether it is active.
+
+    TF32 and cuDNN autotuning can introduce small device-dependent keypoint
+    changes. In a crop-tracked stereo sequence, those changes may alter later
+    crops and amplify into materially different 3D joint angles.
+    """
+    active = bool(enabled and torch.cuda.is_available())
+    if not active:
+        return False
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+    torch.use_deterministic_algorithms(True)
+    return True
 
 
 def choose_person(
@@ -124,6 +143,11 @@ def run_skt(config: dict, run_dir: Path) -> Path:
     tri_cfg = TriangulationConfig.from_skt_config(skt)
     tw_cfg = TemporalWindowConfig.from_skt_config(skt)
 
+    deterministic_cuda = configure_deterministic_cuda(
+        bool(skt.get("deterministic_cuda", True))
+    )
+    if deterministic_cuda:
+        print("[skt] deterministic CUDA inference enabled")
     model = YOLO(str(model_path))
     track_l = TrackState()
     track_r = TrackState()
@@ -263,6 +287,7 @@ def run_skt(config: dict, run_dir: Path) -> Path:
         stereo_quality_pass1=final.get("stereo_quality_pass1", pass1["stereo_quality"]),
         pair_confidence_pass1=final.get("pair_confidence_pass1", pass1["pair_confidence"]),
         model_name=np.asarray(str(model_path.name)),
+        deterministic_cuda=np.asarray(deterministic_cuda, dtype=bool),
         postprocess_variant=np.asarray(_variant_name(tri_cfg, tw_cfg, tracking_cfg)),
         reprojection_threshold_px=np.asarray(tri_cfg.reprojection_max_px, dtype=np.float64),
     )

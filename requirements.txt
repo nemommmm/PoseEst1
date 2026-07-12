@@ -1,5 +1,6 @@
 # Core GPU pose pipeline
-ultralytics>=8.3,<9
+# Match the version used to produce the canonical local CPU baselines.
+ultralytics==8.3.235
 opencv-python-headless>=4.10,<5
 numpy>=1.26,<3
 scipy>=1.13,<2

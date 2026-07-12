@@ -1,0 +1,4 @@
+# Optional ONNX/TensorRT export dependencies for the CUDA 12.8 Runpod image.
+onnx==1.19.1
+onnxslim==0.1.94
+tensorrt-cu12==10.13.3.9

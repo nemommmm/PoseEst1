@@ -70,3 +70,31 @@ Conclusion: the deterministic A6000 pipeline reproduces the local reference
 results and exceeds the 12.5 fps camera rate for all evaluated distances and
 camera views. Fanbo9 again confirms that A257 has stronger agreement with the
 FastSAM3D comparison trajectory than A255; this is not a ground-truth claim.
+
+## 2026-07-12 — PyTorch, ONNX, and TensorRT Real-time Backend Benchmark
+
+The benchmark runs the real crop-tracked SKT path and separates video decode,
+stereo pose inference, per-frame geometry, and sequence post-processing.
+Reported FPS includes online decode, inference, tracking, and geometry.
+
+| Backend | Dataset | Online FPS | Pose ms | Decode median ms | Online p95 ms | RightElbow MAE |
+|---|---|---:|---:|---:|---:|---:|
+| PyTorch FP32 | Fanbo7 | 28.88 | 23.44 | 9.41 | 43.76 | 10.43 deg |
+| PyTorch FP32 | Fanbo4 | 29.23 | 23.71 | 9.22 | 46.30 | 13.66 deg |
+| ONNX Runtime CUDA | Fanbo7 | 17.02 | 25.53 | 9.07 | 245.88 | 12.36 deg |
+| ONNX Runtime CUDA | Fanbo4 | 25.70 | 25.10 | 9.06 | 40.87 | 13.65 deg |
+| TensorRT FP16 | Fanbo7 | 30.21 | 17.49 | 8.22 | 56.50 | 12.81 deg |
+| TensorRT FP16 | Fanbo4 | 26.80 | 16.46 | 8.45 | 58.36 | 15.62 deg |
+
+TensorRT reduced stereo pose inference latency by about 26-31%, but ONNX and
+TensorRT changed first-frame full-image keypoints by roughly 0.8 pixels and
+the crop tracker amplified the difference. PT-vs-ONNX and PT-vs-TRT
+RightElbow trajectory MAE on the first 200 Fanbo7 frames was 3.72 and 3.44
+degrees, respectively. Both deployment backends therefore failed the accuracy
+gate despite exceeding 12.5 fps.
+
+The Fanbo7 ONNX mean was additionally affected by network-volume decode
+outliers (9.07 ms median, 221 ms p95). Decode and model latency must remain
+separate in deployment claims. Accepted current backend: deterministic
+PyTorch FP32. TensorRT FP16 remains a speed result, not an accuracy-preserving
+replacement.

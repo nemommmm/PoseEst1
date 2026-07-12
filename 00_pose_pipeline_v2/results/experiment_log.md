@@ -98,3 +98,27 @@ outliers (9.07 ms median, 221 ms p95). Decode and model latency must remain
 separate in deployment claims. Accepted current backend: deterministic
 PyTorch FP32. TensorRT FP16 remains a speed result, not an accuracy-preserving
 replacement.
+
+### Model-size and stereo-batch timing
+
+All PyTorch model sizes exceeded 12.5 fps on the 200-frame Fanbo7 timing run.
+Network-volume decode outliers make mean FPS less stable than model latency.
+
+| Model | Stereo pose mean ms | Online FPS |
+|---|---:|---:|
+| YOLOv8m-pose | 23.44 | 28.88 |
+| YOLO11n-pose | 23.97 | 24.87 |
+| YOLO11s-pose | 21.96 | 22.64 |
+| YOLO11m-pose | 25.29 | 28.58 |
+| YOLO11l-pose | 33.23 | 23.19 |
+
+The non-monotonic online FPS values reflect decode jitter and tracking branch
+behavior; model latency is the appropriate column for model-size comparison.
+These runs are timing results only and do not replace the existing canonical
+accuracy ablation.
+
+For YOLOv8m full-frame model-only inference, one batch=2 call processed a
+stereo pair in 21.36 ms versus 23.79 ms for two serial calls, a 1.11x speedup.
+The production crop tracker uses different left/right ROIs and therefore still
+runs serially. Batch=2 is recorded as an optimization opportunity, not as an
+equivalent end-to-end result.

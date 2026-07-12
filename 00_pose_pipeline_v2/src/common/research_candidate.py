@@ -118,7 +118,6 @@ class CandidateResult:
     timestamps: np.ndarray
     keypoints_3d: np.ndarray
     angle_names: tuple[str, ...] = SEMANTIC_ANGLE_NAMES
-    angles_override: np.ndarray | None = None
     confidence_2d: np.ndarray | None = None
     epipolar_error_px: np.ndarray | None = None
     reprojection_error_px: np.ndarray | None = None
@@ -135,11 +134,6 @@ class CandidateResult:
             raise ValueError("keypoints_3d must have shape (frames, 17, 3)")
         if len(timestamps) > 1 and np.any(np.diff(timestamps) < 0):
             raise ValueError("timestamps must be non-decreasing")
-        if self.angles_override is not None and np.asarray(self.angles_override).shape != (
-            len(timestamps),
-            len(self.angle_names),
-        ):
-            raise ValueError("angles_override must have shape (frames, len(angle_names))")
         for field_name, values in (
             ("confidence_2d", self.confidence_2d),
             ("epipolar_error_px", self.epipolar_error_px),
@@ -151,16 +145,10 @@ class CandidateResult:
     def save(self, path: Path) -> Path:
         """Validate and save a self-describing compressed NPZ."""
         self.validate()
-        if self.angles_override is None:
-            angles = compute_angle_sequence(self.keypoints_3d, list(self.angle_names))
-            angle_matrix = np.column_stack([angles[name] for name in self.angle_names])
-            angle_source = "geometric_from_keypoints"
-        else:
-            angle_matrix = np.asarray(self.angles_override, dtype=np.float64)
-            angle_source = "candidate_override"
+        angles = compute_angle_sequence(self.keypoints_3d, list(self.angle_names))
+        angle_matrix = np.column_stack([angles[name] for name in self.angle_names])
         metadata = dict(self.metadata)
         metadata["bone_statistics_cm"] = compute_bone_statistics(self.keypoints_3d)
-        metadata["angle_source"] = angle_source
         arrays: dict[str, Any] = {
             "schema_version": np.asarray("research_candidate_v1"),
             "candidate_name": np.asarray(self.candidate_name),

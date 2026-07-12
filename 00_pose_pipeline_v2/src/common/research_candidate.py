@@ -30,22 +30,6 @@ COCO_ALIASES = {
     "right_knee": "RKnee",
     "left_ankle": "LAnkle",
     "right_ankle": "RAnkle",
-    "lsho": "LShoulder",
-    "rsho": "RShoulder",
-    "lelb": "LElbow",
-    "relb": "RElbow",
-    "lwri": "LWrist",
-    "rwri": "RWrist",
-    "lhip": "LHip",
-    "rhip": "RHip",
-    "lkne": "LKnee",
-    "rkne": "RKnee",
-    "lank": "LAnkle",
-    "rank": "RAnkle",
-    "leye": "LEye",
-    "reye": "REye",
-    "lear": "LEar",
-    "rear": "REar",
 }
 
 BONES = {
@@ -137,7 +121,6 @@ class CandidateResult:
     confidence_2d: np.ndarray | None = None
     epipolar_error_px: np.ndarray | None = None
     reprojection_error_px: np.ndarray | None = None
-    stereo_consistency_cm: np.ndarray | None = None
     stage_time_ms: Mapping[str, np.ndarray | float] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
@@ -155,7 +138,6 @@ class CandidateResult:
             ("confidence_2d", self.confidence_2d),
             ("epipolar_error_px", self.epipolar_error_px),
             ("reprojection_error_px", self.reprojection_error_px),
-            ("stereo_consistency_cm", self.stereo_consistency_cm),
         ):
             if values is not None and np.asarray(values).shape[:2] != (len(timestamps), 17):
                 raise ValueError(f"{field_name} must begin with shape (frames, 17)")
@@ -181,7 +163,6 @@ class CandidateResult:
             "confidence_2d": self.confidence_2d,
             "epipolar_error_px": self.epipolar_error_px,
             "reprojection_error_px": self.reprojection_error_px,
-            "stereo_consistency_cm": self.stereo_consistency_cm,
         }
         arrays.update({name: np.asarray(value) for name, value in optional.items() if value is not None})
         for name, value in self.stage_time_ms.items():

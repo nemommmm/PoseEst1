@@ -75,6 +75,20 @@ class ResearchCandidateTest(unittest.TestCase):
                 right_elbow = payload["angles"][0, angle_names.index("RightElbow")]
                 self.assertAlmostEqual(float(right_elbow), 90.0)
 
+    def test_candidate_angle_override(self) -> None:
+        pose = np.full((2, 17, 3), np.nan, dtype=np.float64)
+        override = np.arange(16, dtype=np.float64).reshape(2, 8)
+        result = CandidateResult(
+            "opensim",
+            np.array([0.0, 0.08]),
+            pose,
+            angles_override=override,
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            path = result.save(Path(tmp) / "candidate.npz")
+            with np.load(path, allow_pickle=False) as payload:
+                np.testing.assert_allclose(payload["angles"], override)
+
 
 if __name__ == "__main__":
     unittest.main()

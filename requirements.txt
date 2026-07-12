@@ -7,8 +7,9 @@ matplotlib>=3.9,<4
 tqdm>=4.66,<5
 PyYAML>=6,<7
 
-# Alternative pose backends and deployment
-rtmlib>=0.0.13
+# Alternative pose backends and deployment. RTMLib is installed with
+# --no-deps by tools/setup_remote_env.sh because its broad dependencies pull
+# CPU ONNX Runtime and multiple conflicting OpenCV wheels.
 onnx>=1.17,<2
 onnxruntime-gpu>=1.20,<2
 

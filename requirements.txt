@@ -11,7 +11,8 @@ PyYAML>=6,<7
 # --no-deps by tools/setup_remote_env.sh because its broad dependencies pull
 # CPU ONNX Runtime and multiple conflicting OpenCV wheels.
 onnx>=1.17,<2
-onnxruntime-gpu>=1.20,<2
+# 1.27 wheels require CUDA 13; the Runpod image currently provides CUDA 12.8.
+onnxruntime-gpu==1.22.0
 
 # Utilities used by evaluation/report scripts
 pandas>=2.2,<3

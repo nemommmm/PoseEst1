@@ -122,3 +122,29 @@ stereo pair in 21.36 ms versus 23.79 ms for two serial calls, a 1.11x speedup.
 The production crop tracker uses different left/right ROIs and therefore still
 runs serially. Batch=2 is recorded as an optimization opportunity, not as an
 equivalent end-to-end result.
+
+## 2026-07-12 — New Pose Model Stereo Gate on A6000
+
+Recent model families were screened in two directions: RTMPose-X as an
+accuracy-oriented two-stage candidate, and RTMPose-S / RTMO-S/M as real-time
+candidates. ViTPose-L/H and RTMW-L were retained as literature candidates but
+not run after the lighter RTMPose-X already exceeded the latency gate.
+
+The diagnostic uses identical sampled stereo frames and reports real latency
+per stereo pair plus right-arm rectified epipolar consistency. A candidate must
+work on both Fanbo7 near-view and Fanbo4 far-view data.
+
+| Candidate | Fanbo7 ms | Fanbo7 epi median/p95 px | Fanbo4 ms | Fanbo4 epi median/p95 px | Decision |
+|---|---:|---:|---:|---:|---|
+| RTMPose-S | 86.3 | 121.3 / 289.1 | 75.3 | 0.58 / 3.87 | reject: near-view geometry |
+| RTMPose-M | 92.6 | 4.83 / 323.6 | 118.9 | 0.41 / 94.7 | reject: latency and outliers |
+| RTMPose-X | 126.2 | 2.99 / 123.0 | 180.8 | 0.53 / 121.1 | reject: latency and outliers |
+| RTMO-S | 65.9 | 196.2 / 357.0 | 44.4 | 0.87 / 385.9 | reject: stereo inconsistency |
+| RTMO-M | 45.8 | 305.6 / 426.5 | 41.9 | 1.16 / 406.2 | reject: stereo inconsistency |
+
+RTMO met the model-level speed target but produced catastrophic left/right
+semantic inconsistency on some frames. RTMPose-X improved median epipolar
+agreement but could not meet the 80 ms stereo-pair budget and retained large
+outliers. No candidate advanced to full 3D angle evaluation. This gate avoids
+reporting misleading 3D errors from models that are confident monocularly but
+not stereo-consistent.

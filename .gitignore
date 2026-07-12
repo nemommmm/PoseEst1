@@ -252,6 +252,12 @@ Calibration_video/
 *.npy
 *.pt
 
+# Licensed parametric body-model assets must never be committed.
+model_assets/
+**/SMPL_*.pkl
+**/SMPLX_*.pkl
+**/basicmodel_*_lbs_*.pkl
+
 # Exceptions: calibration params and search logs must be tracked for reproducibility.
 # Only the final named files are tracked; *_candidate.npz (intermediate drafts) are excluded.
 !shared/camera_params_2025.npz

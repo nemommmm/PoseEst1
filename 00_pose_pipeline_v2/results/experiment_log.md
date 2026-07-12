@@ -48,3 +48,25 @@ Result: the GPU reproduction passed the 0.1-degree alignment tolerance and the
 12.5 fps target on Fanbo7. Detailed real-time backend benchmarking remains a
 separate workstream because the current frame timing combines decode,
 inference, triangulation, and tracking.
+
+## 2026-07-12 — A6000 Deterministic GPU Reproduction Across Fanbo4/7/9
+
+All runs use V2 + YOLOv8m with deterministic CUDA and H.264 QP 0 compressed
+stereo streams. FastSAM3D and Xsens are external comparison/reference systems.
+
+| Dataset | Frames | FastSAM3D MAE | Mean valid ratio | GPU warm FPS | Frame speedup | YOLO speedup |
+|---|---:|---:|---:|---:|---:|---:|
+| Fanbo7 A257 | 433 | n/a (RightElbow Xsens-derived MAE 10.4308 deg) | 0.4273 | 28.17 | 9.65x | 12.26x |
+| Fanbo4 A257 | 390 | 9.8202 deg (RightElbow) | 0.6026 | 29.68 | 10.63x | 14.61x |
+| Fanbo9 A255 | 897 | 10.7004 deg (8-joint mean) | 0.6810 | 29.92 | 18.13x | 24.83x |
+| Fanbo9 A257 | 837 | 6.4200 deg (8-joint mean) | 0.8571 | 29.92 | 13.10x | 17.88x |
+
+`Frame speedup` uses the mean saved `frame_time_ms`; `YOLO speedup` uses the
+saved `yolo_time_ms`. `GPU warm FPS` excludes the first ten frames. GPU angle
+summaries matched the local CPU summaries to approximately 1e-4 degrees or
+better, with identical valid counts and RULA-like agreement values.
+
+Conclusion: the deterministic A6000 pipeline reproduces the local reference
+results and exceeds the 12.5 fps camera rate for all evaluated distances and
+camera views. Fanbo9 again confirms that A257 has stronger agreement with the
+FastSAM3D comparison trajectory than A255; this is not a ground-truth claim.

@@ -173,3 +173,31 @@ candidate failed both the angle-improvement gate and the 12.5 fps real-time
 gate. Per the project experiment rule, the Pose2Sim adapter was rolled back to
 the pre-route snapshot; ignored run evidence and this negative-result log were
 retained.
+
+## 2026-07-12 — MeTRAbs Calibrated Stereo Gate on A6000
+
+The official experimental PyTorch MeTRAbs repository (commit `8b2b116`) was
+tested with its EfficientNetV2-S 256 px checkpoint. This is the only supported
+lightweight PyTorch checkpoint available alongside the EfficientNetV2-L model;
+the advertised MobileNetV3 weights are available only through the older
+TensorFlow export. Two official Torch 2.x compatibility fixes were required
+after the network forward (`torch.split` sizes converted to Python lists).
+
+The two images were undistorted, rotated consistently with the dataset, and
+processed as one stereo batch using the existing deterministic YOLO boxes.
+Camera extrinsics converted both metric 3D predictions into the left-camera
+world frame. Fusion weights used YOLO confidence and 2D agreement; no Xsens
+signal was used in inference, fusion, or parameter selection.
+
+| Dataset (40-frame gate) | End-to-end FPS | Model inference ms/pair | Right-arm stereo 3D median/p95 | 2D disagreement median/p95 | Finite keypoint ratio |
+|---|---:|---:|---:|---:|---:|
+| Fanbo7 A257 | 4.76 | 86.8 | 69.45 / 75.68 cm | 564.8 / 735.1 px | 0.404 |
+| Fanbo4 A257 | 4.96 | 82.1 | 66.38 / 109.02 cm | 854.6 / 1028.0 px | 0.134 |
+
+Decision: reject before the 200-frame and full-sequence stages. The
+lightweight model failed both the 12.5 fps requirement and the calibrated
+cross-view geometry gate. The larger EfficientNetV2-L model and additional
+test-time augmentation cannot recover the real-time requirement and were not
+run after this failure. Per the project rule, the MeTRAbs integration was
+rolled back; the isolated external environment, ignored run evidence, and this
+negative-result log were retained.

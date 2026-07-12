@@ -27,6 +27,31 @@ Run the Fanbo7 right-elbow baseline and FastSAM3D-referenced evaluation:
   --stages validate,offset,angle,fasteval
 ```
 
+## Runpod GPU
+
+Build the persistent environment after cloning the repository under
+`/workspace/PoseEst1`:
+
+```bash
+cd /workspace/PoseEst1
+tools/setup_remote_env.sh
+```
+
+Run the portable Fanbo7 V2 + YOLOv8m baseline on the remote GPU:
+
+```bash
+YOLO_CONFIG_DIR=/workspace/venv-pose/.config/Ultralytics \
+MPLBACKEND=Agg \
+/workspace/venv-pose/bin/python 00_pose_pipeline_v2/src/run_pipeline.py \
+  --config 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo7_v2_yolov8m.yaml \
+  --stages validate,skt,offset,angle
+```
+
+CUDA inference is deterministic by default. The pipeline disables TF32 and
+cuDNN autotuning because sub-pixel device differences can be amplified by the
+crop tracker into different 3D joint angles. Set `skt.deterministic_cuda:
+false` only for an explicitly labelled throughput experiment.
+
 Export the current best YOLO11l full-replacement candidate for review:
 
 ```bash

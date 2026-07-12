@@ -86,6 +86,56 @@ def metrabs_chart(chinese: bool) -> str:
     return image_uri(fig)
 
 
+def pareto_chart(chinese: bool) -> str:
+    """Plot the comparable accuracy-throughput admission results."""
+    baseline_fps = [28.88, 29.23]
+    baseline_mae = [10.47, 15.47]
+    pose2sim_fps_upper = [1000.0 / 102.6, 1000.0 / 101.4]
+    pose2sim_mae = [52.36, 24.98]
+    datasets = ["Fanbo7", "Fanbo4"]
+    fig, ax = plt.subplots(figsize=(7.4, 4.4))
+    for index, dataset in enumerate(datasets):
+        ax.plot(
+            [pose2sim_fps_upper[index], baseline_fps[index]],
+            [pose2sim_mae[index], baseline_mae[index]],
+            color="#9aa5b1",
+            linestyle=":",
+            linewidth=1.2,
+        )
+        ax.annotate(dataset, (baseline_fps[index], baseline_mae[index]), xytext=(5, 5), textcoords="offset points")
+    ax.scatter(baseline_fps, baseline_mae, s=75, color="#2878b5", label="SKT baseline")
+    ax.scatter(
+        pose2sim_fps_upper,
+        pose2sim_mae,
+        s=75,
+        marker="X",
+        color="#d1495b",
+        label="Pose2Sim optimistic upper bound" if not chinese else "Pose2Sim 乐观速度上界",
+    )
+    ax.axvline(12.5, color="#b42318", linestyle="--", linewidth=1.4, label="12.5 fps gate" if not chinese else "12.5 fps 门槛")
+    ax.set_xlabel(
+        "Equivalent throughput (fps; higher is better)"
+        if not chinese
+        else "等效吞吐率（fps，越高越好）"
+    )
+    ax.set_ylabel("RightElbow MAE (deg; lower is better)" if not chinese else "RightElbow MAE（°，越低越好）")
+    ax.text(
+        0.02,
+        0.96,
+        "MeTRAbs excluded: stereo geometry gate failed"
+        if not chinese
+        else "MeTRAbs：跨视图几何门槛失败，未形成有效角度点",
+        transform=ax.transAxes,
+        va="top",
+        fontsize=9,
+        color="#b42318",
+    )
+    ax.legend(frameon=False, loc="center right")
+    ax.grid(alpha=0.2)
+    ax.spines[["top", "right"]].set_visible(False)
+    return image_uri(fig)
+
+
 STYLE = """
 :root{--ink:#172033;--muted:#607080;--line:#dce3ec;--blue:#155eef;--green:#087f5b;--red:#b42318;--amber:#b45309;--bg:#f5f7fb}
 *{box-sizing:border-box} body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",sans-serif}
@@ -102,6 +152,7 @@ def build_report(chinese: bool) -> str:
     configure_font()
     p2s = pose2sim_chart(chinese)
     met = metrabs_chart(chinese)
+    pareto = pareto_chart(chinese)
     if chinese:
         title = "双目人体先验与 3D 重建：深度调研及 A6000 准入验证"
         subtitle = "PoseEst1 · Fanbo4 / Fanbo7 · 2026-07-12 · 关节角与 RULA 优先"
@@ -112,7 +163,7 @@ def build_report(chinese: bool) -> str:
 <section id="pose2sim"><h2>3. Pose2Sim / OpenSim 准入结果</h2><p>官方 Pose2Sim 0.10.48 与 OpenSim 4.6 成功运行。输入复用确定性 YOLOv8m/SKT COCO-17 轨迹，未更换 detector。完整序列插值后截取连续 200 帧，按序列缩放 simple OpenSim 模型并运行 IK。</p><table><tr><th>数据</th><th>系统</th><th>RightElbow MAE</th><th>RULA 一致率</th><th>跳变</th><th>先验阶段</th></tr><tr><td>Fanbo7</td><td>SKT</td><td>10.47°</td><td>0.939</td><td>0</td><td>—</td></tr><tr><td>Fanbo7</td><td>Pose2Sim</td><td>52.36°</td><td>0.344</td><td>0</td><td>102.6 ms/帧</td></tr><tr><td>Fanbo4</td><td>SKT</td><td>15.47°</td><td>0.948</td><td>7</td><td>—</td></tr><tr><td>Fanbo4</td><td>Pose2Sim</td><td>24.98°</td><td>0.895</td><td>19</td><td>101.4 ms/帧</td></tr></table><figure><img src="{p2s}"><figcaption>图 1：OpenSim IK 给出了人体可行解，但没有保留当前观测的实际肘部运动。</figcaption></figure><p class="bad">结论：角度和实时门槛同时失败。稀疏 COCO-17 与缺失左臂使 IK 得到“人体可行但动作不一致”的解。</p></section>
 <section id="metrabs"><h2>4. MeTRAbs 双视图融合准入结果</h2><p>使用官方实验性 PyTorch EfficientNetV2-S 权重进行 A6000 forward；官方 MobileNet 权重只有旧 TensorFlow 导出，因此用官方 S 版作为可复现轻量替代。左右图以一个 batch 推理，并通过标定外参转入左相机世界坐标。</p><table><tr><th>数据</th><th>端到端 fps</th><th>推理 ms/双目</th><th>右臂左右 3D 差 median/p95</th><th>2D 差 median/p95</th></tr><tr><td>Fanbo7</td><td>4.76</td><td>86.8</td><td>69.45 / 75.68 cm</td><td>564.8 / 735.1 px</td></tr><tr><td>Fanbo4</td><td>4.96</td><td>82.1</td><td>66.38 / 109.02 cm</td><td>854.6 / 1028.0 px</td></tr></table><figure><img src="{met}"><figcaption>图 2：MeTRAbs-S 同时未通过 12.5 fps 与跨视图几何门槛。</figcaption></figure><p class="bad">结论：通用单目 metric 3D 预测不能直接在当前工业双目上形成一致的世界坐标骨架。更大 L 模型和更多 TTA 不再运行。</p></section>
 <section id="smpl"><h2>5. EasyMocap / SMPL 状态</h2><p>EasyMocap SMPL CUDA 模块已在 Torch 2.8 / CUDA 12.8 成功导入，环境重建脚本和资产验证器已完成。正式拟合尚未执行，原因是缺少受许可保护的 <code>SMPL_NEUTRAL.pkl</code>。</p><p class="pending">该路线不是精度失败，而是许可资产门槛未满足。请按 <code>docs/smpl_asset_setup.md</code> 从 SMPL 官方网站获取并上传；不能从非官方镜像代替。</p></section>
-<section id="conclusion"><h2>6. 结论与下一步</h2><ol><li>当前正式基线继续使用确定性 PyTorch FP32 YOLOv8m + SKT。</li><li>完成 SMPL 官方资产上传后，只先跑 Fanbo7/Fanbo4 40 帧重投影与关节语义门槛；通过后才跑 200 帧。</li><li>若 SMPL 仍失败，优先研究“现有可靠 2D + 双目 bundle adjustment + 关节限位/时间先验”的项目专用优化，而不是继续盲换单目模型。</li><li>FoundationStereo 可用于遮挡区深度诊断，但不能替代关键点语义。</li><li>所有调参继续只依赖几何和时间稳定性；Xsens 仅用于最终 agreement 报告，避免误差转移。</li></ol></section>"""
+<section id="conclusion"><h2>6. 结论与下一步</h2><figure><img src="{pareto}"><figcaption>图 3：可比较候选的精度—速度 Pareto 图。Pose2Sim 横坐标仅按 IK 阶段耗时换算，是未计入检测与三角化的乐观上界；即便如此仍被 SKT 基线支配。MeTRAbs 因跨视图几何失败，没有可报告的有效角度点。</figcaption></figure><ol><li>当前正式基线继续使用确定性 PyTorch FP32 YOLOv8m + SKT。</li><li>完成 SMPL 官方资产上传后，只先跑 Fanbo7/Fanbo4 40 帧重投影与关节语义门槛；通过后才跑 200 帧。</li><li>若 SMPL 仍失败，优先研究“现有可靠 2D + 双目 bundle adjustment + 关节限位/时间先验”的项目专用优化，而不是继续盲换单目模型。</li><li>FoundationStereo 可用于遮挡区深度诊断，但不能替代关键点语义。</li><li>所有调参继续只依赖几何和时间稳定性；Xsens 仅用于最终 agreement 报告，避免误差转移。</li></ol></section>"""
     else:
         title = "Stereo Human Priors and 3D Reconstruction: Research Review and A6000 Gates"
         subtitle = "PoseEst1 · Fanbo4 / Fanbo7 · 2026-07-12 · Joint-angle and RULA priority"
@@ -123,7 +174,7 @@ def build_report(chinese: bool) -> str:
 <section id="pose2sim"><h2>3. Pose2Sim / OpenSim gate</h2><table><tr><th>Dataset</th><th>System</th><th>RightElbow MAE</th><th>RULA agreement</th><th>Jumps</th><th>Prior stage</th></tr><tr><td>Fanbo7</td><td>SKT</td><td>10.47°</td><td>0.939</td><td>0</td><td>—</td></tr><tr><td>Fanbo7</td><td>Pose2Sim</td><td>52.36°</td><td>0.344</td><td>0</td><td>102.6 ms/frame</td></tr><tr><td>Fanbo4</td><td>SKT</td><td>15.47°</td><td>0.948</td><td>7</td><td>—</td></tr><tr><td>Fanbo4</td><td>Pose2Sim</td><td>24.98°</td><td>0.895</td><td>19</td><td>101.4 ms/frame</td></tr></table><figure><img src="{p2s}"><figcaption>Figure 1. IK produced anatomically feasible solutions that did not preserve the observed elbow motion.</figcaption></figure><p class="bad">Rejected on both angle accuracy and real-time criteria.</p></section>
 <section id="metrabs"><h2>4. MeTRAbs calibrated stereo gate</h2><table><tr><th>Dataset</th><th>End-to-end fps</th><th>Inference ms/pair</th><th>Right-arm stereo 3D median/p95</th><th>2D disagreement median/p95</th></tr><tr><td>Fanbo7</td><td>4.76</td><td>86.8</td><td>69.45 / 75.68 cm</td><td>564.8 / 735.1 px</td></tr><tr><td>Fanbo4</td><td>4.96</td><td>82.1</td><td>66.38 / 109.02 cm</td><td>854.6 / 1028.0 px</td></tr></table><figure><img src="{met}"><figcaption>Figure 2. MeTRAbs-S failed both throughput and cross-view geometry gates.</figcaption></figure><p class="bad">The generic monocular metric-3D prior did not yield a consistent stereo world-space skeleton. The larger model and additional TTA were therefore not run.</p></section>
 <section id="smpl"><h2>5. EasyMocap / SMPL status</h2><p>The EasyMocap CUDA SMPL module imports successfully under Torch 2.8 / CUDA 12.8. Reproducible setup, private-asset ignore rules, and a CUDA validator are ready. Formal fitting has not run because <code>SMPL_NEUTRAL.pkl</code> is license-controlled and absent.</p><p class="pending">This is an external asset gate, not an accuracy failure. Follow <code>docs/smpl_asset_setup.md</code> and obtain the model only from the official SMPL website.</p></section>
-<section id="conclusion"><h2>6. Conclusions and next steps</h2><ol><li>Retain deterministic PyTorch FP32 YOLOv8m + SKT as the formal baseline.</li><li>After official SMPL upload, run only the 40-frame Fanbo4/Fanbo7 reprojection and semantic gate before any longer job.</li><li>If SMPL also fails, prioritize project-specific bundle adjustment with joint limits and temporal priors over additional monocular model replacement.</li><li>Use FoundationStereo only as an occlusion/depth diagnostic, not as a joint-semantic replacement.</li><li>Select parameters from geometry and temporal stability; use Xsens only for final agreement reporting.</li></ol></section>"""
+<section id="conclusion"><h2>6. Conclusions and next steps</h2><figure><img src="{pareto}"><figcaption>Figure 3. Accuracy-throughput Pareto view for comparable candidates. Pose2Sim throughput is an optimistic upper bound derived from IK-stage time alone; it still remains dominated by the SKT baseline. MeTRAbs has no valid angle point because it failed the cross-view geometry gate.</figcaption></figure><ol><li>Retain deterministic PyTorch FP32 YOLOv8m + SKT as the formal baseline.</li><li>After official SMPL upload, run only the 40-frame Fanbo4/Fanbo7 reprojection and semantic gate before any longer job.</li><li>If SMPL also fails, prioritize project-specific bundle adjustment with joint limits and temporal priors over additional monocular model replacement.</li><li>Use FoundationStereo only as an occlusion/depth diagnostic, not as a joint-semantic replacement.</li><li>Select parameters from geometry and temporal stability; use Xsens only for final agreement reporting.</li></ol></section>"""
     links = "".join(f'<a href="#{target}">{label}</a>' for target, label in zip(["summary", "research", "pose2sim", "metrabs", "smpl", "conclusion"], nav))
     return f'<!doctype html><html lang="{"zh-CN" if chinese else "en"}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>{title}</title><style>{STYLE}</style></head><body><header><h1>{title}</h1><p>{subtitle}</p></header><div class="layout"><nav><strong>{"目录" if chinese else "Contents"}</strong>{links}</nav><main>{body}<footer>{"本报告为自包含 HTML；图表已内嵌。" if chinese else "Self-contained HTML report with embedded figures."}</footer></main></div></body></html>'
 

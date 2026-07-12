@@ -148,3 +148,28 @@ agreement but could not meet the 80 ms stereo-pair budget and retained large
 outliers. No candidate advanced to full 3D angle evaluation. This gate avoids
 reporting misleading 3D errors from models that are confident monocularly but
 not stereo-consistent.
+
+## 2026-07-12 — Pose2Sim / OpenSim Kinematic-Prior Gate
+
+Pose2Sim 0.10.48 (upstream commit `14d101c`) and OpenSim 4.6 were installed in
+an isolated remote environment. Deterministic YOLOv8m/SKT COCO-17 trajectories
+were converted from camera coordinates to OpenSim Y-up meters. Missing marker
+coordinates were interpolated on the full sequence before selecting a
+continuous gate window. The simple OpenSim model was scaled per sequence and
+then used for inverse kinematics. Xsens remained an external comparison signal
+and was not used to fit the model or select parameters.
+
+| Dataset (first 200 frames) | System | RightElbow MAE | Valid ratio | RULA-like agreement | >10 deg jumps | Total prior stage |
+|---|---|---:|---:|---:|---:|---:|
+| Fanbo7 A257 | SKT geometric | 10.47 deg | 0.655 | 0.939 | 0 | n/a |
+| Fanbo7 A257 | Pose2Sim/OpenSim | 52.36 deg | 0.655 | 0.344 | 0 | 102.6 ms/frame |
+| Fanbo4 A257 | SKT geometric | 15.47 deg | 0.765 | 0.948 | 7 | n/a |
+| Fanbo4 A257 | Pose2Sim/OpenSim | 24.98 deg | 0.765 | 0.895 | 19 | 101.4 ms/frame |
+
+Decision: reject before full-sequence evaluation. Sparse COCO-17 observations,
+especially the extensively missing left arm in Fanbo7, allowed the kinematic
+solver to find anatomically feasible but motion-inconsistent solutions. The
+candidate failed both the angle-improvement gate and the 12.5 fps real-time
+gate. Per the project experiment rule, the Pose2Sim adapter was rolled back to
+the pre-route snapshot; ignored run evidence and this negative-result log were
+retained.

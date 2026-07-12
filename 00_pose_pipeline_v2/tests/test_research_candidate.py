@@ -35,6 +35,12 @@ class ResearchCandidateTest(unittest.TestCase):
         self.assertEqual(mapped[0, 7, 0], 3.0)
         self.assertEqual(mapped[0, 8, 0], 4.0)
 
+    def test_metrabs_coco19_abbreviations(self) -> None:
+        source = np.zeros((1, 6, 3), dtype=np.float64)
+        source[0, :, 0] = np.arange(1, 7)
+        mapped = map_to_coco17(source, ["lsho", "rsho", "lelb", "relb", "lwri", "rwri"])
+        np.testing.assert_allclose(mapped[0, [5, 6, 7, 8, 9, 10], 0], np.arange(1, 7))
+
     def test_unit_conversion(self) -> None:
         points = np.ones((1, 17, 3), dtype=np.float64)
         np.testing.assert_allclose(convert_to_centimeters(points, "m"), 100.0)

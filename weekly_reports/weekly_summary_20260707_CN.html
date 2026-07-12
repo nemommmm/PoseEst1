@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>weekly_summary_20260707_CN</title>
+<style>
+  body { font-family: -apple-system, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+         max-width: 1100px; margin: 30px auto; padding: 0 30px; line-height: 1.75; color: #222; }
+  h1 { border-bottom: 3px solid #2a6fb5; padding-bottom: 10px; color: #1a4a80; }
+  h2 { border-left: 5px solid #2a6fb5; padding-left: 12px; margin-top: 48px; color: #1a4a80; }
+  h3 { color: #2a6fb5; margin-top: 30px; }
+  h4 { color: #555; }
+  .nav { background: #f0f5fa; padding: 15px 25px; border-radius: 6px; margin: 20px 0; }
+  .nav a { margin-right: 20px; color: #1a4a80; text-decoration: none; font-weight: 500; }
+  .nav a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; margin: 15px 0; width: 100%; font-size: 14px; }
+  th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: right; }
+  th { background: #eaf0f8; color: #1a4a80; }
+  td.label, th.label { text-align: left; font-weight: 500; }
+  td.good { color: #1e7a1e; font-weight: 600; }
+  td.bad  { color: #b22222; font-weight: 600; }
+  td.mid  { color: #b8860b; font-weight: 600; }
+  .callout  { background: #fff8e0; border-left: 4px solid #d9a300; padding: 12px 18px; margin: 18px 0; border-radius: 4px; }
+  .takeaway { background: #e8f4ff; border-left: 4px solid #2a6fb5; padding: 12px 18px; margin: 18px 0; border-radius: 4px; }
+  .warning  { background: #fff0f0; border-left: 4px solid #c0392b; padding: 12px 18px; margin: 18px 0; border-radius: 4px; }
+  img { max-width: 100%; border: 1px solid #ddd; padding: 4px; background: #fff; display: block; margin: 12px auto; }
+  figure { margin: 22px 0; text-align: center; }
+  figcaption { color: #666; font-size: 13px; margin-top: 6px; }
+  .footer { color: #888; font-size: 12px; border-top: 1px solid #ddd; padding-top: 12px; margin-top: 60px; }
+  code { background: #f5f5f5; padding: 1px 6px; border-radius: 3px; font-family: "Menlo", monospace; font-size: 0.9em; }
+  ul.plain { list-style: none; padding-left: 0; }
+  ul.plain li { padding: 5px 0; border-bottom: 1px dashed #eee; }
+</style>
+</head>
+<body>
+
+<h1>双目姿态 Pipeline 周报</h1>
+<p><strong>日期：</strong>2026-07-07 &nbsp; · &nbsp; <strong>作者：</strong>Fanbo Meng &nbsp; · &nbsp; <strong>项目：</strong>Master Thesis</p>
+
+<div class="nav">
+  <a href="#tldr">概要</a>
+  <a href="#ablation">1. 消融实验</a>
+  <a href="#fanbo9">2. fanbo9 双相机验证</a>
+  <a href="#fusion">3. FastSAM3D 融合方案讨论</a>
+  <a href="#next">4. 下一步</a>
+</div>
+
+<h2 id="tldr">本周概要（TL;DR）</h2>
+<div class="takeaway">
+  <ul class="plain" style="margin:0;">
+    <li>✅ 完成了 <strong>Pipeline × Model 消融实验</strong>，覆盖 5 个测试场景：fanbo7（近距站立）、fanbo4（远距站立）、fanbo3（走路）、fanbo9 A255 和 fanbo9 A257（同一场景两个相机）。</li>
+    <li>✅ 结论：<strong>V2 pipeline + YOLOv8m 是最合适的组合</strong>——在 5 个场景里有 3 个明确领先，另外 2 个只是微小差距。</li>
+    <li>✅ fanbo9 双相机验证：<strong>离受试者更近的 A257 结果稳定得多</strong>（8 关节均值 6.4°），远的 A255 明显更差（10.7°），与之前 fanbo4/fanbo7 的近远差异结论一致。</li>
+    <li>❌ 之前设想的"把 FastSAM3D 融合进双目系统"方案不可行——见 <a href="#fusion">第 3 节</a>。</li>
+    <li>➡️ 下一步进入 <strong>GPU 加速 / real-time 部署</strong> 方向的初步尝试。</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="ablation">1. Pipeline × Model 消融实验</h2>
+
+<h3>1.1 实验设计 & V2 到底改进了什么</h3>
+<p>Amrit 之前提出了明确要求：想知道最近几周的 pipeline 提升到底是<strong>「pipeline 变化带来的」还是「YOLO 模型升级带来的」</strong>。为此我把这两个变量拆开跑了一个 <strong>2×2 消融矩阵</strong>：</p>
+
+<table>
+  <tr><th class="label"></th><th>YOLOv8m（原始模型）</th><th>YOLO11l（新模型）</th></tr>
+  <tr><td class="label"><strong>V1 pipeline</strong>（几周前的版本）</td><td class="label">V1+YOLOv8m</td><td class="label">V1+YOLO11l</td></tr>
+  <tr><td class="label"><strong>V2 pipeline</strong>（现在的版本）</td><td class="label">V2+YOLOv8m</td><td class="label">V2+YOLO11l</td></tr>
+</table>
+
+<h4>V1 → V2 具体改了哪些东西（回顾上周内容）</h4>
+<p>为了后续讨论方便，先简要回顾一下 V2 相对 V1 的核心改进：</p>
+<ul>
+  <li><strong>废弃"二值过滤 + 线性插值 + 滑动平均"的旧链路</strong>：V1 里质量过滤器是"通过/不通过"的一刀切，很多质量一般的帧被扔成 NaN，然后 linear_fill 在 NaN 空洞两端画直线，moving_avg 再把它跟真实值来回混合——结果就是在过滤器边界人工制造出<strong>本来不存在的大跳变</strong>。</li>
+  <li><strong>换成"质量感知修复 + 关键点级 Savitzky-Golay 平滑"</strong>：把每帧关键点分成 valid / repairable / invalid 三档，中等质量帧用邻近 valid 帧插值修复而不是直接丢弃；平滑也从"角度域滑动平均"改成"3D 坐标域 Savgol"，几何上更一致，真实运动峰值不会被压平。</li>
+  <li><strong>加入 ROI tracking + weighted DLT + soft epipolar constraint</strong>：跟踪目标人物 bbox 减少左右视角误配对；三角化时按关键点置信度加权；软极线约束容忍标定误差。</li>
+  <li><strong>骨长先验（bone constraint）</strong>：从稳定帧自动估计人体骨长（不需要用户输入身高），作为软约束加进三角化，帮压制深度方向的抖动。</li>
+  <li>2D 模型可选升级到 YOLO11l——但本周的实验恰恰要看这一步到底有没有用。</li>
+</ul>
+
+<p>然后把这 4 个 cell 在 5 个不同场景上分别跑一遍：</p>
+
+<table>
+  <tr><th class="label">场景</th><th class="label" style="text-align:left">条件</th><th class="label" style="text-align:left">评估关节</th></tr>
+  <tr><td class="label">fanbo7</td><td class="label">受试者距离相机 ~180cm，站立做右肘伸屈</td><td class="label">RightElbow</td></tr>
+  <tr><td class="label">fanbo4</td><td class="label">受试者距离相机 ~410cm（远距），同样右肘伸屈</td><td class="label">RightElbow</td></tr>
+  <tr><td class="label">fanbo3</td><td class="label">走路来回一趟</td><td class="label">8 关节平均</td></tr>
+  <tr><td class="label">fanbo9 A255</td><td class="label">单维度动作系列（头/臂/腰/腿），A255 相机（较远）</td><td class="label">8 关节平均</td></tr>
+  <tr><td class="label">fanbo9 A257</td><td class="label">同一场景，A257 相机（较近）</td><td class="label">8 关节平均</td></tr>
+</table>
+
+<h3>1.2 结果汇总（4 个配置 × 5 个场景 + 升级贡献 %）</h3>
+
+<p>下表把 MAE 对比 + Pipeline / Model 升级贡献百分比全部合并在一起：</p>
+<ul style="font-size:14px;">
+  <li><strong>MAE 列</strong>：都是最终 <strong>bone+Savgol+深度</strong> 后处理下的 MAE（当前默认后处理）。</li>
+  <li><strong>Pipeline Δ%</strong> = (V2+v8m − V1+v8m) / V1+v8m × 100（bone+Savgol+深度 后处理下，Pipeline 升级带来的相对变化）</li>
+  <li><strong>Model Δ%</strong> = (V2+v11l − V2+v8m) / V2+v8m × 100，此处用 <strong>chain（v1 filter+fill+moving_avg）后处理</strong>计算。理由：bone+Savgol 会自动补偿 YOLOv8m 的检测缺陷，会"盖住"模型本身的差异；用 chain 更能反映模型自身的贡献。</li>
+  <li>负数 = MAE 降低 = 变好。</li>
+</ul>
+
+<table>
+  <tr>
+    <th class="label">场景</th>
+    <th>V1+YOLOv8m</th>
+    <th>V1+YOLO11l</th>
+    <th>V2+YOLOv8m</th>
+    <th>V2+YOLO11l</th>
+    <th>Pipeline Δ%<br>(V1→V2)</th>
+    <th>Model Δ%<br>(v8m→v11l, chain)</th>
+    <th>V2 里更优</th>
+  </tr>
+  <tr>
+    <td class="label">fanbo7 近距</td>
+    <td>5.35°</td><td>2.98°</td><td>2.62°</td><td>2.57°</td>
+    <td class="good">−51.1%</td>
+    <td class="good"><strong>−20.8%</strong></td>
+    <td class="label">YOLO11l（差 0.05°，忽略）</td>
+  </tr>
+  <tr>
+    <td class="label">fanbo4 远距</td>
+    <td>11.81°</td><td>21.34°</td><td>5.59°</td><td>9.80°</td>
+    <td class="good">−52.7%</td>
+    <td class="bad">+57.8%</td>
+    <td class="label"><strong>YOLOv8m（差 4.21°，显著）</strong></td>
+  </tr>
+  <tr>
+    <td class="label">fanbo3 走路</td>
+    <td>15.20°</td><td>14.20°</td><td>14.94°</td><td>14.16°</td>
+    <td class="good">−1.7%</td>
+    <td>−0.8%</td>
+    <td class="label">YOLO11l（差 0.78°，微小）</td>
+  </tr>
+  <tr>
+    <td class="label">fanbo9 A255 远</td>
+    <td>10.75°</td><td>12.37°</td><td>10.70°</td><td>12.12°</td>
+    <td class="good">−0.5%</td>
+    <td class="bad">+13.2%</td>
+    <td class="label"><strong>YOLOv8m</strong></td>
+  </tr>
+  <tr>
+    <td class="label">fanbo9 A257 近</td>
+    <td>6.52°</td><td>7.13°</td><td>6.42°</td><td>7.15°</td>
+    <td class="good">−1.5%</td>
+    <td class="bad">+11.3%</td>
+    <td class="label"><strong>YOLOv8m</strong></td>
+  </tr>
+  <tr style="background:#f4f9ff;">
+    <td class="label"><strong>结论</strong></td>
+    <td colspan="4" class="label">
+      YOLOv8m 综合胜出 <strong>3 / 5</strong>，且它胜出的场景差距明显（fanbo4 好 4.21°）；<br>
+      YOLO11l 领先的 2 场景差距都在 1° 以内（噪声范围）。
+    </td>
+    <td class="label" style="text-align:center"><strong>Pipeline 全绿</strong></td>
+    <td class="label" style="text-align:center"><strong>近距 Model 有效<br>远距 Model 反而退步</strong></td>
+    <td class="label" style="text-align:center"><strong>YOLOv8m</strong></td>
+  </tr>
+</table>
+
+<div class="callout">
+  <strong>关于模型升级历史：</strong>最初决定把 2D 模型从 YOLOv8m 换成 YOLO11l，是<strong>基于 fanbo7</strong> 在<strong>当时的 v1 pipeline + chain 后处理</strong>下测试的结果——那时候 YOLO11l 把 MAE 从 <strong>6.75° 降到 2.32°（−65.7%）</strong>，是非常显著的提升，换模型的决定完全正确。<br>
+  后来 V2 pipeline 加入了 bone+Savgol+depth 后处理，这套强后处理会自动补偿 YOLOv8m 的检测缺陷，所以近距场景下 YOLOv8m 也能拿到接近的结果。同时 fanbo4 远距 和 fanbo9 双相机等新场景暴露出 YOLO11l 在远距离对手臂关键点的定位偏差更大——所以现在综合起来 YOLOv8m 反而更鲁棒。
+</div>
+
+<h3>1.3 为什么"更大的模型"反而在部分场景变差？</h3>
+
+<p>直觉上大模型应该更准，但实测在远距和 fanbo9 上 YOLO11l 明显退步。看一下 raw 2D 检测数据就能看出原因：</p>
+
+<table>
+  <tr>
+    <th class="label">场景</th>
+    <th class="label">模型</th>
+    <th>右肘置信度（均值）</th>
+    <th>极线残差 p95 (px)<br>← 左右视角一致性</th>
+    <th>重投影误差 p95 (px)<br>← 与相机几何一致性</th>
+  </tr>
+  <tr><td class="label" rowspan="2">fanbo7 近距 (180cm)</td><td class="label">YOLOv8m</td><td>0.980</td><td class="bad">10.26</td><td class="bad">5.13</td></tr>
+  <tr><td class="label"><strong>YOLO11l</strong></td><td>0.970</td><td class="good"><strong>6.28</strong></td><td class="good"><strong>3.14</strong></td></tr>
+  <tr><td class="label" rowspan="2">fanbo4 远距 (410cm)</td><td class="label"><strong>YOLOv8m</strong></td><td>0.976</td><td class="good"><strong>1.41</strong></td><td class="good"><strong>0.71</strong></td></tr>
+  <tr><td class="label">YOLO11l</td><td>0.982</td><td class="bad">2.16</td><td class="bad">1.08</td></tr>
+</table>
+
+<div class="warning">
+  <strong>值得注意的反常现象：</strong>在 fanbo4 远距上，YOLO11l 的<strong>置信度反而更高</strong>（0.982 vs 0.976），但实际的<strong>左右一致性和重投影精度都更差</strong>。也就是说 YOLO11l 在远距离时是<strong>"自信但不准"</strong>——这种"过度自信"在下游的双目三角化里危害更大，因为我们的 pipeline 会按置信度加权，把它错误的估计当作可信的输入。
+</div>
+
+<p><strong>三个具体原因（用大白话说）：</strong></p>
+
+<ol>
+  <li><strong>远距离时人在图像里占的像素少了很多。</strong>fanbo7 (180cm) 时人可能占 800+ 像素高，fanbo4 (410cm) 时只有 300-400 像素高。同一个关节的定位空间小了一半以上，任何一点点亚像素级的偏差都被放大。</li>
+
+  <li><strong>大模型不等于每个尺度都好。</strong>YOLO11l 参数量比 YOLOv8m 多约 30%，感受野更大、特征更抽象。在训练数据（COCO）里，人物一般是 100-500 像素高的常见大小，所以在 fanbo7 (~500-800 像素高) 这种"正常"场景，它比 YOLOv8m 精细得多。但一旦到 fanbo4 (~300 像素) 甚至更小，训练数据里少见的场景，大模型反而容易靠"人体先验"猜关节位置，产生系统性偏差；而 YOLOv8m 因为容量较小、结构简单，反而更"老实地"跟着像素信号走。</li>
+
+  <li><strong>双目三角化对"左右一致性"极度敏感。</strong>就算某个模型的 2D 关节比另一个更准，只要左右两个视角上的偏差<strong>不一致</strong>（例如 YOLO11l 在左图对手肘偏上 3 像素、右图偏下 2 像素），三角化就会给出一个"歪的" 3D 点。所以对立体系统来说，<strong>"左右一致的普通模型"比"单目更准但左右不一致的大模型"更有价值</strong>。fanbo4 数据里 YOLO11l 极线残差 p95 从 1.41 涨到 2.16 就是这个问题的直接体现。</li>
+</ol>
+
+<p>这也解释了为什么 fanbo9 的两个相机（更近的 A257 和更远的 A255）都是 YOLOv8m 领先——凡是"远距 + 视角偏"的场景，YOLO11l 的过度自信 + 左右不一致就会成为负资产。</p>
+
+<div class="takeaway">
+  <strong>综合结论：<span style="color:#1a4a80">V2 pipeline + YOLOv8m 是当前最合适的组合</span></strong>
+  <ul>
+    <li><strong>Pipeline 升级（V1→V2）5 个场景全部是正贡献</strong>——远距站立场景高达 <strong>−52.7%</strong> 的 MAE 降低。前几周的进步主要来自 pipeline 改进（三档质量修复、Savgol 平滑、骨长约束、tracking）。</li>
+    <li><strong>Model 升级（YOLOv8m→YOLO11l）在近距站立有效</strong>（fanbo7 chain 下 −20.8%），但在远距（fanbo4 +57.8%，fanbo9 +11-13%）和走路场景反而不稳定。</li>
+    <li>V2+YOLOv8m 的优势：<strong>没有任何一个场景"翻车"</strong>——即使不是最好，也是"够好"，鲁棒性最高。加上 YOLOv8m 模型更小、推理更快，部署也更简单。</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="fanbo9">2. fanbo9 双相机验证</h2>
+
+<h3>2.1 为什么做 fanbo9</h3>
+<p>之前所有测试都只用<strong>一个</strong>相机（A257 或 A255）。fanbo9 是数据集里第一次<strong>两个相机同时录制同一个场景</strong>，可以用来验证：同样的 pipeline 配置在两个不同视角/位置的相机上，是否会给出一致的结果？</p>
+<p>动作内容：一次做一个单维度动作（头前后 / 头左右 / 头旋转 / 双臂抬起 / 手肘弯曲 / 腰前后弯 / 左右腿抬起 / 左右脚踝旋转...），共约 66 秒。</p>
+
+<h3>2.2 两个相机的对比结果</h3>
+
+<table>
+  <tr><th class="label">配置</th><th>A255（更远的相机）</th><th>A257（更近的相机）</th><th>差值</th></tr>
+  <tr><td class="label">V1+YOLOv8m</td><td>10.75°</td><td>6.52°</td><td class="mid">+4.24°</td></tr>
+  <tr><td class="label">V1+YOLO11l</td><td>12.37°</td><td>7.13°</td><td class="mid">+5.23°</td></tr>
+  <tr style="background:#f0fff0;"><td class="label"><strong>V2+YOLOv8m ⭐</strong></td><td><strong>10.70°</strong></td><td><strong>6.42°</strong></td><td class="mid">+4.28°</td></tr>
+  <tr><td class="label">V2+YOLO11l</td><td>12.12°</td><td>7.15°</td><td class="mid">+4.97°</td></tr>
+</table>
+
+<div class="callout">
+  <strong>观察：</strong>无论用哪个 pipeline、哪个 YOLO 模型，A257（近）都比 A255（远）好 4-5°。这个差距非常稳定，说明<strong>相机到受试者的距离本身就是主导因素</strong>——离得越近，三角化的深度精度越高，姿态估计越稳。
+</div>
+
+<div class="takeaway">
+  <strong>结论与之前一致：</strong>
+  <ul>
+    <li>fanbo4 vs fanbo7 之前就发现远距（410cm）远比近距（180cm）差；fanbo9 用<strong>同一次动作的双相机</strong>再次印证了这一点，排除了"是不是动作内容不同导致"的干扰。</li>
+    <li>另外 A257 相机上 V2+YOLOv8m（6.42°）依然是 4 个 cell 里最好的，进一步支持第 1 节的结论。</li>
+    <li>实际部署时应尽量让受试者进入相机 2-3m 范围内，超过 4m 精度会显著下降。</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="fusion">3. 关于 FastSAM3D 融合方案（原设想不可行）</h2>
+
+<p>之前提到过一个思路：既然 FastSAM3D 也能给出人体姿态，能不能把它<strong>融合进我们的双目 pipeline</strong>，例如把 FastSAM3D 的输出当作"另一路观测"，跟 YOLO 的双目结果一起做三角化 / 加权融合？</p>
+
+<p>本周仔细读了 <em>Fast SAM 3D Body</em>（USC / NVIDIA / Meta，2026）的论文，发现<strong>这个方案技术上做不了</strong>。核心原因有两个：</p>
+
+<h3>3.1 FastSAM3D 直接输出 3D，跳过了 2D→3D 三角化</h3>
+
+<p>我们双目系统的工作方式是：</p>
+<div class="formula">
+  左图 2D 关键点 &nbsp;+&nbsp; 右图 2D 关键点 &nbsp;+&nbsp; 相机标定参数 &nbsp;→&nbsp; 三角化 &nbsp;→&nbsp; 3D 关键点
+</div>
+
+<p>而 FastSAM3D 的工作方式是：</p>
+<div class="formula">
+  单张 RGB 图片 &nbsp;→&nbsp; Backbone + Transformer 解码 &nbsp;→&nbsp; 直接输出 3D mesh + 3D 关节
+</div>
+
+<p>它的深度是通过<strong>神经网络从单目图像"推理"出来的</strong>（结合视场角估计和人体比例先验），完全没有走"两幅图片交叉几何"这一步。所以 FastSAM3D 的输出<strong>没有可以拿来跟另一个视角做三角化的中间变量</strong>——它一步就到了 3D。</p>
+
+<h3>3.2 想从 FastSAM3D 里"抠出" 2D 精确坐标也不行</h3>
+
+<p>论文里 FastSAM3D 内部虽然用了一个 YOLO11-Pose 检测器，但这个 YOLO 的作用<strong>只是给个粗略的 bounding box 让后面的模型知道"人在哪里"</strong>（论文原话：<em>"these initial keypoints do not require sub-pixel precision; they merely need to establish a reliable bounding region"</em>）。</p>
+
+<p>真正的姿态精度是后面 Transformer 解码时得到的，而这个精度只体现在<strong>输出的 3D mesh 上</strong>，从来不以 2D 关键点的形式暴露出来。所以就算我们拆开 FastSAM3D 的 pipeline，也拿不到"高精度的 2D 关键点"来跟另一路做立体三角化——能拿到的只有 YOLO11-Pose 给的粗糙 2D，而这个我们自己在 pipeline 里已经在用了，没有增量价值。</p>
+
+<div class="warning">
+  <strong>结论：</strong>FastSAM3D 不适合作为"另一路 2D 观测"融入双目系统。<br>
+  <strong>正确的用法：</strong>把 FastSAM3D 当作一个<strong>独立的对照参考</strong>（就像我们现在的角色定位）——它的输出跟我们的双目输出各自独立，比较 MAE、看哪个更接近 Xsens。要"融合"的话只能在结果层面（例如"当双目 pipeline 置信度低时切换到 FastSAM3D"），而不能在几何层面融合。
+</div>
+
+<hr>
+
+<h2 id="next">4. 下一步计划</h2>
+
+<p>Pipeline 层面的探索差不多告一段落，下一步准备做两件事，并行推进：</p>
+
+<ul>
+  <li><strong>GPU 相关尝试</strong>：最近看的一些新方法（比如本周读的 Fast SAM 3D Body）基本都是跑在 GPU 上的，我们目前的 pipeline 主要还在 CPU 上——想去试试一些新东西，同时也顺便熟悉一下 GPU 相关的部署流程。</li>
+  <li><strong>Real-time 部署</strong>：跟 GPU 这件事一起做，看看能不能把 pipeline 从目前每秒 2-3 帧提到实时。如果能跑起来就可以尝试做个端到端的 demo。</li>
+</ul>
+
+<div class="footer">
+  <p>报告作者：Fanbo Meng · Master Thesis · 2026-07-07</p>
+</div>
+
+</body>
+</html>

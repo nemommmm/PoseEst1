@@ -121,6 +121,39 @@ DEFAULT_DATASETS = {
         config_path=Path("00_pose_pipeline_v2/configs/assar2026_fanbo3_a255.yaml"),
         run_dir=Path("00_pose_pipeline_v2/runs/assar2026_fanbo3_a255_walking"),
     ),
+    # ---- fanbo9 single-movement, dual-camera ablation cells ----
+    "fanbo9_a255_v1_yolov8m": DatasetSpec(
+        name="fanbo9_a255_v1_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a255_v1_yolov8m.yaml"),
+    ),
+    "fanbo9_a255_v1_yolo11l": DatasetSpec(
+        name="fanbo9_a255_v1_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a255_v1_yolo11l.yaml"),
+    ),
+    "fanbo9_a255_v2_yolov8m": DatasetSpec(
+        name="fanbo9_a255_v2_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a255_v2_yolov8m.yaml"),
+    ),
+    "fanbo9_a255_v2_yolo11l": DatasetSpec(
+        name="fanbo9_a255_v2_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a255_v2_yolo11l.yaml"),
+    ),
+    "fanbo9_a257_v1_yolov8m": DatasetSpec(
+        name="fanbo9_a257_v1_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a257_v1_yolov8m.yaml"),
+    ),
+    "fanbo9_a257_v1_yolo11l": DatasetSpec(
+        name="fanbo9_a257_v1_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a257_v1_yolo11l.yaml"),
+    ),
+    "fanbo9_a257_v2_yolov8m": DatasetSpec(
+        name="fanbo9_a257_v2_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a257_v2_yolov8m.yaml"),
+    ),
+    "fanbo9_a257_v2_yolo11l": DatasetSpec(
+        name="fanbo9_a257_v2_yolo11l",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a257_v2_yolo11l.yaml"),
+    ),
 }
 
 DEFAULT_PRIORS_CM = {

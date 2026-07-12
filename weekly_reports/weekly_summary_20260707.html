@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>weekly_summary_20260707</title>
+<style>
+  body { font-family: -apple-system, "Helvetica Neue", "PingFang SC", "Microsoft YaHei", sans-serif;
+         max-width: 1100px; margin: 30px auto; padding: 0 30px; line-height: 1.75; color: #222; }
+  h1 { border-bottom: 3px solid #2a6fb5; padding-bottom: 10px; color: #1a4a80; }
+  h2 { border-left: 5px solid #2a6fb5; padding-left: 12px; margin-top: 48px; color: #1a4a80; }
+  h3 { color: #2a6fb5; margin-top: 30px; }
+  h4 { color: #555; }
+  .nav { background: #f0f5fa; padding: 15px 25px; border-radius: 6px; margin: 20px 0; }
+  .nav a { margin-right: 20px; color: #1a4a80; text-decoration: none; font-weight: 500; }
+  .nav a:hover { text-decoration: underline; }
+  table { border-collapse: collapse; margin: 15px 0; width: 100%; font-size: 14px; }
+  th, td { border: 1px solid #ccc; padding: 8px 12px; text-align: right; }
+  th { background: #eaf0f8; color: #1a4a80; }
+  td.label, th.label { text-align: left; font-weight: 500; }
+  td.good { color: #1e7a1e; font-weight: 600; }
+  td.bad  { color: #b22222; font-weight: 600; }
+  td.mid  { color: #b8860b; font-weight: 600; }
+  .callout  { background: #fff8e0; border-left: 4px solid #d9a300; padding: 12px 18px; margin: 18px 0; border-radius: 4px; }
+  .takeaway { background: #e8f4ff; border-left: 4px solid #2a6fb5; padding: 12px 18px; margin: 18px 0; border-radius: 4px; }
+  .warning  { background: #fff0f0; border-left: 4px solid #c0392b; padding: 12px 18px; margin: 18px 0; border-radius: 4px; }
+  img { max-width: 100%; border: 1px solid #ddd; padding: 4px; background: #fff; display: block; margin: 12px auto; }
+  figure { margin: 22px 0; text-align: center; }
+  figcaption { color: #666; font-size: 13px; margin-top: 6px; }
+  .footer { color: #888; font-size: 12px; border-top: 1px solid #ddd; padding-top: 12px; margin-top: 60px; }
+  code { background: #f5f5f5; padding: 1px 6px; border-radius: 3px; font-family: "Menlo", monospace; font-size: 0.9em; }
+  ul.plain { list-style: none; padding-left: 0; }
+  ul.plain li { padding: 5px 0; border-bottom: 1px dashed #eee; }
+</style>
+</head>
+<body>
+
+<h1>Stereo Pose Pipeline — Weekly Report</h1>
+<p><strong>Date:</strong> 2026-07-07 &nbsp; · &nbsp; <strong>Author:</strong> Fanbo Meng &nbsp; · &nbsp; <strong>Project:</strong> Master Thesis</p>
+
+<div class="nav">
+  <a href="#tldr">Overview</a>
+  <a href="#ablation">1. Ablation Study</a>
+  <a href="#fanbo9">2. fanbo9 Dual-Camera Validation</a>
+  <a href="#fusion">3. FastSAM3D Fusion Discussion</a>
+  <a href="#next">4. Next Steps</a>
+</div>
+
+<h2 id="tldr">TL;DR</h2>
+<div class="takeaway">
+  <ul class="plain" style="margin:0;">
+    <li>✅ Completed the <strong>Pipeline × Model ablation study</strong> across 5 test scenarios: fanbo7 (near, standing), fanbo4 (far, standing), fanbo3 (walking), and fanbo9 A255 / A257 (same session, two stereo cameras).</li>
+    <li>✅ Conclusion: <strong>V2 pipeline + YOLOv8m is the most suitable combination</strong> — it wins clearly in 3 out of 5 scenarios, and the other 2 losses are within the noise range.</li>
+    <li>✅ fanbo9 dual-camera validation: <strong>the closer camera A257 is significantly more stable</strong> (mean 8-joint MAE 6.4°) than the farther A255 (10.7°), consistent with the fanbo4/fanbo7 near-vs-far conclusion from before.</li>
+    <li>❌ The previously considered "fuse FastSAM3D into the stereo pipeline" idea turned out to be infeasible — see <a href="#fusion">Section 3</a>.</li>
+    <li>➡️ Next step: initial exploration in the direction of <strong>GPU acceleration / real-time deployment</strong>.</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="ablation">1. Pipeline × Model Ablation Study</h2>
+
+<h3>1.1 Experiment design &amp; what V2 actually changed</h3>
+<p>Amrit had raised a clear request earlier: he wanted to know whether the recent pipeline improvements came from <strong>"pipeline changes"</strong> or from <strong>"YOLO model upgrade"</strong>. To answer that, I ran a <strong>2×2 ablation matrix</strong>:</p>
+
+<table>
+  <tr><th class="label"></th><th>YOLOv8m (original model)</th><th>YOLO11l (new model)</th></tr>
+  <tr><td class="label"><strong>V1 pipeline</strong> (version from a few weeks ago)</td><td class="label">V1+YOLOv8m</td><td class="label">V1+YOLO11l</td></tr>
+  <tr><td class="label"><strong>V2 pipeline</strong> (current version)</td><td class="label">V2+YOLOv8m</td><td class="label">V2+YOLO11l</td></tr>
+</table>
+
+<h4>What changed from V1 → V2 (recap from last week)</h4>
+<p>For clarity in later discussion, here is a quick recap of the core V2 improvements over V1:</p>
+<ul>
+  <li><strong>Discarded the old "binary filter + linear interpolation + moving average" chain</strong>: in V1, the quality filter was a pass/fail cutoff, and many mid-quality frames were thrown out as NaN. Then <code>linear_fill</code> drew a straight line across the NaN gap, and <code>moving_avg</code> mixed this artificial line with the real values — which literally <strong>created large "jumps" that didn't exist in the raw signal</strong> at the filter boundaries.</li>
+  <li><strong>Switched to "quality-aware repair + keypoint-level Savitzky-Golay smoothing"</strong>: keypoints are now sorted into three tiers per frame — valid / repairable / invalid. Mid-quality frames get repaired from neighboring valid frames instead of being discarded. Smoothing was also moved from "angle-domain moving average" to "3D-coordinate-domain Savgol", which is geometrically more consistent and doesn't flatten real motion peaks.</li>
+  <li><strong>Added ROI tracking + weighted DLT + soft epipolar constraint</strong>: tracks the target person's bbox across frames to reduce left-right mismatch; weights the triangulation by per-keypoint confidence; softly enforces epipolar geometry to tolerate small calibration errors.</li>
+  <li><strong>Bone-length prior (bone constraint)</strong>: automatically estimates limb lengths from stable frames (no user height input needed) and applies them as a soft constraint during triangulation, suppressing depth jitter.</li>
+  <li>Optional 2D-model upgrade to YOLO11l — but this experiment specifically evaluates whether that step actually helps.</li>
+</ul>
+
+<p>These 4 cells are then tested on 5 different scenarios:</p>
+
+<table>
+  <tr><th class="label">Scenario</th><th class="label" style="text-align:left">Condition</th><th class="label" style="text-align:left">Evaluated joints</th></tr>
+  <tr><td class="label">fanbo7</td><td class="label">Subject at ~180 cm from camera, standing, right-elbow flexion/extension</td><td class="label">RightElbow</td></tr>
+  <tr><td class="label">fanbo4</td><td class="label">Subject at ~410 cm (far distance), same right-elbow motion</td><td class="label">RightElbow</td></tr>
+  <tr><td class="label">fanbo3</td><td class="label">Walking round-trip</td><td class="label">Mean of 8 joints</td></tr>
+  <tr><td class="label">fanbo9 A255</td><td class="label">Single-DOF movement series (head/arm/waist/leg), A255 camera (farther)</td><td class="label">Mean of 8 joints</td></tr>
+  <tr><td class="label">fanbo9 A257</td><td class="label">Same session, A257 camera (closer)</td><td class="label">Mean of 8 joints</td></tr>
+</table>
+
+<h3>1.2 Combined results (4 configs × 5 scenarios + upgrade contribution %)</h3>
+
+<p>The table below merges MAE comparison with Pipeline / Model upgrade contribution percentages:</p>
+<ul style="font-size:14px;">
+  <li><strong>MAE columns</strong>: all under the current default <strong>bone+Savgol+depth</strong> post-processing chain.</li>
+  <li><strong>Pipeline Δ%</strong> = (V2+v8m − V1+v8m) / V1+v8m × 100 &nbsp;(same model, effect of upgrading the pipeline)</li>
+  <li><strong>Model Δ%</strong> = (V2+v11l − V2+v8m) / V2+v8m × 100, computed under <strong>chain post-processing</strong> (v1: filter+fill+moving_avg). Rationale: bone+Savgol automatically compensates for many of YOLOv8m's detection weaknesses and therefore "masks" the model differences. Using chain post-processing better reveals the model's own contribution.</li>
+  <li>Negative = MAE decreased = better.</li>
+</ul>
+
+<table>
+  <tr>
+    <th class="label">Scenario</th>
+    <th>V1+YOLOv8m</th>
+    <th>V1+YOLO11l</th>
+    <th>V2+YOLOv8m</th>
+    <th>V2+YOLO11l</th>
+    <th>Pipeline Δ%<br>(V1→V2)</th>
+    <th>Model Δ%<br>(v8m→v11l, chain)</th>
+    <th>Better V2 cell</th>
+  </tr>
+  <tr>
+    <td class="label">fanbo7 near</td>
+    <td>5.35°</td><td>2.98°</td><td>2.62°</td><td>2.57°</td>
+    <td class="good">−51.1%</td>
+    <td class="good"><strong>−20.8%</strong></td>
+    <td class="label">YOLO11l (only 0.05° ahead — ignore)</td>
+  </tr>
+  <tr>
+    <td class="label">fanbo4 far</td>
+    <td>11.81°</td><td>21.34°</td><td>5.59°</td><td>9.80°</td>
+    <td class="good">−52.7%</td>
+    <td class="bad">+57.8%</td>
+    <td class="label"><strong>YOLOv8m (4.21° ahead — significant)</strong></td>
+  </tr>
+  <tr>
+    <td class="label">fanbo3 walking</td>
+    <td>15.20°</td><td>14.20°</td><td>14.94°</td><td>14.16°</td>
+    <td class="good">−1.7%</td>
+    <td>−0.8%</td>
+    <td class="label">YOLO11l (0.78° — marginal)</td>
+  </tr>
+  <tr>
+    <td class="label">fanbo9 A255 far</td>
+    <td>10.75°</td><td>12.37°</td><td>10.70°</td><td>12.12°</td>
+    <td class="good">−0.5%</td>
+    <td class="bad">+13.2%</td>
+    <td class="label"><strong>YOLOv8m</strong></td>
+  </tr>
+  <tr>
+    <td class="label">fanbo9 A257 near</td>
+    <td>6.52°</td><td>7.13°</td><td>6.42°</td><td>7.15°</td>
+    <td class="good">−1.5%</td>
+    <td class="bad">+11.3%</td>
+    <td class="label"><strong>YOLOv8m</strong></td>
+  </tr>
+  <tr style="background:#f4f9ff;">
+    <td class="label"><strong>Summary</strong></td>
+    <td colspan="4" class="label">
+      YOLOv8m wins overall <strong>3 / 5</strong>, and its winning scenarios show clear gaps (fanbo4 by 4.21°).<br>
+      YOLO11l's 2 winning scenarios are within 1° (noise range).
+    </td>
+    <td class="label" style="text-align:center"><strong>Pipeline: all green</strong></td>
+    <td class="label" style="text-align:center"><strong>Model: 3 red, 2 green</strong></td>
+    <td class="label" style="text-align:center"><strong>YOLOv8m</strong></td>
+  </tr>
+</table>
+
+<div class="callout">
+  <strong>On the history of the model upgrade:</strong> the original decision to switch from YOLOv8m to YOLO11l was made <strong>based on fanbo7</strong> under the then-current <strong>V1 pipeline + chain post-processing</strong> — under that setup YOLO11l dropped the MAE from <strong>6.75° to 2.32° (−65.7%)</strong>, a very significant improvement. That decision was clearly correct at the time.<br>
+  Later, V2 pipeline introduced the bone+Savgol+depth post-processing, which automatically compensates for many of YOLOv8m's detection weaknesses — so in near-distance scenarios YOLOv8m can now reach similar results. Meanwhile, new scenarios such as fanbo4 (far) and fanbo9 (dual-camera) exposed a more systematic keypoint bias of YOLO11l on far/small targets, so overall YOLOv8m turns out to be more robust today.
+</div>
+
+<h3>1.3 Why does the "bigger model" perform worse in some scenarios?</h3>
+
+<p>Intuitively a larger model should always be more accurate — but in practice YOLO11l clearly regressed on far distance and on fanbo9. Looking at the raw 2D detection quality reveals the mechanism:</p>
+
+<table>
+  <tr>
+    <th class="label">Scenario</th>
+    <th class="label">Model</th>
+    <th>RElbow confidence (mean)</th>
+    <th>Epipolar residual p95 (px)<br>← left-right consistency</th>
+    <th>Reprojection error p95 (px)<br>← consistency with camera geometry</th>
+  </tr>
+  <tr><td class="label" rowspan="2">fanbo7 near (180 cm)</td><td class="label">YOLOv8m</td><td>0.980</td><td class="bad">10.26</td><td class="bad">5.13</td></tr>
+  <tr><td class="label"><strong>YOLO11l</strong></td><td>0.970</td><td class="good"><strong>6.28</strong></td><td class="good"><strong>3.14</strong></td></tr>
+  <tr><td class="label" rowspan="2">fanbo4 far (410 cm)</td><td class="label"><strong>YOLOv8m</strong></td><td>0.976</td><td class="good"><strong>1.41</strong></td><td class="good"><strong>0.71</strong></td></tr>
+  <tr><td class="label">YOLO11l</td><td>0.982</td><td class="bad">2.16</td><td class="bad">1.08</td></tr>
+</table>
+
+<div class="warning">
+  <strong>Notable anomaly:</strong> on fanbo4 far, YOLO11l's <strong>confidence is actually higher</strong> (0.982 vs 0.976), but its <strong>left-right consistency and reprojection accuracy are worse</strong>. In other words, at far distance YOLO11l is <strong>"confident but not accurate"</strong> — and this "over-confidence" is especially harmful in our downstream stereo triangulation, because the pipeline weights inputs by confidence and would treat these wrong estimates as reliable observations.
+</div>
+
+<p><strong>Three concrete explanations, in plain terms:</strong></p>
+
+<ol>
+  <li><strong>At far distance, the person occupies far fewer pixels in the image.</strong> At fanbo7 (180 cm) the subject may be 800+ pixels tall in the frame; at fanbo4 (410 cm) only 300-400 pixels. The pixel budget for locating any single joint shrinks by more than half, and any sub-pixel bias gets amplified proportionally.</li>
+
+  <li><strong>A larger model is not automatically better at every scale.</strong> YOLO11l has ~30% more parameters than YOLOv8m, a larger receptive field, and more abstract features. On the COCO training set, humans are typically 100-500 pixels tall, so at fanbo7 (~500-800 px) — the "normal" range — YOLO11l is noticeably finer than YOLOv8m. But once the target shrinks to fanbo4 range (~300 px), which is under-represented in training data, the larger model tends to rely on its human-body prior to "guess" joint locations, producing systematic biases. YOLOv8m, with its smaller capacity and simpler structure, follows the raw pixel signal more faithfully.</li>
+
+  <li><strong>Stereo triangulation is extremely sensitive to left-right consistency.</strong> Even if one model produces slightly more accurate 2D keypoints per view, as long as its bias is <strong>inconsistent between left and right views</strong> (e.g., 3 px too high on the left image, 2 px too low on the right), triangulation gives a "skewed" 3D point. For a stereo system, <strong>"a modest model that is consistent across views" is more valuable than "a superior monocular model whose per-view biases differ"</strong>. The rise of YOLO11l's epipolar p95 from 1.41 to 2.16 on fanbo4 is a direct symptom of this.</li>
+</ol>
+
+<p>This also explains why both fanbo9 cameras (the closer A257 and the farther A255) prefer YOLOv8m — whenever the scenario involves distant subjects or oblique viewpoints, YOLO11l's over-confidence + left-right inconsistency becomes a liability.</p>
+
+<div class="takeaway">
+  <strong>Overall conclusion: <span style="color:#1a4a80">V2 pipeline + YOLOv8m is the most suitable combination for now.</span></strong>
+  <ul>
+    <li><strong>Pipeline upgrade (V1→V2) is positive across all 5 scenarios</strong> — up to <strong>−52.7%</strong> MAE reduction on the far-standing case. The recent progress comes primarily from pipeline improvements (three-tier quality repair, Savgol smoothing, bone constraint, tracking).</li>
+    <li><strong>Model upgrade (YOLOv8m→YOLO11l) helps in near-distance standing</strong> (fanbo7 under chain: −20.8%), but becomes unstable at far distance (fanbo4 +57.8%, fanbo9 +11–13%) and on walking data.</li>
+    <li>Advantage of V2+YOLOv8m: <strong>doesn't "blow up" in any scenario</strong> — even when not the best, it's still "good enough". Combined with its smaller size (faster inference, easier to deploy), this is the most robust choice.</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="fanbo9">2. fanbo9 Dual-Camera Validation</h2>
+
+<h3>2.1 Why fanbo9</h3>
+<p>All previous tests used <strong>only one</strong> stereo camera (either A255 or A257). fanbo9 is the first case in the dataset where <strong>both cameras record the same session simultaneously</strong>, which lets us validate whether the same pipeline gives consistent results at two different viewpoints/distances.</p>
+<p>Contents: a series of one-degree-of-freedom motions performed one at a time (head fwd/back, head L/R, head rotation, arm side/front lifts, elbow flexion, waist bend/rotate, single-leg raises, ankle rotations...), about 66 seconds total.</p>
+
+<h3>2.2 Cross-camera comparison</h3>
+
+<table>
+  <tr><th class="label">Config</th><th>A255 (farther)</th><th>A257 (closer)</th><th>Gap</th></tr>
+  <tr><td class="label">V1+YOLOv8m</td><td>10.75°</td><td>6.52°</td><td class="mid">+4.24°</td></tr>
+  <tr><td class="label">V1+YOLO11l</td><td>12.37°</td><td>7.13°</td><td class="mid">+5.23°</td></tr>
+  <tr style="background:#f0fff0;"><td class="label"><strong>V2+YOLOv8m ⭐</strong></td><td><strong>10.70°</strong></td><td><strong>6.42°</strong></td><td class="mid">+4.28°</td></tr>
+  <tr><td class="label">V2+YOLO11l</td><td>12.12°</td><td>7.15°</td><td class="mid">+4.97°</td></tr>
+</table>
+
+<div class="callout">
+  <strong>Observation:</strong> regardless of pipeline or YOLO model, A257 (closer) is consistently 4-5° better than A255 (farther). The gap is stable across all 4 configs, showing that <strong>camera-to-subject distance itself is the dominant factor</strong> — the closer the camera, the higher the triangulation depth precision, and the more stable the pose.
+</div>
+
+<div class="takeaway">
+  <strong>Consistent with earlier findings:</strong>
+  <ul>
+    <li>fanbo4 (far, 410 cm) vs fanbo7 (near, 180 cm) had already shown that distance strongly affects accuracy. fanbo9 now confirms this using the <strong>same session across two cameras</strong>, ruling out "different motion content" as a confounder.</li>
+    <li>On A257 (closer), V2+YOLOv8m (6.42°) is again the best of the 4 configs — further supporting the conclusion in Section 1.</li>
+    <li>For actual deployment, the subject should stay within ~2-3 m of the camera. Accuracy degrades noticeably past 4 m.</li>
+  </ul>
+</div>
+
+<hr>
+
+<h2 id="fusion">3. FastSAM3D Fusion (original idea turns out infeasible)</h2>
+
+<p>An earlier idea was: since FastSAM3D also outputs human pose, could we <strong>fuse it into our stereo pipeline</strong>, e.g. use its output as an additional observation alongside the YOLO-based stereo triangulation?</p>
+
+<p>This week I carefully read the <em>Fast SAM 3D Body</em> paper (USC / NVIDIA / Meta, 2026) and found that <strong>this fusion is technically infeasible</strong>. Two main reasons:</p>
+
+<h3>3.1 FastSAM3D outputs 3D directly and skips 2D → 3D triangulation</h3>
+
+<p>Our stereo pipeline works this way:</p>
+<div style="background:#f5f5f5; padding:10px 16px; border-radius:4px; font-family:'Menlo', monospace; font-size:14px;">
+  Left 2D keypoints &nbsp;+&nbsp; right 2D keypoints &nbsp;+&nbsp; camera calibration &nbsp;→&nbsp; triangulation &nbsp;→&nbsp; 3D keypoints
+</div>
+
+<p>FastSAM3D works this way:</p>
+<div style="background:#f5f5f5; padding:10px 16px; border-radius:4px; font-family:'Menlo', monospace; font-size:14px;">
+  single RGB image &nbsp;→&nbsp; backbone + Transformer decoding &nbsp;→&nbsp; direct 3D mesh + 3D joints
+</div>
+
+<p>Its depth is <strong>inferred by the neural network from a monocular image</strong> (using field-of-view estimation and human-body priors), completely bypassing the "cross-view geometry" step. So FastSAM3D <strong>doesn't produce an intermediate variable that can be triangulated with another view</strong> — it goes directly to 3D in one shot.</p>
+
+<h3>3.2 Extracting accurate 2D keypoints from inside FastSAM3D is also not viable</h3>
+
+<p>Internally, FastSAM3D does use a YOLO11-Pose detector, but the paper explicitly states this YOLO's role is only to give a <strong>coarse bounding box</strong> so the downstream Transformer knows where the person is (paper's own words: <em>"these initial keypoints do not require sub-pixel precision; they merely need to establish a reliable bounding region"</em>).</p>
+
+<p>The real pose precision comes from the Transformer decoder afterward, and this precision only surfaces in the <strong>3D mesh output</strong> — never as accurate 2D keypoints. Even if we opened up FastSAM3D's pipeline, we couldn't extract "high-precision 2D keypoints" to feed into stereo triangulation; we could only extract the coarse 2D from YOLO11-Pose, which we already use in our own pipeline — no additional value.</p>
+
+<div class="warning">
+  <strong>Conclusion:</strong> FastSAM3D is not suitable as an "additional 2D observation" for the stereo system.<br>
+  <strong>Correct usage:</strong> treat FastSAM3D as an <strong>independent reference</strong> (which is exactly how we already use it today) — its output and our stereo output stand alone, and we compare MAE against Xsens separately. Any "fusion" can only happen at the <strong>result level</strong> (e.g., "switch to FastSAM3D when the stereo pipeline's confidence is low"), not at the geometric level.
+</div>
+
+<hr>
+
+<h2 id="next">4. Next Steps</h2>
+
+<p>Pipeline-level exploration is roughly wrapped up. Two things to do next, in parallel:</p>
+
+<ul>
+  <li><strong>GPU-related experiments</strong>: many of the recent methods I looked at (including this week's Fast SAM 3D Body) all run on GPUs, while our current pipeline is mostly on CPU — I want to try out something new and get more familiar with the GPU deployment stack along the way.</li>
+  <li><strong>Real-time deployment</strong>: paired with the GPU work, aiming to push the pipeline from the current ~2-3 fps toward real-time. If that works, we can start putting together an end-to-end demo.</li>
+</ul>
+
+<div class="footer">
+  <p>Report by Fanbo Meng · Master Thesis · 2026-07-07</p>
+</div>
+
+</body>
+</html>

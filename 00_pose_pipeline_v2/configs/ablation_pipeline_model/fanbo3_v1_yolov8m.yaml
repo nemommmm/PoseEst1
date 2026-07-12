@@ -1,0 +1,74 @@
+dataset:
+  name: assar2026_fanbo3_a255
+  description: Ablation Cell A - V1 pipeline + YOLOv8m on Fanbo3 walking.
+  left_video: 2026_Assar_Data/A255/Video/cap_2_0.avi
+  right_video: 2026_Assar_Data/A255/Video/cap_2_1.avi
+  left_metadata: 2026_Assar_Data/A255/Video/cap_2_0.txt
+  right_metadata: 2026_Assar_Data/A255/Video/cap_2_1.txt
+  rotate_180: true
+  sync_by: hardware_frame_id
+  timestamp_format: seconds_microseconds_columns
+
+calibration:
+  camera_params: shared/camera_params_A255.npz
+
+skt:
+  use_existing_npz: false
+  existing_npz:
+  output_npz: skt_pose_optimized.npz
+  model_path: 01_stereo_triangulation/src/yolov8m-pose.pt
+  confidence_threshold: 0.35
+  min_pair_confidence: 0.25
+  max_reprojection_px: 80.0
+  max_frames:
+  center_person_weight: 5.0
+
+references:
+  xsens_mvnx: "2026_Assar_Data/Xsens MVNX/Fanbo-003.mvnx"
+  xsens_fair_angles:
+  fastsam_trc: "2026_Assar_Data/TRC FastSAM3D/markers_Fanbo3_2026-06-16 15-19-59_e65b2c80c6a540a9bed422da7bf58765.trc"
+  merge_trc:
+  include_xsens_native: true
+  trc_time_offsets_seconds:
+    FastSAM3D: 3.0
+
+offset:
+  search_range_seconds: [0.0, 6.0]
+  coarse_step_seconds: 0.10
+  fine_window_seconds: 0.50
+  fine_step_seconds: 0.01
+  selection_priority: [motion_delta, angle, position]
+  motion_k_seconds: 0.5
+  min_pairs: 20
+
+evaluation:
+  angle_names: [LeftShoulder, RightShoulder, LeftElbow, RightElbow, LeftHip, RightHip, LeftKnee, RightKnee]
+  k_frame_list: [1, 6, 12, 25]
+  camera_smooth_window_ms: 200.0
+  xsens_extra_smoothing: false
+  skt_quality_filter:
+    enabled: true
+    min_triang_conf: 0.20
+    max_epipolar_px: 10.0
+    max_reprojection_px: 10.0
+    joint_indices: [5, 6, 7, 8, 9, 10]
+  depth_consistency_filter:
+    enabled: true
+    max_depth_deviation_cm: 15.0
+    limb_triplets: [[5,7,9], [6,8,10]]
+  max_gap_frames: 5
+  anomaly_delta_deg: 30.0
+  active_delta_threshold_deg: 1.0
+  noise_floor_threshold_deg: 0.5
+  rula_bins:
+    LeftElbow: [60, 100]
+    RightElbow: [60, 100]
+    LeftShoulder: [20, 45, 90]
+    RightShoulder: [20, 45, 90]
+
+filter_ablation:
+  jump_threshold_deg: 10.0
+
+outputs:
+  runs_dir: 00_pose_pipeline_v2/runs/ablation_pipeline_model
+  run_tag: fanbo3_v1_yolov8m

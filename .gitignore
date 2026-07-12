@@ -279,5 +279,6 @@ archive_intermediate_*/
 # Ignore local output folders (generated parameters/results)
 output/
 results/
+scratch/
 CLAUDE.md
 AGENTS.md

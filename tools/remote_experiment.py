@@ -134,7 +134,7 @@ def run_remote(args: argparse.Namespace) -> None:
     python = str(Path(args.remote_root).parent / "venv-pose/bin/python")
     runner = [
         python,
-        "00_pose_pipeline_v2/src/run_smpl_candidate.py",
+        "00_pose_pipeline_v2/src/run_smpl_asset_gate.py",
         "--config", str(relative_config),
         "--gate", args.gate,
         "--run-dir", str(relative_run),

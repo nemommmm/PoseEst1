@@ -262,3 +262,43 @@ the run was recorded as `asset_blocked` and synchronized as a standard result
 bundle. No unofficial model download was attempted. This is an external asset
 block, not a model-accuracy rejection; EasyMocap/SMPL fitting remains pending
 the official licensed file and its CUDA forward validation.
+
+## 2026-07-13 — EasyMocap / SMPL Calibrated-stereo Feasibility Gate
+
+The official SMPL for Python v1.1.0 neutral model was supplied by the user and
+stored only in the private persistent path
+`/workspace/model_assets/smpl/SMPL_NEUTRAL.pkl`. Its size was 247,186,228
+bytes and its SHA256 was
+`4924f235e63f7c5d5b690acedf736419c2edb846a2d69fc0956169615fa75688`.
+EasyMocap produced a finite CUDA zero-pose forward with shape `[1, 25, 3]`.
+
+The fitting gate used a continuous centered 40-frame Fanbo7 A257 interval,
+the frozen tracked stereo calibration, and the deterministic YOLOv8m/SKT
+source. EasyMocap BODY-25 joints were explicitly mapped to COCO-17. One shape
+was estimated for the session and frozen for final refinement; per-frame pose,
+global rotation, and translation were fitted with two-view Huber reprojection,
+a quality-weighted SKT anchor, the official EasyMocap CMU GMM pose prior,
+shape regularization, and temporal second-order continuity. No Xsens-derived
+signal was used for initialization, fitting, or parameter selection.
+
+| Metric | EasyMocap / SMPL |
+|---|---:|
+| Finite core-joint ratio | 1.0000 |
+| Reprojection median / p95 | 10.7509 / 35.3356 px |
+| Mean bone-length CV | 0.0121 |
+| Angle jumps above 10 degrees | 34 |
+| High-quality correction median / p95 | 6.1537 / 28.6947 cm |
+| Prior time | 404.22 ms/frame |
+| Estimated end-to-end throughput | 2.2966 fps |
+
+Decision: reject at the first feasibility gate. The body prior produced a
+complete and temporally rigid skeleton, but it displaced reliable image
+observations by several centimeters and failed the 10 px reprojection gate by
+a large margin. This is the same important failure mode observed with
+Pose2Sim: an anatomically plausible solution was not sufficiently faithful to
+the recorded motion. Fanbo4, 200-frame, full-sequence, angle-agreement, and
+RULA comparisons were not run. The checksummed local result bundle contains
+the canonical NPZ, SMPL pose/shape/translation arrays, 12 diagnostic figures,
+an H.264 preview, timing, GPU metadata, and the artifact manifest. The fitting
+adapter is rolled back to snapshot `275b727`; licensed-asset validation and
+the reproducible EasyMocap dependency fix are retained.

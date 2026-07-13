@@ -110,11 +110,15 @@ def synchronize(host: str, remote_root: str, tag: str) -> None:
             str(local),
         ],
         cwd=PROJECT_ROOT,
-        check=True,
+        check=False,
         capture_output=True,
         text=True,
     )
     print(verify.stdout.strip())
+    if verify.returncode != 0:
+        if verify.stderr:
+            print(verify.stderr.strip())
+        raise RuntimeError("downloaded artifact bundle failed checksum verification")
 
 
 def run_remote(args: argparse.Namespace) -> None:
@@ -153,7 +157,7 @@ def run_remote(args: argparse.Namespace) -> None:
             f"{runner_text} > {shlex.quote(str(relative_run / 'stdout.log'))} 2>&1",
             "run_status=$?",
             "if [ $run_status -eq 0 ]; then state=completed; else state=failed; fi",
-            f"{shlex.join(manifest)} --execution-status \"$state\" >> {shlex.quote(str(relative_run / 'stdout.log'))} 2>&1",
+            f"{shlex.join(manifest)} --execution-status \"$state\" >/dev/null 2>&1",
             "manifest_status=$?",
             "if [ $run_status -ne 0 ]; then exit $run_status; fi",
             "exit $manifest_status",

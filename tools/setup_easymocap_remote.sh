@@ -13,6 +13,9 @@ git -C "${EXTERNAL_ROOT}/EasyMocap" checkout e6813197809936ca3353693f7c059025d29
 
 "${PYTHON_BIN}" -m pip install --target "${DEPS}" --no-deps \
   func_timeout ipdb joblib tabulate termcolor yacs
+"${PYTHON_BIN}" -m pip install --target "${DEPS}" --no-deps \
+  --no-build-isolation \
+  git+https://github.com/mattloper/chumpy.git@580566eafc9ac68b2614b64d6f7aaa84eebb70da
 
 PYTHONPATH="${DEPS}:${EXTERNAL_ROOT}/EasyMocap" "${PYTHON_BIN}" -c \
   'from easymocap.bodymodel.smpl import SMPLModel; print("EasyMocap SMPL module ready")'

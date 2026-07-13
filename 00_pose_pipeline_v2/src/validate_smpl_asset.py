@@ -20,6 +20,17 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def module_device(module: torch.nn.Module, output: torch.Tensor) -> torch.device:
+    """Return the device of a parameterless or buffer-only Torch module."""
+    parameter = next(module.parameters(), None)
+    if parameter is not None:
+        return parameter.device
+    buffer = next(module.buffers(), None)
+    if buffer is not None:
+        return buffer.device
+    return output.device
+
+
 def main() -> None:
     """Load the licensed model and run a zero-pose CUDA forward pass."""
     parser = argparse.ArgumentParser()
@@ -53,7 +64,7 @@ def main() -> None:
         "asset_path": str(args.model),
         "asset_bytes": args.model.stat().st_size,
         "asset_sha256": sha256(args.model),
-        "device": str(next(model.parameters()).device),
+        "device": str(module_device(model, output)),
         "output_shape": list(output.shape),
         "finite": bool(torch.isfinite(output).all().item()),
         "reference_policy": "No Xsens signal is used for SMPL asset validation",

@@ -66,14 +66,37 @@ class ResearchCandidateTest(unittest.TestCase):
         pose[0, 14] = [0.5, 0.0, -2.0]
         pose[0, 15] = [-0.5, 0.0, -3.0]
         pose[0, 16] = [0.5, 0.0, -3.0]
-        result = CandidateResult("synthetic", np.array([0.0]), pose)
+        quality = np.full((1, 17), 0.8, dtype=np.float64)
+        result = CandidateResult(
+            "synthetic",
+            np.array([0.0]),
+            pose,
+            keypoints_3d_raw=pose.copy(),
+            joint_quality=quality,
+            prior_weight=1.0 - quality,
+            extra_arrays={"smpl_betas": np.zeros(10, dtype=np.float64)},
+        )
         with tempfile.TemporaryDirectory() as tmp:
             path = result.save(Path(tmp) / "candidate.npz")
             with np.load(path, allow_pickle=False) as payload:
-                self.assertEqual(str(payload["schema_version"]), "research_candidate_v1")
+                self.assertEqual(str(payload["schema_version"]), "research_candidate_v2")
+                np.testing.assert_allclose(payload["keypoints_3d_raw"], pose, equal_nan=True)
+                np.testing.assert_allclose(payload["joint_quality"], quality)
+                self.assertEqual(payload["smpl_betas"].shape, (10,))
                 angle_names = list(payload["angle_names"])
                 right_elbow = payload["angles"][0, angle_names.index("RightElbow")]
                 self.assertAlmostEqual(float(right_elbow), 90.0)
+
+    def test_reserved_extra_array_is_rejected(self) -> None:
+        pose = np.zeros((1, 17, 3), dtype=np.float64)
+        result = CandidateResult(
+            "invalid",
+            np.array([0.0]),
+            pose,
+            extra_arrays={"timestamps": np.array([1.0])},
+        )
+        with self.assertRaisesRegex(ValueError, "reserved names"):
+            result.validate()
 
 
 if __name__ == "__main__":

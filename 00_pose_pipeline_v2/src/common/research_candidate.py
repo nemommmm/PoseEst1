@@ -117,12 +117,16 @@ class CandidateResult:
     candidate_name: str
     timestamps: np.ndarray
     keypoints_3d: np.ndarray
+    keypoints_3d_raw: np.ndarray | None = None
     angle_names: tuple[str, ...] = SEMANTIC_ANGLE_NAMES
     confidence_2d: np.ndarray | None = None
     epipolar_error_px: np.ndarray | None = None
     reprojection_error_px: np.ndarray | None = None
+    joint_quality: np.ndarray | None = None
+    prior_weight: np.ndarray | None = None
     stage_time_ms: Mapping[str, np.ndarray | float] = field(default_factory=dict)
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    extra_arrays: Mapping[str, np.ndarray] = field(default_factory=dict)
 
     def validate(self) -> None:
         """Validate shapes and required semantic joints before serialization."""
@@ -135,12 +139,26 @@ class CandidateResult:
         if len(timestamps) > 1 and np.any(np.diff(timestamps) < 0):
             raise ValueError("timestamps must be non-decreasing")
         for field_name, values in (
+            ("keypoints_3d_raw", self.keypoints_3d_raw),
             ("confidence_2d", self.confidence_2d),
             ("epipolar_error_px", self.epipolar_error_px),
             ("reprojection_error_px", self.reprojection_error_px),
+            ("joint_quality", self.joint_quality),
+            ("prior_weight", self.prior_weight),
         ):
             if values is not None and np.asarray(values).shape[:2] != (len(timestamps), 17):
                 raise ValueError(f"{field_name} must begin with shape (frames, 17)")
+        if self.keypoints_3d_raw is not None and np.asarray(self.keypoints_3d_raw).shape != keypoints.shape:
+            raise ValueError("keypoints_3d_raw must have shape (frames, 17, 3)")
+        reserved = {
+            "schema_version", "candidate_name", "timestamps", "keypoints_3d",
+            "keypoints_3d_raw", "keypoints", "angle_names", "angles",
+            "metadata_json", "confidence_2d", "epipolar_error_px",
+            "reprojection_error_px", "joint_quality", "prior_weight",
+        }
+        overlap = reserved.intersection(self.extra_arrays)
+        if overlap:
+            raise ValueError(f"extra_arrays uses reserved names: {sorted(overlap)}")
 
     def save(self, path: Path) -> Path:
         """Validate and save a self-describing compressed NPZ."""
@@ -150,7 +168,7 @@ class CandidateResult:
         metadata = dict(self.metadata)
         metadata["bone_statistics_cm"] = compute_bone_statistics(self.keypoints_3d)
         arrays: dict[str, Any] = {
-            "schema_version": np.asarray("research_candidate_v1"),
+            "schema_version": np.asarray("research_candidate_v2"),
             "candidate_name": np.asarray(self.candidate_name),
             "timestamps": np.asarray(self.timestamps, dtype=np.float64),
             "keypoints_3d": np.asarray(self.keypoints_3d, dtype=np.float64),
@@ -160,11 +178,15 @@ class CandidateResult:
             "metadata_json": np.asarray(json.dumps(metadata, sort_keys=True)),
         }
         optional = {
+            "keypoints_3d_raw": self.keypoints_3d_raw,
             "confidence_2d": self.confidence_2d,
             "epipolar_error_px": self.epipolar_error_px,
             "reprojection_error_px": self.reprojection_error_px,
+            "joint_quality": self.joint_quality,
+            "prior_weight": self.prior_weight,
         }
         arrays.update({name: np.asarray(value) for name, value in optional.items() if value is not None})
+        arrays.update({name: np.asarray(value) for name, value in self.extra_arrays.items()})
         for name, value in self.stage_time_ms.items():
             arrays[f"time_{name}_ms"] = np.asarray(value, dtype=np.float64)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -188,9 +210,12 @@ def adapt_skt_npz(source: Path, destination: Path, candidate_name: str = "YOLOv8
             candidate_name=candidate_name,
             timestamps=payload["timestamps"],
             keypoints_3d=keypoints,
+            keypoints_3d_raw=keypoints,
             confidence_2d=confidence,
             epipolar_error_px=payload["epipolar_error"],
             reprojection_error_px=payload["reprojection_error"],
+            joint_quality=payload["stereo_quality"] if "stereo_quality" in payload.files else confidence,
+            prior_weight=np.zeros_like(confidence),
             stage_time_ms=stage_times,
             metadata={
                 "source": str(source),

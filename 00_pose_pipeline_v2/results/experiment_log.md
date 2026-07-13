@@ -216,3 +216,49 @@ parameters were downloaded from unofficial sources, and no Xsens-derived
 signal was used. Once the user supplies `SMPL_NEUTRAL.pkl` under the documented
 persistent path, the CUDA zero-pose validation must pass before any 40-frame
 fitting gate is allowed to run.
+
+## 2026-07-13 — Geometry-conditioned Kinematic Prior Gate
+
+A lightweight calibrated-stereo kinematic optimizer was evaluated on a
+continuous 40-frame Fanbo7 A257 interval. The fixed grid covered 3D-anchor
+weights `[0.25, 1.0]`, bone weights `[1.0, 3.0]`, and temporal weights
+`[0.05, 0.2]`. Candidate selection used only reprojection, finite coverage,
+bone stability, and temporal jumps. Xsens-derived data were not used for
+fitting or hyperparameter selection.
+
+Hardware and runtime: NVIDIA RTX A6000 48 GB (UUID
+`GPU-9677f9a4-5d00-2cb2-fac6-d50eef706f30`), driver 580.95.05, PyTorch 2.8.0,
+CUDA 12.8, and cuDNN 9.1. The experiment commit was `d9d29fe`; the frozen A257
+calibration and source NPZ hashes are recorded in the downloaded candidate
+metadata and checksummed artifact manifest.
+
+| Metric | Raw deterministic SKT | Selected kinematic prior |
+|---|---:|---:|
+| Finite core-joint ratio | 0.8375 | 0.9167 |
+| Reprojection median | 1.3660 px | 1.6110 px |
+| Reprojection p95 | 7.7878 px | 13.5446 px |
+| Mean bone-length CV | 0.1116 | 0.0971 |
+| Angle jumps above 10 degrees | 53 | 42 |
+| High-quality correction median / p95 | -- | 0.2061 / 0.6308 cm |
+| Prior time | -- | 5028.9 ms/frame |
+| Estimated end-to-end throughput | existing baseline >12.5 fps | 0.1976 fps |
+
+The selected setting was anchor 1.0, bone 3.0, and temporal 0.2. The prior
+filled missing joints and improved bone stability, while its small correction
+on high-quality observations confirmed that it did not overpower reliable
+image evidence. However, reprojection p95 exceeded the predefined 10 px gate
+and the implementation was far below the real-time target. Decision: reject
+before Fanbo4, 200-frame, angle-agreement, and full-sequence evaluation. The
+standard negative-result bundle, including the reconstruction NPZ, timing,
+GPU metadata, 12 diagnostic figures, preview video, and SHA256 manifest, was
+downloaded locally. Per the experiment rule, the failed fitting adapter is
+rolled back rather than patched further.
+
+## 2026-07-13 — SMPL Licensed-asset Gate Recheck
+
+The new A6000 Pod was checked at the expected persistent path
+`/workspace/model_assets/smpl/SMPL_NEUTRAL.pkl`. The asset is still absent, so
+the run was recorded as `asset_blocked` and synchronized as a standard result
+bundle. No unofficial model download was attempted. This is an external asset
+block, not a model-accuracy rejection; EasyMocap/SMPL fitting remains pending
+the official licensed file and its CUDA forward validation.

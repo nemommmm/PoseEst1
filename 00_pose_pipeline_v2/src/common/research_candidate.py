@@ -110,6 +110,45 @@ def compute_bone_statistics(keypoints_3d: np.ndarray) -> dict[str, dict[str, flo
     return result
 
 
+def load_candidate_npz(path: Path) -> dict[str, Any]:
+    """Load candidate v1/v2 or legacy SKT arrays into canonical field names."""
+    with np.load(path, allow_pickle=False) as payload:
+        if "keypoints_3d" in payload.files:
+            keypoints = np.asarray(payload["keypoints_3d"], dtype=np.float64)
+        elif "keypoints" in payload.files:
+            keypoints = np.asarray(payload["keypoints"], dtype=np.float64)
+        else:
+            raise ValueError("candidate file has neither keypoints_3d nor keypoints")
+        if "timestamps" not in payload.files:
+            raise ValueError("candidate file has no timestamps")
+        schema = (
+            str(np.asarray(payload["schema_version"]).item())
+            if "schema_version" in payload.files
+            else "legacy_skt"
+        )
+        candidate_name = (
+            str(np.asarray(payload["candidate_name"]).item())
+            if "candidate_name" in payload.files
+            else "legacy_skt"
+        )
+        metadata: dict[str, Any] = {}
+        if "metadata_json" in payload.files:
+            metadata = json.loads(str(np.asarray(payload["metadata_json"]).item()))
+        return {
+            "schema_version": schema,
+            "candidate_name": candidate_name,
+            "timestamps": np.asarray(payload["timestamps"], dtype=np.float64),
+            "keypoints_3d": keypoints,
+            "keypoints_3d_raw": np.asarray(
+                payload["keypoints_3d_raw"]
+                if "keypoints_3d_raw" in payload.files
+                else keypoints,
+                dtype=np.float64,
+            ),
+            "metadata": metadata,
+        }
+
+
 @dataclass
 class CandidateResult:
     """Canonical result representation shared by all research candidates."""
@@ -200,7 +239,7 @@ def adapt_skt_npz(source: Path, destination: Path, candidate_name: str = "YOLOv8
         keypoints = np.asarray(payload["keypoints"], dtype=np.float64)
         conf_left = np.asarray(payload["conf_left"], dtype=np.float64)
         conf_right = np.asarray(payload["conf_right"], dtype=np.float64)
-        confidence = np.minimum(conf_left, conf_right)
+        confidence = np.stack([conf_left, conf_right], axis=2)
         stage_times = {
             key.removesuffix("_ms"): payload[key]
             for key in payload.files
@@ -214,8 +253,12 @@ def adapt_skt_npz(source: Path, destination: Path, candidate_name: str = "YOLOv8
             confidence_2d=confidence,
             epipolar_error_px=payload["epipolar_error"],
             reprojection_error_px=payload["reprojection_error"],
-            joint_quality=payload["stereo_quality"] if "stereo_quality" in payload.files else confidence,
-            prior_weight=np.zeros_like(confidence),
+            joint_quality=(
+                payload["stereo_quality"]
+                if "stereo_quality" in payload.files
+                else np.minimum(conf_left, conf_right)
+            ),
+            prior_weight=np.zeros_like(conf_left),
             stage_time_ms=stage_times,
             metadata={
                 "source": str(source),

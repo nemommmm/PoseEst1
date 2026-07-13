@@ -1,0 +1,14 @@
+dataset:
+  name: fanbo7_a257
+  left_video: 2026_Assar_Data/A257/Video/cap_5_0.avi
+  right_video: 2026_Assar_Data/A257/Video/cap_5_1.avi
+
+calibration:
+  camera_params: shared/camera_params_A257.npz
+
+human_prior:
+  source_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo7_v2_yolov8m/skt_pose_optimized.npz
+  smpl_asset: /workspace/model_assets/smpl/SMPL_NEUTRAL.pkl
+
+evaluation:
+  angle_names: [LeftShoulder, RightShoulder, LeftElbow, RightElbow, LeftHip, RightHip, LeftKnee, RightKnee]

@@ -15,6 +15,7 @@ sys.path.insert(0, str(SRC))
 from common.research_candidate import (  # noqa: E402
     CandidateResult,
     convert_to_centimeters,
+    load_candidate_npz,
     map_to_coco17,
     transform_points,
 )
@@ -97,6 +98,29 @@ class ResearchCandidateTest(unittest.TestCase):
         )
         with self.assertRaisesRegex(ValueError, "reserved names"):
             result.validate()
+
+    def test_v1_and_legacy_candidate_loading(self) -> None:
+        pose = np.zeros((2, 17, 3), dtype=np.float64)
+        timestamps = np.array([0.0, 0.08], dtype=np.float64)
+        with tempfile.TemporaryDirectory() as tmp:
+            v1_path = Path(tmp) / "v1.npz"
+            np.savez_compressed(
+                v1_path,
+                schema_version=np.asarray("research_candidate_v1"),
+                candidate_name=np.asarray("v1-test"),
+                timestamps=timestamps,
+                keypoints_3d=pose,
+                metadata_json=np.asarray("{}"),
+            )
+            loaded_v1 = load_candidate_npz(v1_path)
+            self.assertEqual(loaded_v1["schema_version"], "research_candidate_v1")
+            np.testing.assert_array_equal(loaded_v1["keypoints_3d_raw"], pose)
+
+            legacy_path = Path(tmp) / "legacy.npz"
+            np.savez_compressed(legacy_path, timestamps=timestamps, keypoints=pose)
+            loaded_legacy = load_candidate_npz(legacy_path)
+            self.assertEqual(loaded_legacy["schema_version"], "legacy_skt")
+            np.testing.assert_array_equal(loaded_legacy["keypoints_3d"], pose)
 
 
 if __name__ == "__main__":

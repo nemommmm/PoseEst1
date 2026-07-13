@@ -9,6 +9,19 @@ calibration:
 human_prior:
   source_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo4_v2_yolov8m/skt_pose_optimized.npz
   smpl_asset: /workspace/model_assets/smpl/SMPL_NEUTRAL.pkl
+  smpl_regressor: /workspace/external/EasyMocap/data/smplx/J_regressor_body25.npy
+  smpl:
+    global_iterations: 80
+    joint_iterations: 220
+    frozen_shape_iterations: 100
+    learning_rate: 0.025
+    reprojection_weight: 1.0
+    anchor_weight: 0.25
+    pose_prior_weight: 0.002
+    shape_weight: 0.01
+    temporal_weight: 0.05
+    max_reprojection_p95_px: 10.0
+    max_high_quality_correction_cm: 1.0
 
 evaluation:
   angle_names: [LeftShoulder, RightShoulder, LeftElbow, RightElbow, LeftHip, RightHip, LeftKnee, RightKnee]

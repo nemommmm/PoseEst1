@@ -79,17 +79,21 @@ The evaluation is organized around three complementary axes -- angle-space
 accuracy, motion-space consistency, and position-space geometry -- and the
 motion-space axis is built on K-frame angle deltas
 ($\Delta_K\theta_t = \theta_t-\theta_{t-K}$), which cancel the static Xsens
-offset by differencing and expose true short-term motion agreement.
-On a single-subject manufacturing recording of 2801 synchronized stereo frame
+offset by differencing and provide a short-term agreement measure that is
+less sensitive to static offsets.
+On the primary 2025 single-subject manufacturing recording of 2801 synchronized stereo frame
 pairs over 248.8\,s, FastSAM3D achieves lower mean angle MAE than SKT across
 eight body angles (15.4\degr\ vs.\ 17.6\degr) and stronger K=6 motion-delta
 correlation with the Xsens-derived reference (mean Pearson 0.64 vs.\ 0.38;
 right-elbow Pearson 0.69 vs.\ 0.39).
-This angle and motion advantage is attributed to FastSAM3D's learned
-body-shape and motion-continuity priors, which absorb anatomical constraints
-from large training corpora and consequently suppress the per-frame keypoint
-jitter that a frame-independent geometric triangulation pipeline propagates
-directly into its angle estimates.
+A supplementary 2026 detector-backbone analysis on 1219 common valid frames
+finds a lower pooled median right-elbow disagreement for YOLOv8m than for
+YOLO11L (17.58\degr\ vs.\ 18.49\degr) and does not support a fixed
+near/far model-switching rule.
+This angle and motion pattern is consistent with FastSAM3D's learned
+body-shape and pose priors reducing the effect of per-frame keypoint jitter.
+Because no prior ablation is available, that mechanism is treated as a
+plausible explanation rather than as a measured cause.
 SKT, by contrast, retains a clear position-space advantage: its 3D coordinates
 inherit metric scale directly from the calibrated stereo baseline without any
 external alignment step, and the per-frame geometric quality signals it
@@ -361,11 +365,11 @@ conventions, and \emph{Xsens-derived geometric} angles, which are
 re-computed from the Xsens 3D segment positions using the same three-point
 formula that is later applied to all vision pipelines.
 The Xsens-derived geometric representation is adopted as the main reference
-throughout the thesis because it removes the angle-definition mismatch
-between systems, and because its agreement with the native representation
-(MAE $\approx$ 2\degr\ in motion-space on the present recording) supplies a
-quantitative lower-bound that calibrates how to interpret the absolute
-errors reported for the vision methods.
+throughout the thesis because it reduces the angle-definition mismatch
+between systems.  Its agreement with the native representation
+(MAE $\approx$ 2\degr\ in motion-space on the present recording) is reported
+as an internal representation self-consistency check; it does not establish
+a physical accuracy bound for either Xsens representation.
 
 \subsection{Related Work Summary and Positioning}
 
@@ -383,10 +387,10 @@ pose-estimation literature with an explicit three-axis framework
 reference-system calibration offsets by reporting K-frame angle deltas at
 multiple time scales.
 Third, it treats reference-system limitations as a first-class methodological
-concern: the thesis quantifies the Xsens self-consistency floor on the same
-metrics that are applied to the vision pipelines, so that every reported
-number can be read against the lower bound of what the reference itself can
-support.
+concern: the thesis quantifies agreement between two Xsens angle
+representations on the same metrics that are applied to the vision
+pipelines, so that definition-dependent disagreement remains visible rather
+than being mistaken for physical accuracy.
 The contribution is therefore not a new pose-estimation algorithm but a
 deployment-oriented evaluation protocol, together with the empirical finding
 that on this dataset learning-based monocular pose is competitive on angle
@@ -449,10 +453,11 @@ angle estimates rather than amplified jitter.
 
 \subsection{2025 Ergonomics Dataset}
 
-All quantitative results in this thesis are computed on a single
+The primary cross-method results in this thesis are computed on one
 single-subject ergonomics recording collected in a controlled
-manufacturing-like environment, and this is therefore the dominant
-generalisability limitation of the present study.
+manufacturing-like environment.  A separate 2026 Assar subset is used only
+for the supplementary detector-backbone and distance-robustness study; it is
+not mixed into the main SKT--FastSAM3D ranking.
 The subject performs a representative mix of factory-floor activities --
 walking, sitting, squatting, reaching, lifting, and interacting with
 furniture -- so that all major upper- and lower-body postures are exercised
@@ -486,6 +491,26 @@ that all downstream evaluations share.
   \end{tabular}
 \end{table}
 
+\subsection{2026 Assar Supplementary Detector Dataset}
+\label{sec:assar_supplement}
+
+The supplementary detector study uses four synchronized stereo recordings
+from the 2026 Assar collection: Fanbo7 A257, Fanbo9 A257, Fanbo9 A255, and
+Fanbo4 A257.  These recordings contain the same operator but span two
+calibrated camera pairs and median stereo-estimated optical depths of
+approximately 2.09, 2.68, 3.07, and 4.03\,m.  The analysis is restricted to
+the right elbow, which is the only ergonomic angle configured consistently
+across all four recordings, and compares YOLOv8m with YOLO11L inside the same
+SKT V2 geometry and filtering pipeline.
+
+Each recording has its own Xsens MVNX file, used only as an Xsens-derived
+external comparison reference.  The supplementary analysis does not use
+Xsens to tune detector parameters or to choose a separate alignment for each
+model; instead, it fixes one offset per recording before the paired detector
+comparison.  Because recording, action, viewpoint, and distance change
+together, this subset can reveal an association with estimated depth but
+cannot isolate physical distance as a causal factor.
+
 \subsection{Xsens Reference Data and Angle Representations}
 
 The Xsens recording supplies full-body motion data on an independent time
@@ -510,11 +535,10 @@ correlation of $\sim$0.99 in K-frame motion space; at the shoulder and hip,
 the agreement is visibly weaker because the underlying axis conventions
 differ more.
 The implication for the thesis evaluation design is two-fold.
-First, the elbow numbers serve as a \emph{lower-bound anchor}: a vision
-method whose absolute angle MAE against Xsens-derived geometric is several
-times the elbow self-consistency floor is unlikely to be limited by the
-reference, whereas one that approaches the floor is approaching the
-information limit of the reference itself.
+First, the elbow numbers provide a \emph{representation self-consistency
+check}: they quantify how much two angle definitions derived from the same
+Xsens recording disagree.  They help identify definition sensitivity but do
+not measure the physical accuracy or information limit of Xsens.
 Second, the larger shoulder/hip mismatch is one of the reasons the thesis
 reports motion-space metrics alongside absolute angle MAE, since
 differencing cancels both the unknown global Xsens calibration offset and
@@ -603,6 +627,9 @@ The thesis benchmarks two pose-estimation pipelines against the same Xsens
 reference and the same evaluation protocol: SKT, the primary calibrated
 sparse-stereo method developed in this thesis, and FastSAM3D, the monocular
 learning-based alternative.
+The YOLOv8m--YOLO11L comparison is a supplementary detector-backbone ablation
+inside SKT, not a third pose-estimation pipeline; all downstream geometry and
+angle definitions are held fixed for that study.
 Figure~\ref{fig:pipeline_overview} shows the full experimental flow, and
 Table~\ref{tab:method_roles} summarises each pipeline's input assumption, main
 advantage, and main risk.
@@ -638,7 +665,7 @@ assumed to be equally strong in temporal angle consistency.
     & 2D keypoint jitter and left--right mismatch are amplified by triangulation \\
     FastSAM3D
     & Monocular pose output provided as TRC markers
-    & Learned body/motion priors give stable angle and motion behaviour
+    & Stable angle and motion behaviour in the evaluated output
     & Coordinate, scale, and keypoint semantics require careful interpretation \\
     \bottomrule
   \end{tabularx}
@@ -748,7 +775,26 @@ Xsens-derived geometric reference:
 The main reported metrics are mean absolute error (MAE), median absolute
 error, bias (signed mean error), valid-pair ratio, and -- as the
 application-level companion -- RULA-like bin agreement for the
-upper-body joints.
+upper-body joints.  Distributional reporting additionally includes the
+interquartile range (IQR), P90/P95, valid-pair count, scatter plots, and box
+plots so that a small number of severe outliers cannot be hidden inside one
+average.
+
+\subsection{Distance-stratified Detector Analysis}
+\label{sec:distance_method}
+
+The supplementary detector analysis evaluates YOLOv8m and YOLO11L on exactly
+the same valid frames and uses one fixed Xsens time offset per recording.
+For each frame, optical depth is estimated from the median 3D position of the
+YOLOv8m torso joints in the left-camera coordinate system; this same depth is
+then assigned to both model rows so that an erroneous YOLO11L reconstruction
+cannot move its own observation along the horizontal axis.  The distance
+axis is divided into 0.5\,m bins, and a bin is admitted to the detector
+comparison only when it contains at least 20 common valid frames.  Median,
+IQR, P95, sample count, and paired per-frame absolute-angle differences are
+reported against the Xsens-derived reference.  The resulting optical depth
+is an estimated geometric quantity rather than an independent tape-measure
+distance, which limits the analysis to association rather than causation.
 
 \subsection{Motion-space Evaluation}
 
@@ -895,8 +941,9 @@ reference-system internal anchor rather than as a competing pose method.
 
 The most informative joint-level pattern is that the per-joint MAE
 ranking is not flat across the eight angles.
-Shoulder, hip, and knee angles dominate FastSAM3D's lead, where its
-learned body priors stabilise the chain endpoints; the elbow is the
+Shoulder, hip, and knee angles dominate FastSAM3D's lead.  This pattern is
+consistent with body priors stabilising chain endpoints, but no ablation
+isolates that mechanism; the elbow is the
 hardest joint for every vision method, in line with the long
 shoulder--elbow--wrist chain that amplifies both keypoint noise (for SKT)
 and pose-prior uncertainty (for FastSAM3D), and this is the joint where
@@ -935,7 +982,7 @@ discussion of learned pose priors later in the thesis.
 \begin{figure}[!htbp]
   \centering
   \includegraphics[width=0.92\linewidth]{thesis_angle_summary.png}
-  \caption{Angle-space summary across evaluated methods. FastSAM3D has the lowest mean and median MAE among the vision methods, while the Xsens-native check indicates the approximate lower bound of the reference-system representation difference.}
+  \caption{Angle-space summary across evaluated methods. FastSAM3D has the lowest mean and median MAE among the vision methods, while the Xsens-native row is an internal comparison between two Xsens angle representations.}
   \label{fig:angle_summary_plot}
 \end{figure}
 
@@ -1064,11 +1111,11 @@ amplitude and offset are removed.
 Aggregated over the detected active segments (39 for SKT, 45 for
 FastSAM3D), FastSAM3D has both the lower mean ROM error (14.9\degr\ vs.\
 26.9\degr\ for SKT) and the lower mean DTW distance (0.0355 vs.\ 0.0435).
-The Xsens-native DTW distance ($\sim$6$\times 10^{-3}$) sets the lower
-bound that the normalised DTW metric can reach on this dataset, so
-FastSAM3D's $\sim$3.5$\times 10^{-2}$ is approximately six times the
-reference floor, which is the right order of magnitude to claim
-``competitive'' rather than ``saturated''.
+The Xsens-native DTW distance ($\sim$6$\times 10^{-3}$) is included as an
+internal representation self-consistency check.  FastSAM3D's
+$\sim$3.5$\times 10^{-2}$ is larger, but this ratio is not interpreted as a
+physical accuracy bound because both Xsens angle streams originate from the
+same underlying recording.
 
 \begin{table}[!htbp]
   \centering
@@ -1088,7 +1135,7 @@ reference floor, which is the right order of magnitude to claim
 \begin{figure}[!htbp]
   \centering
   \includegraphics[width=0.95\linewidth]{thesis_segment_summary.png}
-  \caption{Segment-level ROM error and DTW distance. FastSAM3D gives the strongest segment-level agreement among the vision methods, while the Xsens-native check provides a reference-system lower bound.}
+  \caption{Segment-level ROM error and DTW distance. FastSAM3D gives the strongest segment-level agreement among the vision methods, while the Xsens-native row is an internal representation self-consistency check.}
   \label{fig:segment_summary_plot}
 \end{figure}
 
@@ -1151,17 +1198,78 @@ than leaves implicit.
   \label{fig:position_diagnostic_plot}
 \end{figure}
 
+\subsection{Supplementary Distance-stratified Detector Results}
+\label{sec:distance_results}
+
+The detector-backbone study retains 1219 frames on which YOLOv8m, YOLO11L,
+the shared optical-depth estimate, and the Xsens-derived right-elbow
+reference are all valid.  On this common set, the pooled median absolute
+disagreement is 17.58\degr\ for YOLOv8m and 18.49\degr\ for YOLO11L.  The
+pooled number is not treated as sufficient by itself because the recordings
+contribute different frame counts; Table~\ref{tab:distance_detector_summary}
+therefore reports each recording separately with its median, P95 tail
+statistic, and common-frame count, while the figures show the IQR.
+
+\begin{table}[!htbp]
+  \centering
+  \caption{Right-elbow detector-backbone comparison on common valid frames. Absolute disagreement is measured against the Xsens-derived external reference; lower is better.}
+  \label{tab:distance_detector_summary}
+  \small
+  \begin{tabular}{lrrrr}
+    \toprule
+    Recording & Depth (m) & Common $n$ & v8m med./P95 & 11L med./P95 \\
+    \midrule
+    Fanbo7 A257 & 2.09 & 185 & 6.66 / 28.30 & 7.19 / 24.27 \\
+    Fanbo9 A257 & 2.68 & 676 & 19.22 / 32.46 & 19.42 / 31.79 \\
+    Fanbo9 A255 & 3.07 & 78 & 18.53 / 44.20 & 33.02 / 47.23 \\
+    Fanbo4 A257 & 4.03 & 280 & 9.68 / 31.00 & 16.64 / 40.10 \\
+    \bottomrule
+  \end{tabular}
+\end{table}
+
+The distributional view changes the interpretation of the short-range
+result.  On Fanbo7, YOLO11L has the lower mean absolute disagreement
+(9.18\degr\ vs.\ 10.43\degr), but YOLOv8m has the lower median
+(6.66\degr\ vs.\ 7.19\degr).  Thus the apparent YOLO11L advantage in the
+mean is driven by its smaller upper tail rather than by a generally lower
+typical-frame error.  Across the five 0.5\,m bins that meet the 20-frame
+minimum, YOLO11L has the lower paired median in only one bin; the paired
+YOLO11L-minus-YOLOv8m median changes from $-1.04$\degr\ at 2.0--2.5\,m to
+$+8.61$, $+5.68$, and $+5.93$\degr\ in the three bins spanning
+3.0--4.5\,m.
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=\linewidth]{thesis_detector_distance_scatter.png}
+  \caption{Per-frame right-elbow absolute disagreement versus the shared YOLOv8m-derived optical-depth estimate. Points identify recordings; thick lines and bands show 0.5\,m-bin medians and IQRs. The broad within-depth spread indicates that factors beyond estimated depth remain important, but this dataset does not isolate them.}
+  \label{fig:detector_distance_scatter}
+\end{figure}
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=\linewidth]{thesis_detector_distance_boxplot.png}
+  \caption{Box plots of right-elbow disagreement by estimated optical-depth bin. The boxes expose the middle 50\% of frames and the outlier tail that is hidden by a single average.}
+  \label{fig:detector_distance_boxplot}
+\end{figure}
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.95\linewidth]{thesis_detector_paired_difference.png}
+  \caption{Same-frame paired detector comparison. The vertical axis is YOLO11L absolute disagreement minus YOLOv8m absolute disagreement, so only negative values favour YOLO11L; bars show paired medians and whiskers show P25--P75.}
+  \label{fig:detector_paired_difference}
+\end{figure}
+
 \subsection{Cross-method Synthesis}
 
 Reading the two evaluation tracks together produces a more complete picture
 than either gives on its own.
 Table~\ref{tab:cross_method_synthesis} consolidates the headline numbers
-for SKT and FastSAM3D (with the Xsens-native check shown alongside as a
-reference-system floor).
+for SKT and FastSAM3D (with the Xsens-native check shown alongside as an
+internal representation comparison).
 FastSAM3D leads on the angle-space (lower MAE) and motion-space (higher
-correlation) tracks, which together indicate that learned body and motion
-priors suppress the per-frame jitter that hurts a frame-independent
-sparse stereo reconstruction on this dataset.
+correlation) tracks.  This result is consistent with learned body and motion
+priors reducing per-frame jitter, although the present comparison does not
+isolate that mechanism from other model and preprocessing differences.
 SKT lags FastSAM3D on angle and motion but its 3D coordinates carry metric
 scale by construction, and the per-frame geometric quality signals it exposes
 (epipolar error, reprojection error, triangulation confidence) are exactly
@@ -1171,10 +1279,10 @@ the signals that downstream ergonomic quality gating requires.
   \centering
   \caption{SKT vs FastSAM3D headline synthesis across evaluation tracks. Best value per column is highlighted; the Xsens-native row is a reference-system internal check, not a competing method.}
   \label{tab:cross_method_synthesis}
-  \small
-  \begin{tabular}{lccccl}
+  \scriptsize
+  \begin{tabularx}{\linewidth}{lcccc>{\raggedright\arraybackslash}X}
     \toprule
-    Method & Angle MAE (\degr) $\downarrow$ & RULA bin agree.\ $\uparrow$ & Motion $r$ K=6 $\uparrow$ & Segment ROM (\degr) $\downarrow$ & Metric scale \\
+    Method & Angle MAE & RULA agree. & Motion $r$ K=6 & Seg. ROM & Metric scale \\
     \midrule
     SKT
     & 17.6 & 0.540 & 0.379 & 26.9 & \good{Calibrated} \\
@@ -1183,7 +1291,7 @@ the signals that downstream ergonomic quality gating requires.
     \textit{Xsens native (ref.)}
     & \textit{4.7} & \textit{0.886} & \textit{0.965} & \textit{4.8} & \textit{---} \\
     \bottomrule
-  \end{tabular}
+  \end{tabularx}
 \end{table}
 
 The overall pattern is: \emph{the learning-based monocular pipeline wins
@@ -1198,17 +1306,17 @@ Section~\ref{sec:discussion} examines in operational terms.
 \label{sec:discussion}
 % =============================================================
 
-\subsection{Why FastSAM3D Performs Better in Angle and Motion Space}
+\subsection{A Plausible Explanation for FastSAM3D's Agreement Results}
 
-The most likely reason FastSAM3D leads SKT on the angle and motion tracks
-is that its learned body-structure and motion-continuity priors mask
-exactly the per-frame failure mode that hurts a frame-independent
-triangulation pipeline.
-FastSAM3D's 3D output for any given frame is conditioned on body-shape
-plausibility constraints that were absorbed from large pose-sequence
-training corpora, so a momentarily unreliable keypoint produces a
-smoothed-out anatomical correction rather than a sharp angle spike; this
-is qualitatively visible in the K=6 elbow scatter plots
+One plausible reason FastSAM3D leads SKT on the angle and motion tracks is
+that its learned body-structure and pose priors reduce the effect of the
+per-frame failure mode that hurts a frame-independent triangulation
+pipeline.  The experiment compares complete pipelines rather than ablating
+the priors, so the mechanism cannot be identified causally.
+FastSAM3D's 3D output is conditioned on body-shape plausibility constraints
+learned from pose data, which could turn a momentarily unreliable image cue
+into a smoother anatomical estimate rather than a sharp angle spike.  A
+pattern consistent with that explanation is visible in the K=6 elbow scatter plots
 (Figure~\ref{fig:k6_elbow_scatter}), where the FastSAM3D scatter sits
 along the ideal y=x diagonal whereas the SKT scatter shows recurring
 vertical accumulation -- large target deltas at small reference deltas --
@@ -1267,6 +1375,46 @@ together with short-window temporal repair, since both interventions
 target the specific failure mode evidenced here and neither requires
 changing the underlying triangulation or angle formula.
 
+\subsection{Detector Selection Across Estimated Depth}
+\label{sec:distance_discussion}
+
+Increasing camera-to-subject distance is expected to reduce the number of
+pixels occupied by each limb and to make stereo depth more sensitive to a
+one-pixel keypoint displacement.  The supplementary analysis supports a
+distance association for detector robustness, but it does not show a smooth
+causal disagreement--distance curve.  For example, the YOLOv8m median is
+9.68\degr\ in the approximately 4.03\,m Fanbo4 recording but
+19.22\degr\ in the approximately 2.68\,m Fanbo9 A257 recording.  This
+non-monotonicity is consistent with viewpoint, action, self-occlusion, and
+left--right semantic consistency contributing alongside distance.
+
+The same distributional evidence also corrects the initial product-level
+interpretation that YOLO11L should be selected automatically at short range.
+Fanbo7 is the sequence on which the mean appears to favour YOLO11L, yet its
+median favours YOLOv8m; across all admitted depth bins, only one of five has a
+lower YOLO11L paired median, while all three bins between 3.0 and 4.5\,m
+favour YOLOv8m.  The present evidence therefore supports retaining YOLOv8m
+as the default detector, but it does not support a fixed distance threshold
+for switching to YOLO11L.
+
+A dynamic detector policy remains a reasonable engineering hypothesis, but a
+future policy should be evaluated prospectively and should probably combine
+estimated distance with directly observed quality signals such as person
+bounding-box height, right-arm confidence, epipolar error, reprojection
+error, and cross-model disagreement.  A controlled recording at 0.5\,m
+increments with the same action and viewpoint would be required to define a
+threshold without confounding it with session identity.  Until such a study
+is available, the distance-based switch belongs in the design discussion,
+not in the list of validated findings.
+
+\begin{figure}[!htbp]
+  \centering
+  \includegraphics[width=0.95\linewidth]{thesis_detector_mean_vs_median.png}
+  \caption{Mean versus median right-elbow absolute disagreement for each recording and detector. Large gaps identify sequences in which a small number of severe frames changes the mean and can even alter the apparent model ranking.}
+  \label{fig:detector_mean_vs_median}
+\end{figure}
+
+\FloatBarrier
 \subsection{Applicability Boundaries}
 
 Putting these analyses together gives a concrete recommendation for
@@ -1301,7 +1449,7 @@ these two sets of requirements dominates.
     \includegraphics[width=\linewidth]{thesis_skt_high_delta_right_elbow_frames.png}
     \caption{Right-elbow high-delta interval.}
   \end{subfigure}
-  \caption{Representative SKT high-delta diagnostic frames projected onto the original video view. These examples indicate that some large motion deltas are caused by local keypoint instability around the elbow chain rather than by physically implausible whole-body motion.}
+  \caption{Representative SKT high-delta diagnostic frames projected onto the original video view. In these examples, large motion deltas coincide with local keypoint instability around the elbow chain rather than with visibly large whole-body motion.}
   \label{fig:skt_high_delta_cases}
 \end{figure}
 
@@ -1311,17 +1459,18 @@ Four limitations of the present study set the boundary inside which all
 quantitative results above should be read; they are stated explicitly here
 so that the conclusion in Section~\ref{sec:conclusion} can rest on
 honestly scoped evidence rather than on an over-generalised claim.
-\emph{First}, all results come from a single subject performing a single
-controlled recording in a manufacturing-like environment; the
-between-method ranking should therefore be read as supported on this
-dataset rather than as a general statement about every operator,
-clothing style, lighting condition, or camera distance.
+\emph{First}, the primary SKT--FastSAM3D ranking comes from one subject and
+one controlled 2025 recording.  The supplementary detector study adds a
+second subject and four 2026 stereo recordings, but their actions,
+viewpoints, and distances are not controlled independently.  Neither study
+therefore supports a general statement about every operator, clothing style,
+lighting condition, viewpoint, or camera distance.
 \emph{Second}, the deepest motion-space analysis focuses on the elbow,
 which is the joint that the project investigated most carefully and the
 joint whose Xsens calibration limitation is best quantified; the
 motion-space numbers for the shoulder, hip, and knee are reported but
 should be read with weaker confidence than the elbow numbers because
-their reference floor is less well characterised.
+their Xsens representation self-consistency is less well characterised.
 \emph{Third}, the evaluation outputs depend on the smoothing window, the
 segment-detection thresholds, and the constant-offset assumption used for
 time alignment; the pipeline records these settings explicitly in the run
@@ -1330,36 +1479,35 @@ different choices, and the synchronisation analysis in
 Section~\ref{sec:data_setup} shows that the constant-offset assumption is
 adequate for this recording but does not prove it for longer recordings.
 \emph{Fourth}, Xsens is used throughout as an external comparison
-reference and not as physical ground truth; the absolute angle errors are
-therefore interpreted alongside the Xsens self-consistency floor
-established in Section~\ref{sec:data_setup} rather than as direct error
+reference and not as physical ground truth; the absolute angle disagreements are
+therefore interpreted alongside the Xsens representation self-consistency
+check established in Section~\ref{sec:data_setup} rather than as direct error
 against a true biomechanical zero.
 
 \subsection{Implications for Real-time Deployment}
 
-The deployment path that follows most cleanly from the above is to
-prioritise getting the calibrated SKT pipeline running efficiently on
-GPU hardware before treating learning-based pose models as
-replacements rather than as optional stabilisers.
-The concrete engineering steps are well-established: export the 2D pose
-model to TensorRT, move video decoding and preprocessing onto the GPU,
-and keep triangulation and joint-angle computation lightweight enough to
-remain in the streaming budget; lightweight real-time pose models such
-as RTMPose \cite{jiang2023rtmpose} make this direction realistic at the
-2D-detection stage, although the final reportable number must be
-end-to-end latency rather than model inference time alone, because
-decoding, preprocessing, and post-processing each consume a measurable
-share of the per-frame budget.
-Once this baseline streams reliably, the two natural extensions are
-(i) integrating a learning-based pose head -- of the FastSAM3D family --
-as an optional smoothing or fallback signal when SKT quality flags drop
-below an acceptable threshold, and (ii) introducing transformer-based
-temporal priors to repair the keypoint-chain failures identified in the
-high-delta analysis above; both extensions are framed here as
-\emph{stabilisers on top of} the calibrated stereo baseline rather than
-as replacements for it, because the deployment-geometry advantages
-discussed in Section~7.2 do not transfer to a pure monocular pipeline
-without additional scale/coordinate work.
+The calibrated SKT pipeline has now been exercised on an NVIDIA RTX A6000
+using deterministic PyTorch FP32.  In offline dual-file tests, the measured
+preliminary single-run offline-file processing throughput is 28.88\,fps on
+Fanbo7 and 29.23\,fps on Fanbo4; four complete-file runs span
+28.17--29.92\,fps.  The timed path includes file decoding, YOLO inference,
+tracking, and per-frame stereo geometry.  These measurements exceed the
+12.5\,fps camera rate, but they do not yet represent a complete live-camera
+system because acquisition, display, and downstream output are not all in
+the measured loop.
+
+An Ultralytics TensorRT FP16 export increased preliminary Fanbo7 file-processing throughput only
+to 30.21\,fps while changing the RightElbow MAE from 10.43\degr\ to
+12.81\degr\ and reducing the valid ratio from 0.427 to 0.289.  It therefore
+failed the output-equivalence check (frame coverage, angle agreement,
+validity, and RULA-like agreement relative to PyTorch) and is not the accepted deployment
+baseline.  The immediate next step is not further speed tuning on that
+failed engine, but a complete capture-to-output measurement using
+NVDEC/GStreamer or DeepStream, followed by target-hardware tests.  NVIDIA
+TAO BodyPoseNet and BodyPose3DNet are relevant detector candidates, but they
+must first pass the same stereo semantics, angle, and validity gates; no
+A6000 result can be used to infer a reliable throughput for an unspecified
+RTX 30-series GPU or Jetson device.
 
 \clearpage
 % =============================================================
@@ -1378,6 +1526,10 @@ learning-based monocular FastSAM3D pipeline delivers better
 agreement-track numbers (mean angle MAE 15.4\degr\ vs.\ 17.6\degr; mean
 K=6 motion Pearson 0.64 vs.\ 0.38; segment ROM error 14.9\degr\ vs.\
 26.9\degr) than the calibrated stereo SKT pipeline.
+The supplementary 2026 detector study does not establish a distance-based
+switching rule: YOLOv8m has the lower pooled median right-elbow disagreement
+(17.58\degr\ vs.\ 18.49\degr), and YOLO11L has the lower paired median in
+only one of five sufficiently populated optical-depth bins.
 SKT nevertheless retains the only metric-scale 3D output among the
 evaluated pipelines and is the only pipeline that exposes per-frame
 geometric quality signals usable for downstream quality gating, so it
@@ -1399,20 +1551,19 @@ be claimed as generally applicable rather than as evidence for a single
 controlled recording.
 
 \begin{enumerate}[leftmargin=1.2cm]
-  \item \textbf{Validation on additional recordings and subjects.}
-        Repeat the same three-axis protocol on at least one additional
-        operator, additional clothing, additional lighting, and an
-        unscripted task, in order to test whether the FastSAM3D
-        agreement-track advantage generalises and whether the SKT
-        high-delta failure modes recur in the same shoulder--elbow--wrist
-        chain across subjects.
+  \item \textbf{Controlled validation on additional recordings and subjects.}
+        Repeat the same three-axis protocol with additional operators,
+        clothing, lighting, and unscripted tasks.  Add a controlled
+        distance series from 2.0 to 4.5\,m in 0.5\,m steps while holding
+        action and viewpoint fixed, so that a detector-switching threshold
+        can be tested without confounding distance with recording identity.
   \item \textbf{Real-time GPU deployment of SKT with optional learned
-        stabilisers.} Move the SKT 2D backbone to TensorRT and the
-        decoding/preprocessing onto the GPU, measure end-to-end streaming
-        latency rather than model inference time alone, and then evaluate
-        a FastSAM3D-style learned head as an optional smoothing or
-        fallback signal triggered when SKT quality flags drop below the
-        deployment threshold.
+        stabilisers.} Retain deterministic PyTorch FP32 as the accepted
+        A6000 baseline, complete the live capture/decode/display path with
+        NVDEC/GStreamer or DeepStream, and measure capture-to-output
+        latency.  Any future TensorRT or NVIDIA TAO candidate must pass the
+        same keypoint, angle, validity, and RULA-equivalence gates before
+        its speed result is considered deployable.
   \item \textbf{Beyond-elbow motion analysis and connection to a complete
         ergonomic risk score.} Extend the motion-space analysis to the
         shoulder, hip, and knee with the same reference-floor
@@ -1669,9 +1820,9 @@ Section~\ref{sec:conclusion} is restricted to the claims marked
   \centering
   \caption{Claim-evidence map for the present thesis draft.}
   \label{tab:claim_evidence}
-  \small
-  \renewcommand{\arraystretch}{1.12}
-  \begin{tabularx}{\linewidth}{p{4.0cm}Xp{1.9cm}}
+  \footnotesize
+  \renewcommand{\arraystretch}{1.03}
+  \begin{tabularx}{\linewidth}{>{\raggedright\arraybackslash}p{3.8cm}>{\raggedright\arraybackslash}X>{\raggedright\arraybackslash}p{2.0cm}}
     \toprule
     Claim & Evidence used in this draft & Status \\
     \midrule
@@ -1686,10 +1837,16 @@ Section~\ref{sec:conclusion} is restricted to the claims marked
     & Supported \\
     A constant cross-system offset is adequate for the current recording.
     & Figure~\ref{fig:offset_search}, Figure~\ref{fig:first_last_delta}, and Figure~\ref{fig:residual_lag_check}; the three independent offset scores converge within $\sim$0.04\,s.
-    & Supported for present recording \\
-    SKT high-delta points are caused by local keypoint-chain instability.
+    & Present recording \\
+    SKT high-delta points coincide with local keypoint-chain instability.
     & Figure~\ref{fig:skt_high_delta_cases}: diagnostic frames show partial wrist occlusion, large camera distance, and inconsistent left/right elbow-chain detection during the high-delta intervals.
-    & Supported qualitatively \\
+    & Qualitative \\
+    Estimated optical depth is associated with the detector disagreement distribution.
+    & Table~\ref{tab:distance_detector_summary}, Figure~\ref{fig:detector_distance_scatter}, and Figure~\ref{fig:detector_distance_boxplot}; the distributions differ across depth bands, but session, action, viewpoint, and occlusion are confounded.
+    & Association only \\
+    A fixed distance threshold should switch from YOLO11L at short range to YOLOv8m at long range.
+    & Figure~\ref{fig:detector_paired_difference}: YOLO11L has the lower paired median in only one of five admitted bins, and no independent controlled-distance validation has been performed.
+    & Not validated \\
     The SKT vs FastSAM3D ranking is robust to smoothing and segmentation parameters.
     & Appendix~\ref{app:sensitivity}: sensitivity tables across smoothing windows and activity thresholds preserve the FastSAM3D $>$ SKT ranking.
     & Supported \\

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>YOLOv8m + SKT GPU Deployment Note</title>
+  <style>
+    :root{--ink:#172033;--muted:#5d6b7a;--line:#dce3ec;--blue:#155eef;--green:#087f5b;--red:#b42318;--amber:#b45309;--bg:#f4f7fb}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
+    header{background:linear-gradient(125deg,#102a43,#155eef);color:white;padding:44px max(6vw,28px)}header h1{margin:0 0 9px;font-size:31px}header p{max-width:880px;margin:0;opacity:.92}
+    main{max-width:980px;margin:28px auto;padding:0 22px}section{background:white;border:1px solid var(--line);border-radius:13px;padding:25px 29px;margin-bottom:20px;box-shadow:0 4px 18px #2230470a}
+    h2{margin:0 0 13px;color:#102a43;font-size:22px}h3{margin:20px 0 6px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin:15px 0}.card{border:1px solid var(--line);border-radius:9px;padding:13px}.metric{font-size:23px;font-weight:750;color:var(--blue)}
+    table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}th{background:#eef4ff;text-align:left}th,td{border:1px solid var(--line);padding:8px 9px;vertical-align:top}tr:nth-child(even) td{background:#fafbfd}.callout{border-left:4px solid var(--blue);background:#f1f6ff;padding:12px 15px;margin:15px 0}.warning{border-left-color:var(--amber);background:#fff8e8}.ok{color:var(--green);font-weight:700}.bad{color:var(--red);font-weight:700}code{background:#edf1f7;padding:2px 5px;border-radius:4px}a{color:var(--blue)}footer{color:var(--muted);font-size:13px;margin:18px 0 32px}@media(max-width:760px){.cards{grid-template-columns:1fr}section{padding:20px 17px}}
+  </style>
+</head>
+<body>
+<header>
+  <h1>YOLOv8m + SKT GPU Deployment Note</h1>
+  <p>RunPod · NVIDIA RTX A6000 48 GB · offline stereo-video file processing · 2026-07-20</p>
+</header>
+<main>
+  <section>
+    <h2>1. What was migrated</h2>
+    <p>The existing YOLOv8m + SKT stereo reconstruction pipeline was migrated to a RunPod NVIDIA RTX A6000 instance. The triangulation, angle, and RULA algorithms were not rewritten; the GPU primarily accelerates pose inference for the two camera views.</p>
+    <ul>
+      <li>The repository and Python environment are stored on the persistent <code>/workspace</code> volume, with pinned PyTorch, CUDA, Ultralytics, and ONNX Runtime GPU versions.</li>
+      <li>Deterministic CUDA execution disables TF32 and cuDNN autotuning so small numeric changes are not amplified by the crop tracker.</li>
+      <li>Stage timing covers file decoding, pose inference, tracking, stereo geometry, and complete-file processing.</li>
+      <li>The workflow includes a stable SSH alias, remote preflight, resumable transfer, SHA256 verification, and exclusion of sensitive model assets.</li>
+    </ul>
+    <div class="callout">The reported “approximately 29 FPS” is <strong>offline-file processing throughput for two video files</strong>, including file decoding, YOLO, tracking, and per-frame geometry. It is not a completed live system that already includes camera capture, display, and downstream output. The 28.88, 29.23, and 30.21 FPS values are preliminary single-run measurements; deployment claims still require three repeated runs.</div>
+  </section>
+
+  <section>
+    <h2>2. Verified results</h2>
+    <div class="cards">
+      <div class="card"><div class="metric">28.88 FPS</div>Fanbo7, PyTorch FP32, 200 frames</div>
+      <div class="card"><div class="metric">29.23 FPS</div>Fanbo4, PyTorch FP32</div>
+      <div class="card"><div class="metric">28.17–29.92</div>warm-excluded FPS across four full file sequences</div>
+    </div>
+    <table>
+      <thead><tr><th>Configuration</th><th>Throughput</th><th>Angle/validity outcome</th><th>Decision</th></tr></thead>
+      <tbody>
+        <tr><td>PyTorch FP32</td><td>Fanbo7 28.88 FPS; file-processing p95 43.76 ms</td><td>Approximately 0.00038° right-elbow trajectory difference from local CPU over the first 100 frames; matching validity and RULA-like agreement</td><td class="ok">Accepted baseline</td></tr>
+        <tr><td>TensorRT FP16</td><td>Pose stage 17.49 ms; file processing 30.21 FPS</td><td>RightElbow MAE 10.43°→12.81°; validity 0.427→0.289</td><td class="bad">Slightly faster, failed output-equivalence check</td></tr>
+        <tr><td>Left/right batch=2</td><td>Only 1.11× model-level speed-up</td><td>The current left and right crops differ, so batching cannot directly replace the accepted tracking flow</td><td>Not admitted</td></tr>
+      </tbody>
+    </table>
+    <p>The output-equivalence check compares common-frame coverage, angle agreement, validity, and RULA-like agreement with the PyTorch baseline; the TensorRT FP16 export did not pass these checks.</p>
+    <p>H.264 QP 0 lossless encoding was used for video transfer. H.265 CRF 18 produced smaller files but changed the angle trajectory by approximately 2.28°, so it was rejected for formal results.</p>
+  </section>
+
+  <section>
+    <h2>3. Unverified items and next GPU work</h2>
+    <ol>
+      <li><strong>Repeated timing:</strong> use 10 warm-up frames and three independent repeats per configuration; report median and p95 instead of relying on a single mean.</li>
+      <li><strong>NVIDIA pose models:</strong> the TAO Model Zoo provides BodyPoseNet (2D) and BodyPose3DNet (34 3D keypoints). Evaluate keypoint semantics, stereo consistency, angle agreement, and validity before throughput.</li>
+      <li><strong>Complete video path:</strong> test NVDEC/GStreamer/DeepStream and measure capture, decode, inference, geometry, angle, RULA, and output latency together.</li>
+      <li><strong>Target hardware:</strong> RTX 30-series and Jetson devices require direct measurement; A6000 throughput cannot be converted into a reliable “20 FPS on any 30x0 GPU” claim.</li>
+    </ol>
+    <div class="callout warning">DeepStream documents BodyPose3DNet's direct 3D keypoints in a target-local coordinate system and currently uses its 2D output for world-space tracking functions. For this project, the first test should therefore feed its 2D keypoints into the existing fixed calibration and stereo triangulation, rather than treating two local 3D skeletons as a shared world frame.</div>
+    <p>Official entry points: <a href="https://docs.ultralytics.com/integrations/tensorrt">Ultralytics TensorRT</a> · <a href="https://docs.nvidia.com/tao/tao-toolkit/latest/text/model_zoo/overview.html">NVIDIA TAO Model Zoo</a> · <a href="https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_plugin_gst-nvtracker.html">NVIDIA DeepStream tracker</a></p>
+  </section>
+
+  <section>
+    <h2>4. Local evidence</h2>
+    <table>
+      <thead><tr><th>Topic</th><th>File</th></tr></thead>
+      <tbody>
+        <tr><td>Environment and remote workflow</td><td><code>tools/setup_remote_env.sh</code>; <code>docs/remote_gpu_workflow.md</code></td></tr>
+        <tr><td>Deterministic CUDA and stage timing</td><td><code>00_pose_pipeline_v2/src/skt_inference.py</code>; <code>00_pose_pipeline_v2/src/benchmark_realtime.py</code></td></tr>
+        <tr><td>Formal experiment log</td><td><code>00_pose_pipeline_v2/results/experiment_log.md</code></td></tr>
+        <tr><td>A6000 archive</td><td><code>00_pose_pipeline_v2/runs/remote_archive_20260712/gpu_realtime_eval/</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <footer>Chinese counterpart: <code>docs/gpu_deployment_note_CN.html</code>. Xsens is always treated as an external comparison system / Xsens-derived reference.</footer>
+</main>
+</body>
+</html>

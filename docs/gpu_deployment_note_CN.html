@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>YOLOv8m + SKT GPU 部署简要记录</title>
+  <style>
+    :root{--ink:#172033;--muted:#5d6b7a;--line:#dce3ec;--blue:#155eef;--green:#087f5b;--red:#b42318;--amber:#b45309;--bg:#f4f7fb}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font:15px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI","Noto Sans SC",sans-serif}
+    header{background:linear-gradient(125deg,#102a43,#155eef);color:white;padding:44px max(6vw,28px)}header h1{margin:0 0 9px;font-size:31px}header p{max-width:880px;margin:0;opacity:.92}
+    main{max-width:980px;margin:28px auto;padding:0 22px}section{background:white;border:1px solid var(--line);border-radius:13px;padding:25px 29px;margin-bottom:20px;box-shadow:0 4px 18px #2230470a}
+    h2{margin:0 0 13px;color:#102a43;font-size:22px}h3{margin:20px 0 6px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin:15px 0}.card{border:1px solid var(--line);border-radius:9px;padding:13px}.metric{font-size:23px;font-weight:750;color:var(--blue)}
+    table{width:100%;border-collapse:collapse;margin:14px 0;font-size:13.5px}th{background:#eef4ff;text-align:left}th,td{border:1px solid var(--line);padding:8px 9px;vertical-align:top}tr:nth-child(even) td{background:#fafbfd}.callout{border-left:4px solid var(--blue);background:#f1f6ff;padding:12px 15px;margin:15px 0}.warning{border-left-color:var(--amber);background:#fff8e8}.ok{color:var(--green);font-weight:700}.bad{color:var(--red);font-weight:700}code{background:#edf1f7;padding:2px 5px;border-radius:4px}a{color:var(--blue)}footer{color:var(--muted);font-size:13px;margin:18px 0 32px}@media(max-width:760px){.cards{grid-template-columns:1fr}section{padding:20px 17px}}
+  </style>
+</head>
+<body>
+<header>
+  <h1>YOLOv8m + SKT GPU 部署简要记录</h1>
+  <p>RunPod · NVIDIA RTX A6000 48 GB · 离线双目视频文件处理 · 2026-07-20</p>
+</header>
+<main>
+  <section>
+    <h2>1. 做了什么</h2>
+    <p>原有 YOLOv8m + SKT 双目重建流程被迁移到 RunPod 的 NVIDIA RTX A6000。算法的三角化、角度和 RULA 逻辑没有重写；GPU 主要加速左右图像的姿态推理。</p>
+    <ul>
+      <li>仓库和 Python 环境放在持久卷 <code>/workspace</code>，固定 PyTorch、CUDA、Ultralytics 和 ONNX Runtime GPU 版本。</li>
+      <li>启用确定性 CUDA，关闭 TF32 和 cuDNN autotuning，避免微小数值差异被 crop tracker 放大。</li>
+      <li>增加文件解码、姿态推理、tracking、双目几何和完整文件处理的分阶段计时。</li>
+      <li>建立 SSH alias、远程 preflight、断点续传、SHA256 校验及敏感模型排除。</li>
+    </ul>
+    <div class="callout">这里的“约 29 FPS”是双路视频文件的<strong>离线文件处理吞吐率</strong>，包含文件解码、YOLO、tracking 和逐帧几何；它不等同于已经完成现场相机采集、显示和输出的完整 live system。28.88、29.23 和 30.21 FPS 均是初步单次测量，正式部署结论仍需三次重复测试。</div>
+  </section>
+
+  <section>
+    <h2>2. 已验证结果</h2>
+    <div class="cards">
+      <div class="card"><div class="metric">28.88 FPS</div>Fanbo7，PyTorch FP32，200 帧</div>
+      <div class="card"><div class="metric">29.23 FPS</div>Fanbo4，PyTorch FP32</div>
+      <div class="card"><div class="metric">28.17–29.92</div>四个完整文件序列的 warm-excluded FPS</div>
+    </div>
+    <table>
+      <thead><tr><th>配置</th><th>速度结果</th><th>角度/有效率结果</th><th>决定</th></tr></thead>
+      <tbody>
+        <tr><td>PyTorch FP32</td><td>Fanbo7 28.88 FPS；文件处理 p95 43.76 ms</td><td>与本地 CPU 前 100 帧右肘轨迹差约 0.00038°；有效率和 RULA-like agreement 一致</td><td class="ok">保留为正式基线</td></tr>
+        <tr><td>TensorRT FP16</td><td>姿态阶段 17.49 ms；文件处理 30.21 FPS</td><td>RightElbow MAE 10.43°→12.81°；有效率 0.427→0.289</td><td class="bad">速度略高，但输出等价性检查失败</td></tr>
+        <tr><td>左右图 batch=2</td><td>模型级仅 1.11× 加速</td><td>当前左右 crop 不同，不能直接替换正式 tracking 流程</td><td>不进入正式流程</td></tr>
+      </tbody>
+    </table>
+    <p>这里的输出等价性检查包括：与 PyTorch 基线比较共同帧覆盖、角度一致性、有效率和 RULA-like agreement；TensorRT FP16 没有通过这些检查。</p>
+    <p>视频传输采用 H.264 QP 0 无损编码。H.265 CRF 18 虽然文件更小，但造成约 2.28° 的角度轨迹变化，因此没有用于正式结果。</p>
+  </section>
+
+  <section>
+    <h2>3. 尚未验证与下一次 GPU 工作</h2>
+    <ol>
+      <li><strong>重复测速：</strong>每个配置 warm-up 10 帧，独立重复 3 次，报告 median 和 p95，而不是只保留单次平均值。</li>
+      <li><strong>NVIDIA 官方姿态模型：</strong>TAO Model Zoo 仍提供 BodyPoseNet（2D）和 BodyPose3DNet（34 个 3D 关键点）。先测试它们的 2D 关键点语义、双目一致性、角度和有效率，再谈 FPS。</li>
+      <li><strong>完整视频链路：</strong>测试 NVDEC/GStreamer/DeepStream，把采集、解码、推理、几何、角度、RULA 和输出延迟一起计入。</li>
+      <li><strong>目标硬件：</strong>RTX 30 系和 Jetson 必须实机测量；A6000 的 29 FPS 不能直接换算成“30x0 一定有 20 FPS”。</li>
+    </ol>
+    <div class="callout warning">DeepStream 的 BodyPose3DNet 直接 3D 输出位于目标局部坐标系；官方说明当前世界空间用途主要依赖其 2D 关键点。因此，本项目若测试它，应先把 2D 输出接入现有固定标定和三角化，而不是直接把两个局部 3D 骨架当作同一世界坐标。</div>
+    <p>官方入口：<a href="https://docs.ultralytics.com/integrations/tensorrt">Ultralytics TensorRT</a> · <a href="https://docs.nvidia.com/tao/tao-toolkit/latest/text/model_zoo/overview.html">NVIDIA TAO Model Zoo</a> · <a href="https://docs.nvidia.com/metropolis/deepstream/dev-guide/text/DS_plugin_gst-nvtracker.html">NVIDIA DeepStream tracker</a></p>
+  </section>
+
+  <section>
+    <h2>4. 本地证据位置</h2>
+    <table>
+      <thead><tr><th>内容</th><th>文件</th></tr></thead>
+      <tbody>
+        <tr><td>环境和远程流程</td><td><code>tools/setup_remote_env.sh</code>；<code>docs/remote_gpu_workflow.md</code></td></tr>
+        <tr><td>确定性 CUDA 和阶段计时</td><td><code>00_pose_pipeline_v2/src/skt_inference.py</code>；<code>00_pose_pipeline_v2/src/benchmark_realtime.py</code></td></tr>
+        <tr><td>正式实验记录</td><td><code>00_pose_pipeline_v2/results/experiment_log.md</code></td></tr>
+        <tr><td>A6000 原始归档</td><td><code>00_pose_pipeline_v2/runs/remote_archive_20260712/gpu_realtime_eval/</code></td></tr>
+      </tbody>
+    </table>
+  </section>
+  <footer>英文对应版本：<code>docs/gpu_deployment_note.html</code>。Xsens 始终仅作为 external comparison system / Xsens-derived reference。</footer>
+</main>
+</body>
+</html>

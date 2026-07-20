@@ -302,3 +302,37 @@ the canonical NPZ, SMPL pose/shape/translation arrays, 12 diagnostic figures,
 an H.264 preview, timing, GPU metadata, and the artifact manifest. The fitting
 adapter is rolled back to snapshot `275b727`; licensed-asset validation and
 the reproducible EasyMocap dependency fix are retained.
+
+## 2026-07-20 — Distance-stratified YOLOv8m / YOLO11L Reanalysis
+
+Existing SKT V2 reconstructions were reanalysed locally for Fanbo7 A257,
+Fanbo9 A257, Fanbo9 A255, and Fanbo4 A257. The comparison used one fixed
+Xsens offset per recording, the same common valid frames for both detectors,
+and the YOLOv8m torso optical-depth estimate as a shared horizontal
+coordinate. Xsens remained an external, Xsens-derived comparison reference;
+no model parameter or time offset was tuned separately to improve agreement.
+
+Command:
+
+```bash
+/opt/anaconda3/envs/pose/bin/python \
+  00_pose_pipeline_v2/src/analyze_error_vs_distance.py \
+  --config 00_pose_pipeline_v2/configs/distance_error_analysis.yaml
+```
+
+The analysis retained 1219 unique common valid frames. Pooled right-elbow
+median absolute disagreement was 17.58 degrees for YOLOv8m and 18.49 degrees
+for YOLO11L. Among five 0.5 m bins with at least 20 common frames, YOLO11L
+had the lower paired median in only one. Fanbo7 illustrates why means alone
+are insufficient: YOLO11L had the lower mean (9.18 vs 10.43 degrees), while
+YOLOv8m had the lower median (6.66 vs 7.19 degrees).
+
+Decision: retain YOLOv8m as the current default. A near/far dynamic switch is
+recorded only as an engineering hypothesis, not a validated result. The
+present sessions confound distance with action, viewpoint, and occlusion, and
+the horizontal axis is estimated optical depth rather than an independent
+physical measurement. The next admissible test is a controlled 2.0--4.5 m
+recording at 0.5 m intervals with repeated actions and held-out validation.
+The local result package contains per-frame CSV data, session/bin/paired
+summaries, SHA256 source metadata, five bilingual figures, and bilingual HTML
+reports under `00_pose_pipeline_v2/runs/distance_error_analysis_20260720/`.

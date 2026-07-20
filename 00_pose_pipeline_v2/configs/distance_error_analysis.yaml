@@ -1,0 +1,58 @@
+analysis:
+  title: Distance-stratified detector comparison
+  primary_joint: RightElbow
+  distance_bin_width_m: 0.5
+  min_common_frames_per_bin: 20
+  output_dir: 00_pose_pipeline_v2/runs/distance_error_analysis_20260720
+  thesis_figure_dir: thesis_chapters/figures
+  reference_label: Xsens-derived reference
+  distance_source: YOLOv8m V2 stereo torso estimate in the left-camera frame
+
+sessions:
+  - name: Fanbo7 A257
+    session_id: fanbo7_a257
+    fixed_offset_seconds: 6.23
+    baseline:
+      model: YOLOv8m
+      config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo7_v2_yolov8m.yaml
+      run_dir: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo7_v2_yolov8m
+    candidate:
+      model: YOLO11L
+      config: 00_pose_pipeline_v2/configs/assar2026_fanbo7_a257.yaml
+      run_dir: 00_pose_pipeline_v2/runs/assar2026_fanbo7_a257_stage1_geometry
+
+  - name: Fanbo9 A257
+    session_id: fanbo9_a257
+    fixed_offset_seconds: -5.99
+    baseline:
+      model: YOLOv8m
+      config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a257_v2_yolov8m.yaml
+      run_dir: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo9_a257_v2_yolov8m
+    candidate:
+      model: YOLO11L
+      config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a257_v2_yolo11l.yaml
+      run_dir: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo9_a257_v2_yolo11l
+
+  - name: Fanbo9 A255
+    session_id: fanbo9_a255
+    fixed_offset_seconds: -5.44
+    baseline:
+      model: YOLOv8m
+      config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a255_v2_yolov8m.yaml
+      run_dir: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo9_a255_v2_yolov8m
+    candidate:
+      model: YOLO11L
+      config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a255_v2_yolo11l.yaml
+      run_dir: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo9_a255_v2_yolo11l
+
+  - name: Fanbo4 A257
+    session_id: fanbo4_a257
+    fixed_offset_seconds: 3.72
+    baseline:
+      model: YOLOv8m
+      config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo4_v2_yolov8m.yaml
+      run_dir: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo4_v2_yolov8m
+    candidate:
+      model: YOLO11L
+      config: 00_pose_pipeline_v2/configs/assar2026_fanbo4_a257.yaml
+      run_dir: 00_pose_pipeline_v2/runs/assar2026_fanbo4_a257_stage1_geometry

@@ -251,6 +251,8 @@ Calibration_video/
 *.npz
 *.npy
 *.pt
+*.engine
+model_exports/
 
 # Licensed parametric body-model assets must never be committed.
 model_assets/

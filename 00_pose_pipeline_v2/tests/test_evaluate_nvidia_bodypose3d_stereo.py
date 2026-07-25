@@ -20,6 +20,7 @@ from evaluate_nvidia_bodypose3d_stereo import (  # noqa: E402
     align_tracks_to_synced_timeline,
     index_primary_person,
     load_deepstream_records,
+    load_processed_skt_angles,
     select_primary_track,
 )
 from stereo_loader import SyncedFrame  # noqa: E402
@@ -156,6 +157,46 @@ class NvidiaBodyPoseStereoTest(unittest.TestCase):
         self.assertEqual(indexed[0].object_id, 1)
         self.assertEqual(indexed[5].object_id, 9)
         self.assertEqual(summary["continuation_object_ids"], [9])
+
+    def test_same_input_skt_control_uses_saved_timeline(self) -> None:
+        frame_count = 10
+        timestamps = np.arange(frame_count, dtype=np.float64) * 0.04
+        keypoints = np.zeros((frame_count, 17, 3), dtype=np.float64)
+        for joint_index in range(17):
+            keypoints[:, joint_index, :] = [
+                joint_index,
+                joint_index % 4,
+                100.0 + joint_index,
+            ]
+        triang_confidence = np.ones((frame_count, 17), dtype=np.float64)
+        epipolar_error = np.zeros((frame_count, 17), dtype=np.float64)
+        config = {
+            "evaluation": {
+                "camera_smooth_window_ms": 200.0,
+                "max_gap_frames": 5,
+            }
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "control.npz"
+            np.savez_compressed(
+                path,
+                keypoints=keypoints,
+                triang_conf_left=triang_confidence,
+                triang_conf_right=triang_confidence,
+                epipolar_error=epipolar_error,
+                timestamps=timestamps,
+            )
+            angles, metadata = load_processed_skt_angles(
+                path, frame_count, timestamps, config
+            )
+            with self.assertRaises(BodyPoseEvaluationError):
+                load_processed_skt_angles(
+                    path, frame_count, timestamps + 0.01, config
+                )
+
+        self.assertIn("RightElbow", angles)
+        self.assertEqual(len(angles["RightElbow"]), frame_count)
+        self.assertIn("angle_processing", metadata)
 
 
 if __name__ == "__main__":

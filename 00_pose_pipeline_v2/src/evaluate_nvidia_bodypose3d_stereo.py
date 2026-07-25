@@ -554,6 +554,82 @@ def processed_angles(
     }
 
 
+def load_processed_skt_angles(
+    path: Path,
+    frame_count: int,
+    timestamps: np.ndarray,
+    config: dict[str, Any],
+) -> tuple[dict[str, np.ndarray], dict[str, Any]]:
+    """Load one SKT result and apply the fixed formal angle policy."""
+
+    with np.load(path, allow_pickle=True) as payload:
+        required = (
+            "keypoints",
+            "triang_conf_left",
+            "triang_conf_right",
+            "epipolar_error",
+        )
+        missing = [name for name in required if name not in payload]
+        if missing:
+            raise BodyPoseEvaluationError(
+                f"SKT control {path} is missing arrays: {missing}"
+            )
+        keypoints = np.asarray(payload["keypoints"], dtype=np.float64)
+        triangulation = {
+            "triang_conf_left": np.asarray(
+                payload["triang_conf_left"], dtype=np.float64
+            ),
+            "triang_conf_right": np.asarray(
+                payload["triang_conf_right"], dtype=np.float64
+            ),
+            "epipolar_error": np.asarray(
+                payload["epipolar_error"], dtype=np.float64
+            ),
+        }
+        saved_timestamps = (
+            np.asarray(payload["timestamps"], dtype=np.float64)
+            if "timestamps" in payload
+            else None
+        )
+    if len(keypoints) < frame_count:
+        raise BodyPoseEvaluationError(
+            f"SKT control {path} has {len(keypoints)} frames; "
+            f"{frame_count} are required"
+        )
+    if (
+        saved_timestamps is not None
+        and len(saved_timestamps) >= frame_count
+        and not np.allclose(
+            saved_timestamps[:frame_count],
+            timestamps[:frame_count],
+            rtol=0.0,
+            atol=1e-6,
+            equal_nan=True,
+        )
+    ):
+        raise BodyPoseEvaluationError(
+            f"SKT control timestamps do not match the synchronized timeline: "
+            f"{path}"
+        )
+    filtered, quality_stats = apply_candidate_quality_filter(
+        keypoints[:frame_count],
+        {
+            name: values[:frame_count]
+            for name, values in triangulation.items()
+        },
+        config,
+    )
+    filtered, depth_stats = apply_depth_consistency_filter(filtered, config)
+    angles, angle_processing = processed_angles(
+        filtered, timestamps[:frame_count], config
+    )
+    return angles, {
+        "quality_filter_masked_frames": quality_stats,
+        "depth_filter_masked_frames": depth_stats,
+        "angle_processing": angle_processing,
+    }
+
+
 def paired_difference(
     candidate: np.ndarray,
     reference: np.ndarray,
@@ -630,6 +706,7 @@ def evaluate_candidate(
     config_path: Path,
     baseline_npz: Path,
     reference_timeseries: Path,
+    same_input_baseline_npz: Path | None,
     output_directory: Path,
     candidate_name: str,
     left_track_id: int | None,
@@ -874,6 +951,83 @@ def evaluate_candidate(
         reference_columns["XsensFair_RightElbow_deg"],
         right_elbow_bins,
     )
+    same_input_control = None
+    if same_input_baseline_npz is not None:
+        control_angles, control_processing = load_processed_skt_angles(
+            same_input_baseline_npz,
+            frame_count,
+            timestamps,
+            config,
+        )
+        candidate_values = candidate_angles["RightElbow"]
+        control_values = control_angles["RightElbow"]
+        external_values = reference_columns["XsensFair_RightElbow_deg"]
+        matched = (
+            np.isfinite(candidate_values)
+            & np.isfinite(control_values)
+            & np.isfinite(external_values)
+        )
+        matched_candidate = np.where(matched, candidate_values, np.nan)
+        matched_control = np.where(matched, control_values, np.nan)
+        matched_external = np.where(matched, external_values, np.nan)
+        candidate_matched = paired_difference(
+            matched_candidate,
+            matched_external,
+            right_elbow_bins,
+        )
+        control_matched = paired_difference(
+            matched_control,
+            matched_external,
+            right_elbow_bins,
+        )
+        candidate_matched_mae = candidate_matched[
+            "absolute_difference"
+        ]["mean"]
+        control_matched_mae = control_matched[
+            "absolute_difference"
+        ]["mean"]
+        matched_improvement = None
+        if (
+            candidate_matched_mae is not None
+            and control_matched_mae is not None
+            and float(control_matched_mae) > 0
+        ):
+            matched_improvement = 100.0 * (
+                float(control_matched_mae) - float(candidate_matched_mae)
+            ) / float(control_matched_mae)
+        candidate_matched_rula = candidate_matched.get(
+            "rula_bin_agreement"
+        )
+        control_matched_rula = control_matched.get("rula_bin_agreement")
+        matched_angle_gate = bool(
+            matched_improvement is not None
+            and matched_improvement >= 5.0
+            and candidate_matched_rula is not None
+            and control_matched_rula is not None
+            and float(candidate_matched_rula)
+            >= float(control_matched_rula)
+        )
+        same_input_control = {
+            "control_right_elbow_own_overlap": paired_difference(
+                control_values,
+                external_values,
+                right_elbow_bins,
+            ),
+            "matched_common_finite_count": int(np.count_nonzero(matched)),
+            "candidate_right_elbow_matched": candidate_matched,
+            "control_right_elbow_matched": control_matched,
+            "candidate_mae_improvement_percent_matched": (
+                matched_improvement
+            ),
+            "matched_angle_gate_passed": matched_angle_gate,
+            "control_processing": control_processing,
+            "interpretation": (
+                "Candidate and YOLO control used the same upright "
+                "near-lossless proxy inputs. Matched metrics use only frames "
+                "where candidate, control, and Xsens-derived reference are "
+                "all finite; no alignment retuning was performed."
+            ),
+        }
     candidate_mae = candidate_external["absolute_difference"]["mean"]
     baseline_mae = baseline_external["absolute_difference"]["mean"]
     improvement_percent = None
@@ -981,6 +1135,7 @@ def evaluate_candidate(
             "preliminary_angle_gate_passed": preliminary_angle_gate,
             "angle_processing": angle_processing,
         },
+        "same_input_yolo_control": same_input_control,
         "provenance": {
             "config": {
                 "path": str(config_path.resolve()),
@@ -1006,6 +1161,14 @@ def evaluate_candidate(
                 "path": str(reference_timeseries.resolve()),
                 "sha256": sha256_file(reference_timeseries),
             },
+            "same_input_baseline_npz": (
+                {
+                    "path": str(same_input_baseline_npz.resolve()),
+                    "sha256": sha256_file(same_input_baseline_npz),
+                }
+                if same_input_baseline_npz is not None
+                else None
+            ),
         },
         "licensing": {
             "deepstream_benchmark_disclosure": (
@@ -1093,6 +1256,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--config", type=Path, required=True)
     parser.add_argument("--baseline-npz", type=Path, required=True)
     parser.add_argument("--reference-timeseries", type=Path, required=True)
+    parser.add_argument(
+        "--same-input-baseline-npz",
+        type=Path,
+        help=(
+            "Optional YOLO/SKT control generated from the exact same proxy "
+            "videos as the NVIDIA candidate"
+        ),
+    )
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument(
         "--candidate-name", default="nvidia_bodypose3dnet_accuracy"
@@ -1130,6 +1301,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         config_path=_project_path(args.config),
         baseline_npz=_project_path(args.baseline_npz),
         reference_timeseries=_project_path(args.reference_timeseries),
+        same_input_baseline_npz=(
+            _project_path(args.same_input_baseline_npz)
+            if args.same_input_baseline_npz is not None
+            else None
+        ),
         output_directory=_project_path(args.output_dir),
         candidate_name=str(args.candidate_name),
         left_track_id=args.left_track_id,

@@ -4,9 +4,11 @@
 The source videos used by this project can be H.264 High 4:4:4 Predictive,
 which is outside NVIDIA's published NVDEC H.264 profile set on the RTX A6000.
 This utility converts one source video to H.264 High with yuv420p chroma using
-the already validated NVENC settings. The proxy is explicitly classified as
-``near-lossless``: QP 0 minimizes encoder loss, but profile/pixel-format
-conversion and re-encoding mean pixel identity is not guaranteed.
+the already validated NVENC settings. An optional exact 180-degree geometric
+rotation can be applied before encoding for sensors that store upside-down
+frames. The proxy is explicitly classified as ``near-lossless``: QP 0
+minimizes encoder loss, but profile/pixel-format conversion and re-encoding
+mean pixel identity is not guaranteed.
 
 The utility never overwrites an existing output or manifest. It records the
 exact command, hashes, probe metadata, software/GPU metadata, and timestamps
@@ -29,7 +31,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-SCHEMA_VERSION = "nvdec_compatible_proxy_v1"
+SCHEMA_VERSION = "nvdec_compatible_proxy_v2"
 QUALITY_LABEL = "near-lossless"
 
 
@@ -153,6 +155,7 @@ def build_transcode_command(
     source: Path,
     output: Path,
     max_frames: int | None = None,
+    rotate_180: bool = False,
 ) -> list[str]:
     """Build the validated H.264 NVENC near-lossless proxy command."""
 
@@ -175,10 +178,13 @@ def build_transcode_command(
     ]
     if max_frames is not None:
         command.extend(["-frames:v", str(max_frames)])
+    video_filter = (
+        "hflip,vflip,format=nv12" if rotate_180 else "format=nv12"
+    )
     command.extend(
         [
             "-vf",
-            "format=nv12",
+            video_filter,
             "-c:v",
             "h264_nvenc",
             "-preset",
@@ -385,6 +391,14 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         type=positive_int,
         help="Encode only the first N frames for a short validation proxy.",
     )
+    parser.add_argument(
+        "--rotate-180",
+        action="store_true",
+        help=(
+            "Rotate each decoded frame by exactly 180 degrees before the "
+            "near-lossless compatibility encode."
+        ),
+    )
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--ffprobe", default="ffprobe")
     parser.add_argument(
@@ -428,6 +442,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         source,
         output,
         args.max_frames,
+        rotate_180=args.rotate_180,
     )
     source_probe: dict[str, Any] | None = None
     output_probe: dict[str, Any] | None = None
@@ -495,6 +510,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "command": command,
             "command_text": command_text(command),
             "max_frames": args.max_frames,
+            "rotate_180": args.rotate_180,
             "return_code": (
                 completed.returncode if completed is not None else None
             ),

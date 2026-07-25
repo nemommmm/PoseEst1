@@ -57,6 +57,19 @@ class TranscodeNvdecCompatibleTest(unittest.TestCase):
         )
         self.assertNotIn("-frames:v", command)
 
+    def test_command_can_rotate_upside_down_sensor_frames(self) -> None:
+        command = build_transcode_command(
+            "ffmpeg",
+            Path("/data/source.mkv"),
+            Path("/data/proxy.mkv"),
+            rotate_180=True,
+        )
+        filter_index = command.index("-vf")
+        self.assertEqual(
+            command[filter_index + 1],
+            "hflip,vflip,format=nv12",
+        )
+
     def test_probe_parser_exposes_compatibility_fields(self) -> None:
         payload = {
             "streams": [

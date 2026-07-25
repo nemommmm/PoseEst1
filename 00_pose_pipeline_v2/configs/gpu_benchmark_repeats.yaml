@@ -1,0 +1,64 @@
+suite:
+  name: a6000_pytorch_fp32_repeat_benchmark
+  output_root: 00_pose_pipeline_v2/runs/gpu_benchmark_repeats
+  benchmark_script: 00_pose_pipeline_v2/src/benchmark_realtime.py
+  repeats: 3
+  max_frames: 200
+  warmup_frames: 10
+
+comparison:
+  angle_name: RightElbow
+  rula_bins: [60.0, 100.0]
+  key_arrays:
+    - timestamps
+    - keypoints
+    - reprojection_error
+    - epipolar_error
+    - disparity_px
+    - stereo_quality
+    - pair_confidence
+    - keypoints_left_2d_raw
+    - keypoints_right_2d_raw
+    - keypoints_left_2d
+    - keypoints_right_2d
+    - keypoints_left_rect
+    - keypoints_right_rect
+    - conf_left
+    - conf_right
+    - triang_conf_left
+    - triang_conf_right
+    - bbox_left
+    - bbox_right
+    - track_score_left
+    - track_score_right
+    - track_source_left
+    - track_source_right
+    - stereo_sanity_ok
+    - stereo_sanity_reason
+    - temporal_rescue_left
+    - temporal_rescue_right
+    - model_name
+    - deterministic_cuda
+    - postprocess_variant
+  repeat_thresholds:
+    require_key_arrays_exact: true
+    min_finite_mask_agreement: 1.0
+    max_keypoint_p95_distance_cm: 0.000001
+    max_right_elbow_mae_deg: 0.000001
+    min_rula_bin_agreement: 1.0
+  historical_thresholds:
+    require_key_arrays_exact: false
+    min_finite_mask_agreement: 1.0
+    max_keypoint_p95_distance_cm: 0.1
+    max_right_elbow_mae_deg: 0.1
+    min_rula_bin_agreement: 0.999
+
+datasets:
+  - name: fanbo7
+    config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo7_v2_yolov8m.yaml
+    model: 01_stereo_triangulation/src/yolov8m-pose.pt
+    historical_reference_npz: 00_pose_pipeline_v2/runs/gpu_reference_20260712/fanbo7/skt_pose_optimized.npz
+  - name: fanbo4
+    config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo4_v2_yolov8m.yaml
+    model: 01_stereo_triangulation/src/yolov8m-pose.pt
+    historical_reference_npz: 00_pose_pipeline_v2/runs/gpu_reference_20260712/fanbo4/skt_pose_optimized.npz

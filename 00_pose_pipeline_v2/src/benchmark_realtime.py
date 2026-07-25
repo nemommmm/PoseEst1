@@ -20,6 +20,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--config", required=True)
     parser.add_argument("--model", help="Override PT, ONNX, or TensorRT engine path.")
+    parser.add_argument(
+        "--left-video",
+        help="Override the configured left video for deployment-input tests.",
+    )
+    parser.add_argument(
+        "--right-video",
+        help="Override the configured right video for deployment-input tests.",
+    )
     parser.add_argument("--max-frames", type=int, default=200)
     parser.add_argument("--warmup-frames", type=int, default=10)
     parser.add_argument("--run-dir", required=True)
@@ -49,6 +57,15 @@ def main() -> None:
     """Run the configured pipeline and save timing statistics as JSON."""
     args = parse_args()
     config = deepcopy(load_config(args.config))
+    if bool(args.left_video) != bool(args.right_video):
+        raise ValueError("--left-video and --right-video must be provided together")
+    dataset = config.setdefault("dataset", {})
+    if args.left_video and args.right_video:
+        left_video = resolve_path(args.left_video, must_exist=True)
+        right_video = resolve_path(args.right_video, must_exist=True)
+        assert left_video is not None and right_video is not None
+        dataset["left_video"] = str(left_video)
+        dataset["right_video"] = str(right_video)
     skt = config.setdefault("skt", {})
     skt["use_existing_npz"] = False
     skt["max_frames"] = args.max_frames
@@ -73,6 +90,8 @@ def main() -> None:
     online_mean_ms = stages["end_to_end_online"]["mean_ms"]
     summary = {
         "config": str(Path(args.config)),
+        "left_video": str(dataset.get("left_video")),
+        "right_video": str(dataset.get("right_video")),
         "model": str(np.asarray(data["model_name"]).item()),
         "frames": int(len(data["timestamps"])),
         "warmup_frames": int(warmup),

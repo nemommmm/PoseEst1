@@ -336,3 +336,119 @@ recording at 0.5 m intervals with repeated actions and held-out validation.
 The local result package contains per-frame CSV data, session/bin/paired
 summaries, SHA256 source metadata, five bilingual figures, and bilingual HTML
 reports under `00_pose_pipeline_v2/runs/distance_error_analysis_20260720/`.
+
+## 2026-07-25 — Rebuilt A6000 PyTorch, TensorRT, and NVDEC Gates
+
+The expired Pod was replaced and the required repository, environments,
+weights, compressed stereo inputs, historical references, and evaluation
+artifacts were restored. The new Pod used an NVIDIA RTX A6000 with 49,140 MiB
+VRAM (UUID `GPU-6211cba3-6c72-4f80-70d5-1f7c7af7da9a`), driver 580.159.03,
+PyTorch 2.8.0 with CUDA 12.8, and cuDNN 9.1. All formal results and their
+SHA256 manifests were downloaded under
+`00_pose_pipeline_v2/runs/gpu_rebuild_20260725/`.
+
+### Three-repeat deterministic PyTorch baseline
+
+Fanbo7 and Fanbo4 A257 were each evaluated for 200 frames after a ten-frame
+warm-up, with three independent repeats. Online-stage timing includes decode,
+crop-tracked stereo pose inference, and per-frame geometry; sequence
+post-processing is recorded separately and is not included in the FPS value.
+
+| Dataset | Median online FPS (min--max) | Online median / p95 | Stereo pose median / p95 | Repeat and historical gates |
+|---|---:|---:|---:|---|
+| Fanbo7 A257 | 29.744 (29.191--30.588) | 30.151 / 42.250 ms | 20.268 / 31.135 ms | pass / pass |
+| Fanbo4 A257 | 30.309 (28.656--30.348) | 30.151 / 45.329 ms | 19.281 / 31.355 ms | pass / pass |
+
+All three repeats were exactly deterministic. Both datasets also exactly
+reproduced the downloaded deterministic PyTorch reference: the RightElbow
+trajectory difference was zero and RULA-bin agreement was 1.000. Decision:
+retain deterministic PyTorch as the accepted deployment baseline. The run
+manifest records project commit `b12ae95` and marks that working tree as dirty;
+the exact code, configuration, model, calibration, video, and reference hashes
+are therefore the authoritative reproduction identifiers. Formal source:
+`pytorch_formal/suite_summary.json`.
+
+### TensorRT FP32 and FP16
+
+Static batch-one TensorRT engines were exported from the same YOLOv8m-pose
+weight. The FP32 and FP16 engine SHA256 values were respectively
+`a17d0037f22dc44ac666fce4c1892a8ccb3cfe43448d3b96d381d414875531f9`
+and
+`46dd4adfe835d04a3856c5c315016c3be25ba529f2b65c84e61cfe0ec7ba5154`.
+Each route used the same 200-frame, ten-frame-warm-up, three-repeat protocol.
+The angle differences below compare TensorRT output with the historical
+deterministic PyTorch result; they are not errors against the Xsens-derived
+reference.
+
+| Dataset | Engine | Median online FPS | Stereo pose median / p95 | RightElbow difference median / p95 | RULA-bin agreement | Decision |
+|---|---|---:|---:|---:|---:|---|
+| Fanbo7 A257 | FP32 | 27.554 | 17.671 / 45.174 ms | 2.803 / 9.490 deg | 0.985 | reject |
+| Fanbo4 A257 | FP32 | 27.799 | 17.612 / 46.832 ms | 5.754 / 24.727 deg | 0.960 | reject |
+| Fanbo7 A257 | FP16 | 27.999 | 12.378 / 50.461 ms | 2.775 / 8.984 deg | 0.985 | reject |
+| Fanbo4 A257 | FP16 | 29.715 | 11.855 / 53.120 ms | 7.396 / 27.665 deg | 0.970 | reject |
+
+Each TensorRT route was internally deterministic across its three repeats, but
+all four failed the historical-output gate. Reduced median inference time,
+especially with FP16, did not provide a reliable end-to-end speed advantage
+and did not preserve the accepted trajectory. Decision: reject both TensorRT
+precisions as replacements for the deterministic baseline. The formal export
+and evaluation commit was `95dc739`; sources:
+`tensorrt_exports/export_manifest.json` and
+`tensorrt_formal/suite_summary.json`.
+
+### FFmpeg NVDEC decode-only measurement
+
+A controlled decode-only comparison used two 200-frame Fanbo7 H.264 High
+`yuv420p` proxies, one 30-frame warm-up, and three repeats. The proxies were
+generated with QP 0 and are classified as near-lossless, not pixel-identical
+to the source.
+
+| Backend | Paired-stream decode FPS, median | p95 |
+|---|---:|---:|
+| CPU software decode | 74.659 | 82.624 |
+| NVIDIA NVDEC | 112.907 | 118.507 |
+
+NVDEC provided a 1.512x median decode-only speedup. A three-frame-per-view
+luma audit found exact CPU/NVDEC decoded-pixel agreement. This benchmark
+includes FFmpeg startup, demux, decode, and a null output sink; it excludes
+timestamp synchronization, RGB tensor preparation, pose inference,
+triangulation, angles, and RULA. It must not be reported as end-to-end stereo
+pose throughput. Decision: retain NVDEC as a deployment optimization candidate
+that still requires integration into the real pipeline. The benchmark commit
+was `29ab460`; formal source:
+`decode/fanbo7_proxy_cpu_nvdec_v2.json`.
+
+## 2026-07-25 — NVIDIA BodyPose3DNet Calibrated-stereo Gate
+
+The official NVIDIA `deepstream-bodypose-3d` reference application
+(upstream commit `a6488b5`) was evaluated with the BodyPose3DNet Accuracy and
+Performance variants. The project evaluation commit was `d03aa85`. The test
+used 433 synchronized Fanbo7 A257 frame pairs from upright near-lossless
+proxies, the fixed tracked A257 calibration
+(`2306d08b68621c31141a92320c369a44ac8d6aa139c6179d4d8e0ccab6eb495c`),
+and the existing fixed alignment to the Xsens-derived reference. No
+candidate-specific time offset or angle offset was fitted. The YOLO control
+was rerun on the same proxy inputs, and the comparison below uses only frames
+where BodyPose3DNet, YOLO, and the Xsens-derived reference were all finite.
+
+| Variant | Matched frames | BodyPose3DNet / YOLO RightElbow MAE | MAE change | BodyPose3DNet / YOLO RULA agreement | Epipolar median / p95 | Decision |
+|---|---:|---:|---:|---:|---:|---|
+| Accuracy | 147 | 10.726 / 12.384 deg | 13.389% better | 0.932 / 0.891 | 3.474 / 25.908 px | angle signal retained; geometry gate failed |
+| Performance | 134 | 13.082 / 13.149 deg | 0.509% better | 0.925 / 0.881 | 4.653 / 40.531 px | reject |
+
+The Accuracy model passed the preliminary matched-angle gate, but it did not
+pass the predefined stereo geometry limits of 3 px median and 10 px p95.
+Because only 147 matched frames supported the apparent improvement, this is a
+promising signal rather than evidence of full-sequence superiority; it does
+not advance to the far-view gate in its present form. The Performance model
+failed both the matched-angle improvement requirement and the stereo geometry
+gate, so it is rejected.
+
+DeepStream throughput measurements are retained only as internal feasibility
+evidence. This public experiment log intentionally omits all DeepStream FPS
+and competitive performance figures pending a check of the applicable NVIDIA
+DeepStream EULA and any required NVIDIA written permission. Formal sources:
+`nvidia_bodypose3d_feasibility/nvidia_environment_manifest.json`,
+`nvidia_bodypose3d_feasibility/accuracy_full433_formal_fixed_reference/metrics.json`,
+and
+`nvidia_bodypose3d_feasibility/performance_full433_formal_fixed_reference/metrics.json`.

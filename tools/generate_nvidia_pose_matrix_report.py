@@ -466,6 +466,11 @@ def fmt(value: float | None, digits: int = 2) -> str:
     return "—" if value is None else f"{value:.{digits}f}"
 
 
+def fmt_percent(value: float | None, digits: int = 1) -> str:
+    """Format one nullable fraction as a percentage."""
+    return "—" if value is None else f"{value * 100:.{digits}f}%"
+
+
 def status_rows(run_dir: Path, chinese: bool) -> str:
     """Render SDK availability classifications."""
     path = run_dir / "sdk_probes" / "sdk_route_status.json"
@@ -507,7 +512,7 @@ def metric_table(evaluations: Sequence[dict[str, Any]]) -> str:
             f"<td>{fmt(row['valid_ratio'], 3)}</td>"
             f"<td>{fmt(row['rula'], 3)}</td>"
             f"<td>{row['jumps']}</td>"
-            f"<td>{fmt(row['improvement'] * 100 if row['improvement'] is not None else None, 1)}%</td>"
+            f"<td>{fmt_percent(row['improvement'])}</td>"
             "</tr>"
         )
     return "".join(rows)
@@ -598,6 +603,87 @@ def decision_summary(
     return str(offline["candidate"]), text
 
 
+def notable_findings(
+    evaluations: Sequence[dict[str, Any]],
+    methods: Sequence[dict[str, Any]],
+    chinese: bool,
+) -> str:
+    """Render concise evidence behind the final selection decision."""
+    cells = {
+        (str(row["candidate"]), str(row["dataset"])): row
+        for row in evaluations
+    }
+    method_map = {str(row["candidate"]): row for row in methods}
+    foundation = "FoundationStereo-ViT-L-32iter"
+    fast = "Fast-FoundationStereo-4iter"
+    body = "BodyPose3DNet-accuracy_monocular_left"
+    foundation_far = cells.get((foundation, "Fanbo4"))
+    foundation_fanbo3 = cells.get((foundation, "Fanbo3"))
+    fast_method = method_map.get(fast)
+    body_near = cells.get((body, "Fanbo7"))
+    body_far = cells.get((body, "Fanbo4"))
+    findings: list[str] = []
+    if foundation_far is not None:
+        if chinese:
+            findings.append(
+                "FoundationStereo 在远距 Fanbo4 将 RightElbow median "
+                f"从 {fmt(foundation_far['baseline_median'])}° 降至 "
+                f"{fmt(foundation_far['median'])}°，说明单侧人体检测加"
+                "双目稠密深度具有明确研究价值。"
+            )
+        else:
+            findings.append(
+                "On distant-view Fanbo4, FoundationStereo reduced the "
+                f"RightElbow median from {fmt(foundation_far['baseline_median'])}° "
+                f"to {fmt(foundation_far['median'])}°, supporting the value "
+                "of single-view joint detection plus dense stereo depth."
+            )
+    if foundation_fanbo3 is not None:
+        if chinese:
+            findings.append(
+                "但它在 Fanbo3 的 RULA-like 一致率从 "
+                f"{fmt(foundation_fanbo3['baseline_rula'], 3)} 降至 "
+                f"{fmt(foundation_fanbo3['rula'], 3)}，因此未通过冻结的"
+                "跨数据集准入规则。"
+            )
+        else:
+            findings.append(
+                "However, its Fanbo3 RULA-like agreement fell from "
+                f"{fmt(foundation_fanbo3['baseline_rula'], 3)} to "
+                f"{fmt(foundation_fanbo3['rula'], 3)}, so it failed the "
+                "frozen cross-dataset acceptance rule."
+            )
+    if fast_method is not None:
+        if chinese:
+            findings.append(
+                "Fast-FoundationStereo 4-iteration 完整 Pipeline 仅为 "
+                f"{fmt(fast_method['fps'])} FPS，p95 "
+                f"{fmt(fast_method['latency_p95_ms'])} ms，仍不实时。"
+            )
+        else:
+            findings.append(
+                "The complete Fast-FoundationStereo 4-iteration pipeline "
+                f"reached only {fmt(fast_method['fps'])} FPS with "
+                f"{fmt(fast_method['latency_p95_ms'])} ms p95 latency and "
+                "therefore remained non-real-time."
+            )
+    if body_near is not None and body_far is not None:
+        if chinese:
+            findings.append(
+                "BodyPose3DNet Accuracy 单目左视图在近距 Fanbo7 为 "
+                f"{fmt(body_near['median'])}°，但远距 Fanbo4 增至 "
+                f"{fmt(body_far['median'])}°，跨距离鲁棒性不足。"
+            )
+        else:
+            findings.append(
+                "BodyPose3DNet Accuracy monocular-left reached "
+                f"{fmt(body_near['median'])}° on near-view Fanbo7 but "
+                f"{fmt(body_far['median'])}° on distant Fanbo4, exposing "
+                "insufficient cross-distance robustness."
+            )
+    return "<ul>" + "".join(f"<li>{value}</li>" for value in findings) + "</ul>"
+
+
 def evidence_gallery(run_dir: Path, evaluations: Sequence[dict[str, Any]], chinese: bool) -> str:
     """Render expandable relative links to all evaluation plots."""
     blocks = []
@@ -666,6 +752,7 @@ def build_report(
 <section id="summary"><h2>1. 结论摘要</h2>
 <div class="cards"><div class="card"><div class="metric">{completed}</div>成功的数据集—候选评估单元</div><div class="card"><div class="metric">{html.escape(best_name)}</div>按预设门槛得到的正式选择</div><div class="card"><div class="metric">12.5 fps</div>完整 Pipeline 实时门槛</div></div>
 <div class="callout"><strong>选型结论：</strong>{html.escape(recommendation)}</div>
+{notable_findings(evaluations, methods, True)}
 <div class="callout">Xsens 仅作为 Xsens-derived reference / external comparison system；Fanbo4/7 使用 FastSAM3D comparison trajectory。没有为候选重新搜索时间偏移或手动挑选较好视角。</div></section>
 <section id="availability"><h2>2. NVIDIA 路线可用性</h2><table><tr><th>路线</th><th>状态</th><th>含义</th></tr>{blocked}</table>
 <p>BodyPoseNet 2D 和 Maxine 的阻塞会被单独记录，不会被写成“模型精度失败”。BodyPose3DNet、FoundationStereo 与 Fast-FoundationStereo 使用官方仓库/权重实测。</p></section>
@@ -674,7 +761,7 @@ def build_report(
 <figure><img src="{pareto}"><figcaption>精度—速度 Pareto。DeepStream/Maxine 受许可约束的精确 timing 不在对外 HTML 中展开。</figcaption></figure>
 <figure><img src="{validity}"><figcaption>共同有效帧比例。</figcaption></figure></section>
 <section id="evidence"><h2>5. 直观图表</h2>{preview_gallery(run_dir, True)}{evidence_gallery(run_dir, evaluations, True)}</section>
-<section id="rules"><h2>6. 判定规则与可复现性</h2><ul><li>固定 Fanbo3 2.00 s、Fanbo4 5.4 s、Fanbo7 7.3 s 参考偏移。</li><li>主要展示 median、IQR、p95、RULA 和有效率；MAE/RMSE仅作辅助。</li><li>实时要求完整 Pipeline ≥12.5 fps 且 p95 ≤80 ms。</li><li>许可权重、TensorRT engine、视频和凭据均不进入本地结果包。</li></ul></section>"""
+<section id="rules"><h2>6. 判定规则与可复现性</h2><ul><li>固定 Fanbo3 2.00 s、Fanbo4 5.4 s、Fanbo7 7.3 s 参考偏移。</li><li>主要展示 median、IQR、p95、RULA 和有效率；MAE/RMSE仅作辅助。</li><li>实时要求完整 Pipeline ≥12.5 fps 且 p95 ≤80 ms。</li><li>许可权重、TensorRT engine、原始输入视频和凭据均不进入本地结果包；仅保留计划要求的 20 秒重建预览。</li></ul></section>"""
         nav = ["摘要", "可用性", "结果", "精度—速度", "图表", "规则"]
     else:
         title = "Fanbo3/4/7 NVIDIA Monocular–Stereo GPU Comparison"
@@ -683,6 +770,7 @@ def build_report(
 <section id="summary"><h2>1. Executive summary</h2>
 <div class="cards"><div class="card"><div class="metric">{completed}</div>successful dataset–candidate evaluation cells</div><div class="card"><div class="metric">{html.escape(best_name)}</div>formal selection under the frozen gates</div><div class="card"><div class="metric">12.5 fps</div>complete-pipeline real-time gate</div></div>
 <div class="callout"><strong>Selection outcome:</strong> {html.escape(recommendation)}</div>
+{notable_findings(evaluations, methods, False)}
 <div class="callout">Xsens is treated only as an Xsens-derived reference / external comparison system. Fanbo4/7 use FastSAM3D comparison trajectories. Candidate-specific offset search and post-hoc view selection were prohibited.</div></section>
 <section id="availability"><h2>2. NVIDIA route availability</h2><table><tr><th>Route</th><th>Status</th><th>Meaning</th></tr>{blocked}</table>
 <p>BodyPoseNet 2D and Maxine blockers are reported separately from model accuracy. BodyPose3DNet, FoundationStereo, and Fast-FoundationStereo were run from official repositories and checkpoints.</p></section>
@@ -691,7 +779,7 @@ def build_report(
 <figure><img src="{pareto}"><figcaption>Accuracy–speed Pareto view. Exact proprietary DeepStream/Maxine timing is not expanded in the outward-facing HTML.</figcaption></figure>
 <figure><img src="{validity}"><figcaption>Common valid-frame ratio.</figcaption></figure></section>
 <section id="evidence"><h2>5. Visual evidence</h2>{preview_gallery(run_dir, False)}{evidence_gallery(run_dir, evaluations, False)}</section>
-<section id="rules"><h2>6. Decision rules and reproducibility</h2><ul><li>Frozen reference offsets: Fanbo3 2.00 s, Fanbo4 5.4 s, Fanbo7 7.3 s.</li><li>Primary metrics are median, IQR, p95, RULA agreement, and validity; MAE/RMSE are secondary.</li><li>Real-time requires a complete pipeline ≥12.5 fps and p95 latency ≤80 ms.</li><li>Licensed weights, TensorRT engines, videos, and credentials are excluded from the local result bundle.</li></ul></section>"""
+<section id="rules"><h2>6. Decision rules and reproducibility</h2><ul><li>Frozen reference offsets: Fanbo3 2.00 s, Fanbo4 5.4 s, Fanbo7 7.3 s.</li><li>Primary metrics are median, IQR, p95, RULA agreement, and validity; MAE/RMSE are secondary.</li><li>Real-time requires a complete pipeline ≥12.5 fps and p95 latency ≤80 ms.</li><li>Licensed weights, TensorRT engines, raw input videos, and credentials are excluded from the local result bundle; only the planned 20-second reconstruction preview is retained.</li></ul></section>"""
         nav = ["Summary", "Availability", "Results", "Accuracy–speed", "Evidence", "Rules"]
     ids = ["summary", "availability", "results", "aggregate", "evidence", "rules"]
     links = "".join(

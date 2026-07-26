@@ -46,6 +46,19 @@ def _load_baseline(path: Path) -> tuple[np.ndarray, np.ndarray]:
         )
 
 
+def _jump_count(
+    values: np.ndarray,
+    common_mask: np.ndarray,
+    threshold_deg: float,
+) -> int:
+    """Count adjacent angle changes on the shared valid-frame support."""
+    angle = np.asarray(values, dtype=np.float64)
+    valid = np.asarray(common_mask, dtype=bool)
+    adjacent = valid[1:] & valid[:-1]
+    jumps = np.abs(np.diff(angle))
+    return int(np.count_nonzero(adjacent & (jumps > threshold_deg)))
+
+
 def _plot_summary(
     output: Path,
     timestamps: np.ndarray,
@@ -174,6 +187,12 @@ def evaluate(
         reference_offset_seconds,
     )
     bins_by_angle = section(config, "evaluation").get("rula_bins", {})
+    jump_threshold = float(
+        section(config, "filter_ablation").get(
+            "jump_threshold_deg",
+            10.0,
+        )
+    )
     rows: list[dict[str, Any]] = []
     masks: dict[str, np.ndarray] = {}
     for name in angle_names:
@@ -184,6 +203,17 @@ def evaluate(
             bins_by_angle.get(name),
         )
         masks[name] = result.pop("common_finite_mask")
+        result["candidate"]["jump_count"] = _jump_count(
+            candidate_angles[name],
+            masks[name],
+            jump_threshold,
+        )
+        result["baseline"]["jump_count"] = _jump_count(
+            baseline_angles[name],
+            masks[name],
+            jump_threshold,
+        )
+        result["jump_threshold_deg"] = jump_threshold
         rows.append({"angle": name, **result})
     candidate_medians = [
         row["candidate"]["absolute_error_deg"]["median"]

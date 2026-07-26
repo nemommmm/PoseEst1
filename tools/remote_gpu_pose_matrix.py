@@ -243,6 +243,8 @@ def run_formal(args: argparse.Namespace) -> None:
                     str(proxy["synchronized_frames"]),
                     "--warmup-frames",
                     "10",
+                    "--repeats",
+                    str(matrix["evaluation"]["repeats"]),
                     "--run-dir",
                     str(output),
                     "--output-json",

@@ -35,6 +35,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-frames", type=int, default=200)
     parser.add_argument("--warmup-frames", type=int, default=10)
+    parser.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Repeat the complete run and aggregate per-frame timing.",
+    )
     parser.add_argument("--run-dir", required=True)
     parser.add_argument("--output-json", required=True)
     parser.add_argument(
@@ -45,9 +51,14 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def summarize(values: np.ndarray, warmup: int) -> dict[str, float]:
+def summarize(values: list[np.ndarray], warmup: int) -> dict[str, float]:
     """Summarize a per-frame latency array after warm-up."""
-    clean = np.asarray(values, dtype=np.float64)[warmup:]
+    clean = np.concatenate(
+        [
+            np.asarray(repeat, dtype=np.float64)[warmup:]
+            for repeat in values
+        ]
+    )
     clean = clean[np.isfinite(clean)]
     if clean.size == 0:
         return {"mean_ms": float("nan"), "median_ms": float("nan"), "p95_ms": float("nan")}
@@ -61,6 +72,8 @@ def summarize(values: np.ndarray, warmup: int) -> dict[str, float]:
 def main() -> None:
     """Run the configured pipeline and save timing statistics as JSON."""
     args = parse_args()
+    if args.repeats <= 0:
+        raise ValueError("--repeats must be positive")
     config = deepcopy(load_config(args.config))
     if bool(args.left_video) != bool(args.right_video):
         raise ValueError("--left-video and --right-video must be provided together")
@@ -86,29 +99,75 @@ def main() -> None:
 
     run_dir = Path(args.run_dir).resolve()
     run_dir.mkdir(parents=True, exist_ok=True)
-    npz_path = run_skt(config, run_dir)
-    data = np.load(npz_path, allow_pickle=True)
-    warmup = min(max(args.warmup_frames, 0), max(len(data["timestamps"]) - 1, 0))
+    repeat_payloads: list[dict[str, np.ndarray]] = []
+    primary_data: dict[str, np.ndarray] | None = None
+    for repeat_index in range(args.repeats):
+        repeat_dir = (
+            run_dir
+            if repeat_index == 0
+            else run_dir / "timing_repeats" / f"repeat_{repeat_index + 1}"
+        )
+        npz_path = run_skt(deepcopy(config), repeat_dir)
+        with np.load(npz_path, allow_pickle=True) as data:
+            payload = {
+                key: np.asarray(data[key])
+                for key in (
+                    "timestamps",
+                    "decode_time_ms",
+                    "yolo_time_ms",
+                    "geometry_time_ms",
+                    "frame_time_ms",
+                )
+            }
+            if repeat_index == 0:
+                primary_data = {
+                    key: np.asarray(data[key])
+                    for key in data.files
+                }
+        repeat_payloads.append(payload)
+    assert primary_data is not None
+    warmup = min(
+        max(args.warmup_frames, 0),
+        max(len(primary_data["timestamps"]) - 1, 0),
+    )
 
     stages = {
-        "decode": summarize(data["decode_time_ms"], warmup),
-        "pose_inference_stereo": summarize(data["yolo_time_ms"], warmup),
-        "per_frame_geometry": summarize(data["geometry_time_ms"], warmup),
-        "end_to_end_online": summarize(data["frame_time_ms"], warmup),
+        "decode": summarize(
+            [payload["decode_time_ms"] for payload in repeat_payloads],
+            warmup,
+        ),
+        "pose_inference_stereo": summarize(
+            [payload["yolo_time_ms"] for payload in repeat_payloads],
+            warmup,
+        ),
+        "per_frame_geometry": summarize(
+            [payload["geometry_time_ms"] for payload in repeat_payloads],
+            warmup,
+        ),
+        "end_to_end_online": summarize(
+            [payload["frame_time_ms"] for payload in repeat_payloads],
+            warmup,
+        ),
     }
     online_mean_ms = stages["end_to_end_online"]["mean_ms"]
     summary = {
         "config": str(Path(args.config)),
         "left_video": str(dataset.get("left_video")),
         "right_video": str(dataset.get("right_video")),
-        "model": str(np.asarray(data["model_name"]).item()),
-        "frames": int(len(data["timestamps"])),
+        "model": str(np.asarray(primary_data["model_name"]).item()),
+        "frames": int(len(primary_data["timestamps"])),
         "warmup_frames": int(warmup),
-        "deterministic_cuda": bool(np.asarray(data["deterministic_cuda"]).item()),
+        "repeats": int(args.repeats),
+        "deterministic_cuda": bool(
+            np.asarray(primary_data["deterministic_cuda"]).item()
+        ),
         "stages": stages,
-        "sequence_postprocess_total_ms": float(np.asarray(data["sequence_postprocess_ms"]).item()),
+        "sequence_postprocess_total_ms": float(
+            np.asarray(primary_data["sequence_postprocess_ms"]).item()
+        ),
         "sequence_postprocess_ms_per_frame": float(
-            np.asarray(data["sequence_postprocess_ms"]).item() / len(data["timestamps"])
+            np.asarray(primary_data["sequence_postprocess_ms"]).item()
+            / len(primary_data["timestamps"])
         ),
         "online_fps": float(1000.0 / online_mean_ms),
         "meets_12_5_fps": bool(online_mean_ms <= 80.0),

@@ -38,15 +38,21 @@ def finite_distribution(values: np.ndarray) -> dict[str, float | int | None]:
             "count": 0,
             "mean": None,
             "median": None,
+            "p25": None,
             "p75": None,
+            "iqr": None,
             "p95": None,
             "max": None,
         }
+    p25 = float(np.percentile(finite, 25))
+    p75 = float(np.percentile(finite, 75))
     return {
         "count": int(finite.size),
         "mean": float(np.mean(finite)),
         "median": float(np.median(finite)),
-        "p75": float(np.percentile(finite, 75)),
+        "p25": p25,
+        "p75": p75,
+        "iqr": p75 - p25,
         "p95": float(np.percentile(finite, 95)),
         "max": float(np.max(finite)),
     }
@@ -235,4 +241,3 @@ def save_json(path: Path, payload: Mapping[str, Any]) -> None:
         + "\n",
         encoding="utf-8",
     )
-

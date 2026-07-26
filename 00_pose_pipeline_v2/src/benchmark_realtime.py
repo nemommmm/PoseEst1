@@ -107,6 +107,7 @@ def main() -> None:
             if repeat_index == 0
             else run_dir / "timing_repeats" / f"repeat_{repeat_index + 1}"
         )
+        repeat_dir.mkdir(parents=True, exist_ok=True)
         npz_path = run_skt(deepcopy(config), repeat_dir)
         with np.load(npz_path, allow_pickle=True) as data:
             payload = {

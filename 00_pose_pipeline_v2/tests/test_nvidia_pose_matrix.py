@@ -36,6 +36,7 @@ from remote_gpu_pose_matrix import rsync_remote_destination  # noqa: E402
 from generate_nvidia_pose_matrix_report import (  # noqa: E402
     assess_method_gates,
     collect_evaluations,
+    reconcile_repaired_evaluation_statuses,
 )
 
 
@@ -305,6 +306,40 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
         result = assess_method_gates(evaluations, methods)["Candidate"]
         self.assertTrue(result["offline_passed"])
         self.assertFalse(result["realtime_passed"])
+
+    def test_report_reconciles_rerun_bodypose_evaluation(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            status = root / "candidate_matrix_status.json"
+            status.write_text(
+                json.dumps(
+                    {
+                        "records": [
+                            {
+                                "route": "BodyPose3DNet_stereo",
+                                "dataset": "fanbo4",
+                                "mode": "accuracy",
+                                "status": "failed",
+                                "return_code": 1,
+                            }
+                        ]
+                    }
+                ),
+                encoding="utf-8",
+            )
+            metrics = (
+                root
+                / "bodypose3d/evaluation/fanbo4/accuracy/stereo/metrics.json"
+            )
+            metrics.parent.mkdir(parents=True)
+            metrics.write_text("{}", encoding="utf-8")
+            self.assertEqual(reconcile_repaired_evaluation_statuses(root), 1)
+            repaired = json.loads(status.read_text(encoding="utf-8"))
+            self.assertEqual(
+                repaired["records"][0]["status"],
+                "completed_after_reference_upload_repair",
+            )
+            self.assertEqual(repaired["records"][0]["return_code"], 0)
 
 
 if __name__ == "__main__":

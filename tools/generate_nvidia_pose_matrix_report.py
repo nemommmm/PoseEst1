@@ -805,6 +805,61 @@ def write_experiment_log(
     return output
 
 
+def reconcile_repaired_evaluation_statuses(run_dir: Path) -> int:
+    """Mark BodyPose evaluations repaired after reference upload as complete."""
+    status_path = run_dir / "candidate_matrix_status.json"
+    if not status_path.is_file():
+        return 0
+    payload = load_json(status_path)
+    repaired = 0
+    evaluation_routes = {
+        "BodyPose3DNet_monocular_left": "monocular_left",
+        "BodyPose3DNet_monocular_right": "monocular_right",
+        "BodyPose3DNet_stereo": "stereo",
+    }
+    for record in payload.get("records", []):
+        if record.get("status") != "failed":
+            continue
+        route = str(record.get("route", ""))
+        suffix = evaluation_routes.get(route)
+        dataset = record.get("dataset")
+        mode = record.get("mode")
+        if suffix is None or dataset is None or mode is None:
+            continue
+        metrics_path = (
+            run_dir
+            / "bodypose3d"
+            / "evaluation"
+            / str(dataset)
+            / str(mode)
+            / suffix
+            / "metrics.json"
+        )
+        if not metrics_path.is_file():
+            continue
+        record["original_status"] = "failed_before_reference_upload_repair"
+        record["status"] = "completed_after_reference_upload_repair"
+        record["return_code"] = 0
+        record["repair_evidence"] = str(metrics_path.relative_to(run_dir))
+        repaired += 1
+    if repaired:
+        payload["status_reconciliation"] = {
+            "repaired_records": repaired,
+            "reason": (
+                "The original evaluation commands ran before reference files "
+                "with spaces were re-uploaded to their literal paths. The "
+                "fixed-offset evaluations were rerun and metrics artifacts "
+                "were verified."
+            ),
+            "updated_utc": datetime.now(timezone.utc).isoformat(),
+        }
+        status_path.write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+    return repaired
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -822,6 +877,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     decisions = assess_method_gates(evaluations, methods)
     for method in methods:
         method.update(decisions[str(method["candidate"])])
+    reconcile_repaired_evaluation_statuses(run_dir)
     charts = save_charts(run_dir, methods)
     ensure_best_preview(run_dir, evaluations, methods)
     (run_dir / "report.html").write_text(

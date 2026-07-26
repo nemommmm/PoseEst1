@@ -285,6 +285,11 @@ def assess_method_gates(
             ):
                 reasons.append("RULA-like agreement decreases")
             if any(
+                row["rula"] is None or row["baseline_rula"] is None
+                for row in finite_rows
+            ):
+                reasons.append("RULA-like agreement is unavailable")
+            if any(
                 row["valid_ratio"] is not None
                 and row["baseline_valid_ratio"] is not None
                 and (
@@ -294,6 +299,12 @@ def assess_method_gates(
                 for row in finite_rows
             ):
                 reasons.append("valid ratio decreases by more than 3 points")
+            if any(
+                row["valid_ratio"] is None
+                or row["baseline_valid_ratio"] is None
+                for row in finite_rows
+            ):
+                reasons.append("valid ratio is unavailable")
         offline_passed = not reasons
         realtime_passed = bool(
             offline_passed

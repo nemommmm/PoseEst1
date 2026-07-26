@@ -306,6 +306,10 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
         result = assess_method_gates(evaluations, methods)["Candidate"]
         self.assertTrue(result["offline_passed"])
         self.assertFalse(result["realtime_passed"])
+        evaluations[0]["rula"] = None
+        result = assess_method_gates(evaluations, methods)["Candidate"]
+        self.assertFalse(result["offline_passed"])
+        self.assertIn("RULA-like agreement is unavailable", result["reasons"])
 
     def test_report_reconciles_rerun_bodypose_evaluation(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

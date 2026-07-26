@@ -1,0 +1,13 @@
+diff --git a/deepstream-bodypose-3d/sources/Makefile b/deepstream-bodypose-3d/sources/Makefile
+index 6c530d3..429b6d0 100644
+--- a/deepstream-bodypose-3d/sources/Makefile
++++ b/deepstream-bodypose-3d/sources/Makefile
+@@ -50,7 +50,7 @@ CFLAGS+= \
+ 	-I$(DEEPSTREAM_HOME)/sources/apps/apps-common/includes \
+ 	-I$(DEEPSTREAM_HOME)/sources/apps/sample_apps/deepstream-app \
+ 	-I../eigen \
+-	-DDS_VERSION_MINOR=2 -DDS_VERSION_MAJOR=6
++	-DDS_VERSION_MINOR=0 -DDS_VERSION_MAJOR=8
+ 
+ LIBS+= \
+ 	-L$(CUDA_HOME)/lib64 -lcudart -lcuda \

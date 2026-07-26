@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sys
 import tempfile
 import unittest
@@ -32,6 +33,7 @@ from adapt_foundation_stereo_joint_depth import (  # noqa: E402
 )
 from run_nvidia_bodypose3d_matrix import create_warmup_video  # noqa: E402
 from remote_gpu_pose_matrix import rsync_remote_destination  # noqa: E402
+from generate_nvidia_pose_matrix_report import collect_evaluations  # noqa: E402
 
 
 class NvidiaPoseMatrixTest(unittest.TestCase):
@@ -202,6 +204,44 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
             ),
             "poseest1-runpod:'/workspace/PoseEst1/TRC FastSAM3D/'",
         )
+
+    def test_report_collects_nested_bodypose_evaluations(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            target = (
+                root
+                / "bodypose3d/evaluation/fanbo3/accuracy/stereo/metrics.json"
+            )
+            target.parent.mkdir(parents=True)
+            target.write_text(
+                json.dumps(
+                    {
+                        "candidate": "BodyPose3DNet-accuracy-stereo",
+                        "dataset": "assar2026_fanbo3_a255",
+                        "rows": [
+                            {
+                                "candidate": {
+                                    "absolute_error_deg": {
+                                        "median": 1.0,
+                                        "p95": 2.0,
+                                    },
+                                    "valid_ratio": 0.8,
+                                    "rula_like_agreement": 0.9,
+                                    "jump_count": 2,
+                                },
+                                "baseline": {
+                                    "absolute_error_deg": {"median": 1.5}
+                                },
+                            }
+                        ],
+                        "aggregate_median_improvement_ratio": 1.0 / 3.0,
+                    }
+                ),
+                encoding="utf-8",
+            )
+            rows = collect_evaluations(root)
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["dataset"], "Fanbo3")
 
 
 if __name__ == "__main__":

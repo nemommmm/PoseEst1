@@ -76,7 +76,12 @@ def display_dataset(value: str) -> str:
 def collect_evaluations(run_dir: Path) -> list[dict[str, Any]]:
     """Collect robust metric rows from all successful route evaluations."""
     records: list[dict[str, Any]] = []
-    for path in sorted(run_dir.glob("**/evaluation/metrics.json")):
+    metric_paths = [
+        path
+        for path in run_dir.rglob("metrics.json")
+        if "evaluation" in path.relative_to(run_dir).parts
+    ]
+    for path in sorted(metric_paths):
         metrics = load_json(path)
         rows = metrics.get("rows", [])
         candidate = metrics.get("candidate", path.parent.parent.name)

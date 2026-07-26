@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import html
 import json
+import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
@@ -224,6 +225,90 @@ def save_charts(
     return {"pareto": pareto_path, "validity": validity_path}
 
 
+def find_candidate_npz(run_dir: Path, candidate_name: str) -> Path | None:
+    """Find the canonical NPZ whose embedded name matches one evaluation."""
+    for path in sorted(run_dir.rglob("*.npz")):
+        try:
+            with np.load(path, allow_pickle=False) as payload:
+                if "candidate_name" not in payload.files:
+                    continue
+                name = str(np.asarray(payload["candidate_name"]).item())
+        except (OSError, ValueError, KeyError):
+            continue
+        if name == candidate_name:
+            return path
+    return None
+
+
+def ensure_best_preview(
+    run_dir: Path,
+    evaluations: Sequence[dict[str, Any]],
+    methods: Sequence[dict[str, Any]],
+) -> Path | None:
+    """Render the best aggregate method's strongest dataset locally."""
+    eligible = [row for row in methods if row["median"] is not None]
+    if not eligible:
+        return None
+    best_method = min(eligible, key=lambda row: row["median"])
+    cells = [
+        row
+        for row in evaluations
+        if row["candidate"] == best_method["candidate"]
+        and row["median"] is not None
+    ]
+    if not cells:
+        return None
+    cell = min(cells, key=lambda row: row["median"])
+    candidate = find_candidate_npz(run_dir, str(cell["candidate"]))
+    selection = run_dir / "input_selection.json"
+    if candidate is None or not selection.is_file():
+        return None
+    dataset = str(cell["dataset"]).lower()
+    configs = {
+        "fanbo3": (
+            "00_pose_pipeline_v2/configs/ablation_pipeline_model/"
+            "fanbo3_v2_yolov8m.yaml"
+        ),
+        "fanbo4": (
+            "00_pose_pipeline_v2/configs/ablation_pipeline_model/"
+            "fanbo4_v2_yolov8m.yaml"
+        ),
+        "fanbo7": (
+            "00_pose_pipeline_v2/configs/ablation_pipeline_model/"
+            "fanbo7_v2_yolov8m.yaml"
+        ),
+    }
+    if dataset not in configs:
+        return None
+    output_dir = run_dir / "best_candidate_evidence"
+    output = output_dir / "best_candidate_preview_h264.mp4"
+    if output.is_file():
+        return output
+    subprocess.run(
+        [
+            "/opt/anaconda3/envs/pose/bin/python",
+            "tools/render_nvidia_candidate_preview.py",
+            "--candidate",
+            str(candidate),
+            "--config",
+            configs[dataset],
+            "--selection",
+            str(selection),
+            "--dataset",
+            dataset,
+            "--output-dir",
+            str(output_dir),
+            "--evaluation-csv",
+            str(Path(cell["metrics_path"]).parent / "angle_timeseries.csv"),
+            "--duration-seconds",
+            "20",
+        ],
+        cwd=PROJECT_ROOT,
+        check=True,
+    )
+    return output
+
+
 def fmt(value: float | None, digits: int = 2) -> str:
     """Format a nullable metric."""
     return "—" if value is None else f"{value:.{digits}f}"
@@ -318,6 +403,32 @@ def evidence_gallery(run_dir: Path, evaluations: Sequence[dict[str, Any]], chine
     return "".join(blocks)
 
 
+def preview_gallery(run_dir: Path, chinese: bool) -> str:
+    """Render the best-candidate video and representative-frame gallery."""
+    root = run_dir / "best_candidate_evidence"
+    video = root / "best_candidate_preview_h264.mp4"
+    if not video.is_file():
+        return ""
+    video_relative = video.relative_to(run_dir).as_posix()
+    images = "".join(
+        (
+            f"<a href='{path.relative_to(run_dir).as_posix()}'>"
+            f"<img src='{path.relative_to(run_dir).as_posix()}' "
+            "style='width:31%;margin:1%;border-radius:6px'></a>"
+        )
+        for path in sorted((root / "representative_frames").glob("*.jpg"))
+    )
+    caption = (
+        "最佳候选的 20 秒 H.264 左图—3D 重建预览"
+        if chinese
+        else "20-second H.264 left-view–3D preview for the best candidate"
+    )
+    return (
+        f"<h3>{caption}</h3><video controls style='width:100%' "
+        f"src='{video_relative}'></video><div>{images}</div>"
+    )
+
+
 def build_report(
     run_dir: Path,
     evaluations: Sequence[dict[str, Any]],
@@ -349,7 +460,7 @@ def build_report(
 <section id="aggregate"><h2>4. 精度—速度汇总</h2><table><tr><th>候选</th><th>数据集数</th><th>Median °</th><th>p95 °</th><th>有效率</th><th>完整 FPS</th><th>实时</th></tr>{method_table(methods)}</table>
 <figure><img src="{pareto}"><figcaption>精度—速度 Pareto。DeepStream/Maxine 受许可约束的精确 timing 不在对外 HTML 中展开。</figcaption></figure>
 <figure><img src="{validity}"><figcaption>共同有效帧比例。</figcaption></figure></section>
-<section id="evidence"><h2>5. 直观图表</h2>{evidence_gallery(run_dir, evaluations, True)}</section>
+<section id="evidence"><h2>5. 直观图表</h2>{preview_gallery(run_dir, True)}{evidence_gallery(run_dir, evaluations, True)}</section>
 <section id="rules"><h2>6. 判定规则与可复现性</h2><ul><li>固定 Fanbo3 2.00 s、Fanbo4 5.4 s、Fanbo7 7.3 s 参考偏移。</li><li>主要展示 median、IQR、p95、RULA 和有效率；MAE/RMSE仅作辅助。</li><li>实时要求完整 Pipeline ≥12.5 fps 且 p95 ≤80 ms。</li><li>许可权重、TensorRT engine、视频和凭据均不进入本地结果包。</li></ul></section>"""
         nav = ["摘要", "可用性", "结果", "精度—速度", "图表", "规则"]
     else:
@@ -365,7 +476,7 @@ def build_report(
 <section id="aggregate"><h2>4. Accuracy–throughput summary</h2><table><tr><th>Candidate</th><th>Datasets</th><th>Median °</th><th>p95 °</th><th>Valid ratio</th><th>Complete FPS</th><th>Real-time</th></tr>{method_table(methods)}</table>
 <figure><img src="{pareto}"><figcaption>Accuracy–speed Pareto view. Exact proprietary DeepStream/Maxine timing is not expanded in the outward-facing HTML.</figcaption></figure>
 <figure><img src="{validity}"><figcaption>Common valid-frame ratio.</figcaption></figure></section>
-<section id="evidence"><h2>5. Visual evidence</h2>{evidence_gallery(run_dir, evaluations, False)}</section>
+<section id="evidence"><h2>5. Visual evidence</h2>{preview_gallery(run_dir, False)}{evidence_gallery(run_dir, evaluations, False)}</section>
 <section id="rules"><h2>6. Decision rules and reproducibility</h2><ul><li>Frozen reference offsets: Fanbo3 2.00 s, Fanbo4 5.4 s, Fanbo7 7.3 s.</li><li>Primary metrics are median, IQR, p95, RULA agreement, and validity; MAE/RMSE are secondary.</li><li>Real-time requires a complete pipeline ≥12.5 fps and p95 latency ≤80 ms.</li><li>Licensed weights, TensorRT engines, videos, and credentials are excluded from the local result bundle.</li></ul></section>"""
         nav = ["Summary", "Availability", "Results", "Accuracy–speed", "Evidence", "Rules"]
     ids = ["summary", "availability", "results", "aggregate", "evidence", "rules"]
@@ -441,6 +552,53 @@ def write_manifest(run_dir: Path) -> Path:
     return output
 
 
+def write_experiment_log(
+    run_dir: Path,
+    evaluations: Sequence[dict[str, Any]],
+    methods: Sequence[dict[str, Any]],
+) -> Path:
+    """Write a concise, durable experiment log for the formal run."""
+    status_path = run_dir / "candidate_matrix_status.json"
+    status = load_json(status_path) if status_path.is_file() else {}
+    lines = [
+        "# NVIDIA pose matrix experiment log",
+        "",
+        f"- Finalized UTC: {datetime.now(timezone.utc).isoformat()}",
+        f"- Run directory: `{run_dir}`",
+        f"- Successful evaluation cells: {len(evaluations)}",
+        "- Reference policy: Xsens-derived reference is an external "
+        "comparison system, not absolute Ground Truth.",
+        "- Candidate-specific time-offset search: disabled.",
+        "",
+        "## Method summary",
+        "",
+        "| Candidate | Datasets | Median deg | p95 deg | Valid ratio | FPS |",
+        "|---|---:|---:|---:|---:|---:|",
+    ]
+    for row in methods:
+        lines.append(
+            f"| {row['candidate']} | {row['datasets']} | "
+            f"{fmt(row['median'])} | {fmt(row['p95'])} | "
+            f"{fmt(row['valid_ratio'], 3)} | {fmt(row['fps'])} |"
+        )
+    lines.extend(["", "## Command records", ""])
+    for record in status.get("records", []):
+        command_value = record.get("command")
+        command_text = (
+            " ".join(str(value) for value in command_value)
+            if isinstance(command_value, list)
+            else str(command_value or "")
+        )
+        lines.append(
+            f"- `{record.get('status', 'unknown')}` "
+            f"{record.get('route', '')} "
+            f"{record.get('dataset', '')}: `{command_text}`"
+        )
+    output = run_dir / "experiment_log.md"
+    output.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return output
+
+
 def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__)
@@ -456,6 +614,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     timings = collect_timings(run_dir)
     methods = aggregate_methods(evaluations, timings)
     charts = save_charts(run_dir, methods)
+    ensure_best_preview(run_dir, evaluations, methods)
     (run_dir / "report.html").write_text(
         build_report(run_dir, evaluations, methods, charts, False),
         encoding="utf-8",
@@ -464,6 +623,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         build_report(run_dir, evaluations, methods, charts, True),
         encoding="utf-8",
     )
+    write_experiment_log(run_dir, evaluations, methods)
     manifest = write_manifest(run_dir)
     print(run_dir / "report.html")
     print(run_dir / "report_CN.html")

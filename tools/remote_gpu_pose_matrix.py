@@ -256,6 +256,11 @@ def run_formal(args: argparse.Namespace) -> None:
         [
             "set -eu",
             f"cd {shlex.quote(args.remote_root)}",
+            f"mkdir -p {shlex.quote(str(Path(matrix['output_root']) / tag))}",
+            (
+                f"cp {shlex.quote(str(selection_path.relative_to(PROJECT_ROOT)))} "
+                f"{shlex.quote(str(Path(matrix['output_root']) / tag / 'input_selection.json'))}"
+            ),
             *commands,
         ]
     )
@@ -318,8 +323,6 @@ def synchronize(host: str, remote_root: str, tag: str) -> None:
             "--checksum",
             "--exclude",
             "*.avi",
-            "--exclude",
-            "*.mp4",
             "--exclude",
             "*.mkv",
             "--exclude",

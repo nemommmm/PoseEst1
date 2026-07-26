@@ -141,6 +141,12 @@ def bootstrap(args: argparse.Namespace) -> None:
                 "bash tools/setup_remote_env.sh"
             ),
             (
+                "VENV_PATH=/workspace/venv-foundation-stereo "
+                "BASE_PYTHON=python "
+                "bash tools/setup_foundation_stereo.sh"
+            ),
+            "bash tools/setup_nvidia_bodypose3d.sh",
+            (
                 "/workspace/venv-pose/bin/python -m unittest "
                 "00_pose_pipeline_v2.tests.test_nvidia_pose_matrix"
             ),
@@ -153,7 +159,10 @@ def upload_inputs(args: argparse.Namespace) -> None:
     """Upload selected proxy inputs and small comparison assets."""
     selection_path = project_path(args.selection)
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
-    paths = [project_path(value) for value in selection["files"]]
+    paths = [
+        selection_path,
+        *[project_path(value) for value in selection["files"]],
+    ]
     for path in paths:
         if not path.is_file():
             raise FileNotFoundError(path)
@@ -176,13 +185,31 @@ def upload_inputs(args: argparse.Namespace) -> None:
         )
 
 
-def run_baselines(args: argparse.Namespace) -> None:
-    """Run the deterministic PyTorch control on every accepted proxy."""
-    matrix_path = project_path(args.matrix)
+def matrix_config_path(args: argparse.Namespace) -> Path:
+    """Resolve the formal matrix config while preserving the documented CLI."""
+    if args.matrix == "formal":
+        return project_path(args.config)
+    return project_path(args.matrix)
+
+
+def validate_formal_selection(path: Path) -> dict[str, Any]:
+    """Require an explicitly accepted input selection for formal experiments."""
+    selection = json.loads(path.read_text(encoding="utf-8"))
+    if selection.get("status") != "accepted":
+        raise ValueError(
+            "Formal GPU experiments require a proxy selection with "
+            "status='accepted'"
+        )
+    return selection
+
+
+def run_formal(args: argparse.Namespace) -> None:
+    """Upload accepted inputs, then run and sync the full formal matrix."""
+    matrix_path = matrix_config_path(args)
     matrix = load_yaml(matrix_path)
-    selection = json.loads(
-        project_path(args.selection).read_text(encoding="utf-8")
-    )
+    selection_path = project_path(args.selection)
+    selection = validate_formal_selection(selection_path)
+    upload_inputs(args)
     accepted = selection["accepted"]
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     commit7 = current_commit()[:7]
@@ -234,6 +261,38 @@ def run_baselines(args: argparse.Namespace) -> None:
         ssh(args.host, remote_script)
     finally:
         synchronize(args.host, args.remote_root, tag)
+    selection_relative = selection_path.relative_to(PROJECT_ROOT)
+    matrix_relative = matrix_path.relative_to(PROJECT_ROOT)
+    output_relative = (
+        Path(matrix["output_root"])
+        / tag
+    )
+    candidate_command = shlex.join(
+        [
+            "/workspace/venv-pose/bin/python",
+            "tools/run_nvidia_pose_candidates.py",
+            "--matrix",
+            str(matrix_relative),
+            "--selection",
+            str(selection_relative),
+            "--output-dir",
+            str(output_relative),
+            "--repeats",
+            str(matrix["evaluation"]["repeats"]),
+        ]
+    )
+    candidate_script = "\n".join(
+        [
+            "set -eu",
+            f"cd {shlex.quote(args.remote_root)}",
+            candidate_command,
+        ]
+    )
+    try:
+        ssh(args.host, candidate_script)
+    finally:
+        synchronize(args.host, args.remote_root, tag)
+    print(tag)
 
 
 def synchronize(host: str, remote_root: str, tag: str) -> None:
@@ -292,12 +351,19 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     upload.add_argument("--selection", type=Path, required=True)
 
     run = subparsers.add_parser("run")
-    run.add_argument("--matrix", type=Path, default=DEFAULT_MATRIX)
+    run.add_argument(
+        "--matrix",
+        default="formal",
+        help=(
+            "Use 'formal' for the documented experiment matrix. A legacy "
+            "matrix-config path is also accepted."
+        ),
+    )
+    run.add_argument("--config", type=Path, default=DEFAULT_MATRIX)
     run.add_argument("--host", default="poseest1-runpod")
     run.add_argument("--remote-root", default=REMOTE_ROOT)
     run.add_argument("--selection", type=Path, required=True)
     run.add_argument("--run-tag")
-    run.add_argument("--matrix-name", choices=["formal"], default="formal")
 
     sync = subparsers.add_parser("sync")
     sync.add_argument("--host", default="poseest1-runpod")
@@ -316,7 +382,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     elif args.action == "upload-inputs":
         upload_inputs(args)
     elif args.action == "run":
-        run_baselines(args)
+        run_formal(args)
     else:
         synchronize(args.host, args.remote_root, args.run_tag)
     return 0

@@ -30,6 +30,10 @@ from adapt_foundation_stereo_joint_depth import (  # noqa: E402
 )
 from common.config import load_config, resolve_path, section  # noqa: E402
 from common.metrics import jsonable  # noqa: E402
+from stereo_loader import (  # noqa: E402
+    StereoFrameReader,
+    build_synced_timeline,
+)
 
 
 @dataclass(frozen=True)
@@ -314,6 +318,26 @@ def run(args: argparse.Namespace) -> Path:
     if not repository.is_dir():
         raise FileNotFoundError(repository)
 
+    config = load_config(config_path)
+    dataset = section(config, "dataset")
+    left_metadata = resolve_path(
+        dataset.get("left_metadata"),
+        must_exist=True,
+    )
+    right_metadata = resolve_path(
+        dataset.get("right_metadata"),
+        must_exist=True,
+    )
+    assert left_metadata is not None and right_metadata is not None
+    synchronized_time, synchronized_frames, _, _ = build_synced_timeline(
+        left_metadata,
+        right_metadata,
+        dataset.get(
+            "timestamp_format",
+            "seconds_microseconds_columns",
+        ),
+    )
+
     left_capture = cv2.VideoCapture(str(left_video))
     right_capture = cv2.VideoCapture(str(right_video))
     width = int(left_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -363,9 +387,22 @@ def run(args: argparse.Namespace) -> Path:
     )
     maximum = min(
         len(timestamps),
+        len(synchronized_time),
         int(args.max_frames) if args.max_frames is not None else len(timestamps),
     )
     timestamps = timestamps[:maximum]
+    synchronized_time = synchronized_time[:maximum]
+    synchronized_frames = synchronized_frames[:maximum]
+    if not np.allclose(
+        timestamps,
+        synchronized_time,
+        atol=1e-6,
+        rtol=0.0,
+    ):
+        raise ValueError(
+            "Baseline timestamps do not match the metadata-synchronized "
+            "stereo timeline"
+        )
     rectified_left_points = rectified_left_points[:maximum]
     confidence_left = confidence_left[:maximum]
     detector_time = detector_time[:maximum]
@@ -405,92 +442,102 @@ def run(args: argparse.Namespace) -> Path:
     diagnostics_dir.mkdir(parents=True, exist_ok=True)
 
     for repeat_index in range(repeat_count):
-        left_capture = cv2.VideoCapture(str(left_video))
-        right_capture = cv2.VideoCapture(str(right_video))
-        for frame_index in range(maximum):
-            frame_start = time.perf_counter()
-            ok_left, frame_left = left_capture.read()
-            ok_right, frame_right = right_capture.read()
-            if not ok_left or not ok_right:
-                raise RuntimeError(
-                    f"Video decode stopped at frame {frame_index}"
+        reader = StereoFrameReader(
+            left_video,
+            right_video,
+            synchronized_frames,
+            rotate_180=False,
+        )
+        try:
+            for frame_index in range(maximum):
+                frame_start = time.perf_counter()
+                ok, frame_left, frame_right = (
+                    reader.read_synced_sequential(frame_index)
                 )
-            rectified_left = cv2.remap(
-                frame_left,
-                geometry.left_map_x,
-                geometry.left_map_y,
-                cv2.INTER_LINEAR,
-            )
-            rectified_right = cv2.remap(
-                frame_right,
-                geometry.right_map_x,
-                geometry.right_map_y,
-                cv2.INTER_LINEAR,
-            )
-            left_tensor, right_tensor, padder, _ = prepare_tensor_pair(
-                rectified_left,
-                rectified_right,
-                args.scale,
-                InputPadder,
-            )
-            torch.cuda.synchronize()
-            inference_start = time.perf_counter()
-            with torch.inference_mode():
-                disparity_tensor = infer(left_tensor, right_tensor)
-            torch.cuda.synchronize()
-            inference_times[repeat_index, frame_index] = (
-                time.perf_counter() - inference_start
-            ) * 1000.0
-            disparity_scaled = (
-                padder.unpad(disparity_tensor.float())
-                .detach()
-                .cpu()
-                .numpy()
-                .squeeze()
-            )
-            if disparity_scaled.ndim != 2:
-                raise RuntimeError(
-                    f"Unexpected disparity shape: {disparity_scaled.shape}"
+                if not ok or frame_left is None or frame_right is None:
+                    item = synchronized_frames[frame_index]
+                    raise RuntimeError(
+                        "Video decode stopped at synchronized frame "
+                        f"{frame_index} (left={item.left_idx}, "
+                        f"right={item.right_idx})"
+                    )
+                rectified_left = cv2.remap(
+                    frame_left,
+                    geometry.left_map_x,
+                    geometry.left_map_y,
+                    cv2.INTER_LINEAR,
                 )
-            scaled_height = int(round(height * args.scale))
-            scaled_width = int(round(width * args.scale))
-            disparity_scaled = disparity_scaled[
-                :scaled_height,
-                :scaled_width,
-            ]
-            disparity_full = restore_full_resolution_disparity(
-                disparity_scaled,
-                (width, height),
-                args.scale,
-            )
-            if repeat_index == 0:
-                values, mad = sample_joint_disparity(
-                    disparity_full,
-                    rectified_left_points[frame_index],
-                    patch_size=args.patch_size,
-                    maximum_mad_px=args.maximum_mad_px,
+                rectified_right = cv2.remap(
+                    frame_right,
+                    geometry.right_map_x,
+                    geometry.right_map_y,
+                    cv2.INTER_LINEAR,
                 )
-                joint_disparity[frame_index] = values
-                local_mad[frame_index] = mad
-                if frame_index in diagnostic_indices:
-                    image = diagnostic_image(
-                        rectified_left,
+                left_tensor, right_tensor, padder, _ = prepare_tensor_pair(
+                    rectified_left,
+                    rectified_right,
+                    args.scale,
+                    InputPadder,
+                )
+                torch.cuda.synchronize()
+                inference_start = time.perf_counter()
+                with torch.inference_mode():
+                    disparity_tensor = infer(left_tensor, right_tensor)
+                torch.cuda.synchronize()
+                inference_times[repeat_index, frame_index] = (
+                    time.perf_counter() - inference_start
+                ) * 1000.0
+                disparity_scaled = (
+                    padder.unpad(disparity_tensor.float())
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .squeeze()
+                )
+                if disparity_scaled.ndim != 2:
+                    raise RuntimeError(
+                        "Unexpected disparity shape: "
+                        f"{disparity_scaled.shape}"
+                    )
+                scaled_height = int(round(height * args.scale))
+                scaled_width = int(round(width * args.scale))
+                disparity_scaled = disparity_scaled[
+                    :scaled_height,
+                    :scaled_width,
+                ]
+                disparity_full = restore_full_resolution_disparity(
+                    disparity_scaled,
+                    (width, height),
+                    args.scale,
+                )
+                if repeat_index == 0:
+                    values, mad = sample_joint_disparity(
                         disparity_full,
                         rectified_left_points[frame_index],
+                        patch_size=args.patch_size,
+                        maximum_mad_px=args.maximum_mad_px,
                     )
-                    cv2.imwrite(
-                        str(
-                            diagnostics_dir
-                            / f"frame_{frame_index:06d}.jpg"
-                        ),
-                        image,
-                        [cv2.IMWRITE_JPEG_QUALITY, 90],
-                    )
-            dense_pipeline_times[repeat_index, frame_index] = (
-                time.perf_counter() - frame_start
-            ) * 1000.0
-        left_capture.release()
-        right_capture.release()
+                    joint_disparity[frame_index] = values
+                    local_mad[frame_index] = mad
+                    if frame_index in diagnostic_indices:
+                        image = diagnostic_image(
+                            rectified_left,
+                            disparity_full,
+                            rectified_left_points[frame_index],
+                        )
+                        cv2.imwrite(
+                            str(
+                                diagnostics_dir
+                                / f"frame_{frame_index:06d}.jpg"
+                            ),
+                            image,
+                            [cv2.IMWRITE_JPEG_QUALITY, 90],
+                        )
+                dense_pipeline_times[repeat_index, frame_index] = (
+                    time.perf_counter() - frame_start
+                ) * 1000.0
+        finally:
+            reader.release()
 
     full_pipeline_times = dense_pipeline_times + detector_time[None, :]
     warmup = min(max(int(args.warmup_frames), 0), max(maximum - 1, 0))
@@ -519,6 +566,10 @@ def run(args: argparse.Namespace) -> Path:
         "repeats": int(repeat_count),
         "detector_timing_policy": detector_timing_policy,
         "right_yolo_usage": "diagnostic_only",
+        "frame_alignment": "hardware_frame_id_metadata_sync",
+        "input_rotation": (
+            "proxy_videos_are_already_upright_no_runtime_rotation"
+        ),
         "reference_policy": (
             "Xsens-derived reference is an external comparison system."
         ),

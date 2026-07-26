@@ -55,6 +55,11 @@ def command(
     )
 
 
+def rsync_remote_destination(host: str, path: str) -> str:
+    """Quote a remote rsync path so spaces survive the remote shell."""
+    return f"{host}:{shlex.quote(path)}"
+
+
 def ssh(host: str, script: str, *, check: bool = True) -> int:
     """Run a non-interactive remote shell script."""
     print(f"+ ssh {host} {shlex.quote(script)}")
@@ -180,7 +185,7 @@ def upload_inputs(args: argparse.Namespace) -> None:
                 "--no-owner",
                 "--no-group",
                 str(path),
-                f"{args.host}:{remote_parent}/",
+                rsync_remote_destination(args.host, remote_parent + "/"),
             ]
         )
 

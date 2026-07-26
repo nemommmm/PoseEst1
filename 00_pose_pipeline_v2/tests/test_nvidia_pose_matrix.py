@@ -31,6 +31,7 @@ from adapt_foundation_stereo_joint_depth import (  # noqa: E402
     sample_joint_disparity,
 )
 from run_nvidia_bodypose3d_matrix import create_warmup_video  # noqa: E402
+from remote_gpu_pose_matrix import rsync_remote_destination  # noqa: E402
 
 
 class NvidiaPoseMatrixTest(unittest.TestCase):
@@ -192,6 +193,15 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
             ):
                 result = create_warmup_video(source, output, 10)
             self.assertEqual(result, output)
+
+    def test_rsync_remote_path_preserves_spaces(self) -> None:
+        self.assertEqual(
+            rsync_remote_destination(
+                "poseest1-runpod",
+                "/workspace/PoseEst1/TRC FastSAM3D/",
+            ),
+            "poseest1-runpod:'/workspace/PoseEst1/TRC FastSAM3D/'",
+        )
 
 
 if __name__ == "__main__":

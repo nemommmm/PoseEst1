@@ -28,6 +28,11 @@ def parse_args() -> argparse.Namespace:
         "--right-video",
         help="Override the configured right video for deployment-input tests.",
     )
+    parser.add_argument(
+        "--input-upright",
+        action="store_true",
+        help="The video override is already rotated upright; disable config rotation.",
+    )
     parser.add_argument("--max-frames", type=int, default=200)
     parser.add_argument("--warmup-frames", type=int, default=10)
     parser.add_argument("--run-dir", required=True)
@@ -66,6 +71,10 @@ def main() -> None:
         assert left_video is not None and right_video is not None
         dataset["left_video"] = str(left_video)
         dataset["right_video"] = str(right_video)
+    if args.input_upright:
+        if not args.left_video:
+            raise ValueError("--input-upright requires video overrides")
+        dataset["rotate_180"] = False
     skt = config.setdefault("skt", {})
     skt["use_existing_npz"] = False
     skt["max_frames"] = args.max_frames

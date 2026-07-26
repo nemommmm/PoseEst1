@@ -1,0 +1,107 @@
+schema_version: nvidia_pose_matrix_v1
+
+output_root: 00_pose_pipeline_v2/runs/nvidia_pose_matrix
+
+datasets:
+  fanbo3:
+    config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo3_v2_yolov8m.yaml
+    baseline_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo3_v2_yolov8m/skt_pose_optimized.npz
+    reference:
+      kind: xsens
+      label: Xsens-derived reference
+      offset_seconds: 2.0
+    angle_names:
+      - LeftShoulder
+      - RightShoulder
+      - LeftElbow
+      - RightElbow
+      - LeftHip
+      - RightHip
+      - LeftKnee
+      - RightKnee
+
+  fanbo4:
+    config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo4_v2_yolov8m.yaml
+    baseline_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo4_v2_yolov8m/skt_pose_optimized.npz
+    reference:
+      kind: fastsam
+      label: FastSAM3D comparison trajectory
+      offset_seconds: 5.4
+    angle_names: [RightElbow]
+
+  fanbo7:
+    config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo7_v2_yolov8m.yaml
+    baseline_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo7_v2_yolov8m/skt_pose_optimized.npz
+    reference:
+      kind: fastsam
+      label: FastSAM3D comparison trajectory
+      offset_seconds: 7.3
+    angle_names: [RightElbow]
+
+proxy:
+  output_root: 00_pose_pipeline_v2/runs/nvidia_pose_matrix/inputs
+  crf_ladder: [14, 12, 10, 8]
+  screening_frames: 200
+  codec: libx264
+  preset: slow
+  pixel_format: yuv420p
+  rotate_180_during_encode: true
+  lossless_fallback:
+    codec: libx264
+    qp: 0
+    pixel_format: gray
+  thresholds:
+    keypoint_2d_median_px: 0.5
+    keypoint_2d_p95_px: 2.0
+    keypoint_3d_median_cm: 0.5
+    keypoint_3d_p95_cm: 2.0
+    angle_median_deg: 0.5
+    angle_p95_deg: 2.0
+    minimum_rula_agreement: 0.99
+    maximum_valid_ratio_change: 0.01
+
+models:
+  yolo_skt_control:
+    enabled: true
+    route: stereo
+  bodyposenet_2d:
+    enabled: true
+    route: stereo
+    input_size: [448, 320]
+    precision: fp16
+  bodypose3dnet:
+    enabled: true
+    modes: [accuracy, performance]
+    routes: [monocular_left, monocular_right, stereo]
+    minimum_joint_confidence: 0.2
+  maxine_bodypose:
+    enabled: true
+    modes: [high_quality, high_performance]
+    routes: [monocular_left, monocular_right, stereo]
+    temporal: true
+    blocked_is_failure: false
+  foundation_stereo:
+    enabled: true
+    variants:
+      - name: foundationstereo_vit_large
+        repository: https://github.com/NVlabs/FoundationStereo
+        valid_iters: 32
+      - name: fast_foundationstereo
+        repository: https://github.com/NVlabs/Fast-FoundationStereo
+        valid_iters: 8
+        realtime_fallback_iters: 4
+    joint_patch_size: 7
+    maximum_local_disparity_mad_px: 2.0
+
+evaluation:
+  feasibility_frames: 40
+  warmup_frames: 10
+  repeats: 3
+  real_time_fps: 12.5
+  maximum_p95_latency_ms: 80.0
+  minimum_median_improvement_ratio: 0.05
+  maximum_cell_degradation_deg: 1.0
+  maximum_valid_ratio_drop: 0.03
+  jump_threshold_deg: 10.0
+  report_exact_proprietary_sdk_timing: false
+

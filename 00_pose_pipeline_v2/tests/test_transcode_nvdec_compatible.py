@@ -11,6 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tools"))
 
 from transcode_nvdec_compatible import (  # noqa: E402
+    HEVC_LOSSLESS,
     TranscodeError,
     build_transcode_command,
     default_manifest_path,
@@ -70,6 +71,26 @@ class TranscodeNvdecCompatibleTest(unittest.TestCase):
             "hflip,vflip,format=nv12",
         )
 
+    def test_hevc_lossless_command_preserves_full_range(self) -> None:
+        command = build_transcode_command(
+            "ffmpeg",
+            Path("/data/source.mkv"),
+            Path("/data/proxy.mkv"),
+            mode=HEVC_LOSSLESS,
+        )
+        expected_pairs = {
+            "-c:v": "libx265",
+            "-preset": "ultrafast",
+            "-x265-params": "lossless=1:range=full:pools=24",
+            "-color_range": "pc",
+        }
+        for option, value in expected_pairs.items():
+            self.assertEqual(command[command.index(option) + 1], value)
+        self.assertIn(
+            "scale=in_range=full:out_range=full",
+            command[command.index("-vf") + 1],
+        )
+
     def test_probe_parser_exposes_compatibility_fields(self) -> None:
         payload = {
             "streams": [
@@ -113,6 +134,18 @@ class TranscodeNvdecCompatibleTest(unittest.TestCase):
                     "profile": "High",
                     "pixel_format": "yuv420p",
                 }
+            ),
+            [],
+        )
+        self.assertEqual(
+            verify_output_metadata(
+                {
+                    "codec_name": "hevc",
+                    "profile": "Main",
+                    "pixel_format": "yuvj420p",
+                    "color_range": "pc",
+                },
+                mode=HEVC_LOSSLESS,
             ),
             [],
         )

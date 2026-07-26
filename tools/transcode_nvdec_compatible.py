@@ -1,14 +1,12 @@
 #!/usr/bin/env python3
-"""Create an auditable near-lossless NVDEC-compatible H.264 proxy.
+"""Create an auditable NVDEC-compatible H.264 or HEVC proxy.
 
 The source videos used by this project can be H.264 High 4:4:4 Predictive,
 which is outside NVIDIA's published NVDEC H.264 profile set on the RTX A6000.
-This utility converts one source video to H.264 High with yuv420p chroma using
-the already validated NVENC settings. An optional exact 180-degree geometric
-rotation can be applied before encoding for sensors that store upside-down
-frames. The proxy is explicitly classified as ``near-lossless``: QP 0
-minimizes encoder loss, but profile/pixel-format conversion and re-encoding
-mean pixel identity is not guaranteed.
+The default mode converts one source video to near-lossless H.264 High with
+yuv420p chroma using NVENC. The HEVC mode preserves full-range yuv420p pixels
+with x265 lossless coding and requires decoded-pixel SHA256 equality. An
+optional exact 180-degree geometric rotation can be applied before encoding.
 
 The utility never overwrites an existing output or manifest. It records the
 exact command, hashes, probe metadata, software/GPU metadata, and timestamps
@@ -31,8 +29,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Sequence
 
-SCHEMA_VERSION = "nvdec_compatible_proxy_v2"
-QUALITY_LABEL = "near-lossless"
+SCHEMA_VERSION = "nvdec_compatible_proxy_v3"
+H264_NVENC = "h264_nvenc_near_lossless"
+HEVC_LOSSLESS = "hevc_lossless_full_range"
 
 
 class TranscodeError(RuntimeError):
@@ -156,8 +155,9 @@ def build_transcode_command(
     output: Path,
     max_frames: int | None = None,
     rotate_180: bool = False,
+    mode: str = H264_NVENC,
 ) -> list[str]:
-    """Build the validated H.264 NVENC near-lossless proxy command."""
+    """Build one audited NVDEC-compatible transcode command."""
 
     if max_frames is not None and max_frames <= 0:
         raise ValueError("max_frames must be greater than zero")
@@ -178,30 +178,49 @@ def build_transcode_command(
     ]
     if max_frames is not None:
         command.extend(["-frames:v", str(max_frames)])
-    video_filter = (
-        "hflip,vflip,format=nv12" if rotate_180 else "format=nv12"
-    )
-    command.extend(
-        [
-            "-vf",
-            video_filter,
-            "-c:v",
-            "h264_nvenc",
-            "-preset",
-            "p4",
-            "-tune",
-            "hq",
-            "-rc",
-            "constqp",
-            "-qp",
-            "0",
-            "-profile:v",
-            "high",
-            "-bf",
-            "0",
-            str(output),
-        ]
-    )
+    prefix = "hflip,vflip," if rotate_180 else ""
+    if mode == H264_NVENC:
+        command.extend(
+            [
+                "-vf",
+                f"{prefix}format=nv12",
+                "-c:v",
+                "h264_nvenc",
+                "-preset",
+                "p4",
+                "-tune",
+                "hq",
+                "-rc",
+                "constqp",
+                "-qp",
+                "0",
+                "-profile:v",
+                "high",
+                "-bf",
+                "0",
+            ]
+        )
+    elif mode == HEVC_LOSSLESS:
+        command.extend(
+            [
+                "-vf",
+                (
+                    f"{prefix}scale=in_range=full:out_range=full,"
+                    "format=yuv420p"
+                ),
+                "-c:v",
+                "libx265",
+                "-preset",
+                "ultrafast",
+                "-x265-params",
+                "lossless=1:range=full:pools=24",
+                "-color_range",
+                "pc",
+            ]
+        )
+    else:
+        raise ValueError(f"Unsupported transcode mode: {mode}")
+    command.append(str(output))
     return command
 
 
@@ -292,21 +311,94 @@ def first_line(command: Sequence[str], timeout: float | None) -> str:
     return completed.stdout.splitlines()[0] if completed.stdout else "unknown"
 
 
-def verify_output_metadata(metadata: dict[str, Any]) -> list[str]:
+def verify_output_metadata(
+    metadata: dict[str, Any],
+    mode: str = H264_NVENC,
+) -> list[str]:
     """Return compatibility validation errors for a transcoded output."""
 
     errors: list[str] = []
-    if str(metadata.get("codec_name") or "").casefold() != "h264":
-        errors.append("output codec is not H.264")
+    expected_codec = "hevc" if mode == HEVC_LOSSLESS else "h264"
+    if str(metadata.get("codec_name") or "").casefold() != expected_codec:
+        errors.append(f"output codec is not {expected_codec.upper()}")
     profile = str(metadata.get("profile") or "")
-    if profile.casefold() != "high":
+    if mode == HEVC_LOSSLESS:
+        if profile.casefold() != "main":
+            errors.append(f"output profile is {profile!r}, expected 'Main'")
+    elif profile.casefold() != "high":
         errors.append(f"output profile is {profile!r}, expected 'High'")
     pixel_format = str(metadata.get("pixel_format") or "")
-    if pixel_format.casefold() != "yuv420p":
+    allowed_pixel_formats = (
+        {"yuv420p", "yuvj420p"}
+        if mode == HEVC_LOSSLESS
+        else {"yuv420p"}
+    )
+    if pixel_format.casefold() not in allowed_pixel_formats:
         errors.append(
-            f"output pixel format is {pixel_format!r}, expected 'yuv420p'"
+            f"output pixel format is {pixel_format!r}, expected 4:2:0"
         )
+    if (
+        mode == HEVC_LOSSLESS
+        and str(metadata.get("color_range") or "").casefold() != "pc"
+    ):
+        errors.append("HEVC lossless output is not marked full-range")
     return errors
+
+
+def decoded_video_hash(
+    ffmpeg: str,
+    path: Path,
+    timeout: float | None,
+    rotate_180: bool = False,
+    max_frames: int | None = None,
+) -> dict[str, Any]:
+    """Hash all decoded yuv420p pixels for an exact equivalence check."""
+    command = [
+        ffmpeg,
+        "-hide_banner",
+        "-nostdin",
+        "-loglevel",
+        "error",
+        "-i",
+        str(path),
+        "-map",
+        "0:v:0",
+    ]
+    if rotate_180:
+        command.extend(["-vf", "hflip,vflip"])
+    if max_frames is not None:
+        command.extend(["-frames:v", str(max_frames)])
+    command.extend(
+        [
+            "-pix_fmt",
+            "yuv420p",
+            "-f",
+            "hash",
+            "-hash",
+            "sha256",
+            "-",
+        ]
+    )
+    completed = subprocess.run(
+        command,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+    )
+    if completed.returncode != 0:
+        raise TranscodeError(
+            f"Decoded pixel hash failed for {path}: "
+            f"{completed.stderr.strip()[-1000:]}"
+        )
+    line = completed.stdout.strip()
+    if not line.startswith("SHA256="):
+        raise TranscodeError(f"Unexpected decoded pixel hash: {line!r}")
+    return {
+        "command": command,
+        "command_text": command_text(command),
+        "sha256": line.split("=", 1)[1],
+    }
 
 
 def validate_paths(
@@ -375,8 +467,8 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
 
     parser = argparse.ArgumentParser(
         description=(
-            "Create a near-lossless H.264 High yuv420p compatibility proxy "
-            "for NVIDIA NVDEC. Pixel identity with the source is not assumed."
+            "Create an audited H.264 near-lossless or HEVC decoded-pixel-"
+            "lossless compatibility proxy for NVIDIA NVDEC."
         )
     )
     parser.add_argument("source", type=Path)
@@ -398,6 +490,11 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
             "Rotate each decoded frame by exactly 180 degrees before the "
             "near-lossless compatibility encode."
         ),
+    )
+    parser.add_argument(
+        "--mode",
+        choices=[H264_NVENC, HEVC_LOSSLESS],
+        default=H264_NVENC,
     )
     parser.add_argument("--ffmpeg", default="ffmpeg")
     parser.add_argument("--ffprobe", default="ffprobe")
@@ -443,10 +540,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         output,
         args.max_frames,
         rotate_180=args.rotate_180,
+        mode=args.mode,
     )
     source_probe: dict[str, Any] | None = None
     output_probe: dict[str, Any] | None = None
     completed: subprocess.CompletedProcess[str] | None = None
+    source_decoded_hash: dict[str, Any] | None = None
+    output_decoded_hash: dict[str, Any] | None = None
     failure: str | None = None
     status = "pending"
 
@@ -467,9 +567,33 @@ def main(argv: Sequence[str] | None = None) -> int:
         if not output.is_file():
             raise TranscodeError("FFmpeg reported success but output is missing")
         output_probe = probe_video(args.ffprobe, output, timeout)
-        verification_errors = verify_output_metadata(output_probe["metadata"])
+        verification_errors = verify_output_metadata(
+            output_probe["metadata"],
+            args.mode,
+        )
         if verification_errors:
             raise TranscodeError("; ".join(verification_errors))
+        source_decoded_hash = decoded_video_hash(
+            args.ffmpeg,
+            source,
+            timeout,
+            rotate_180=args.rotate_180,
+            max_frames=args.max_frames,
+        )
+        output_decoded_hash = decoded_video_hash(
+            args.ffmpeg,
+            output,
+            timeout,
+            max_frames=args.max_frames,
+        )
+        if (
+            args.mode == HEVC_LOSSLESS
+            and source_decoded_hash["sha256"]
+            != output_decoded_hash["sha256"]
+        ):
+            raise TranscodeError(
+                "HEVC lossless output failed decoded-pixel SHA256 equality"
+            )
         status = "completed"
     except (TranscodeError, subprocess.TimeoutExpired) as exc:
         failure = str(exc)
@@ -480,11 +604,26 @@ def main(argv: Sequence[str] | None = None) -> int:
         "schema_version": SCHEMA_VERSION,
         "status": status,
         "quality_classification": {
-            "label": QUALITY_LABEL,
-            "pixel_identity_with_source_guaranteed": False,
+            "label": (
+                "decoded-pixel-lossless"
+                if args.mode == HEVC_LOSSLESS
+                else "near-lossless"
+            ),
+            "pixel_identity_with_source_guaranteed": bool(
+                args.mode == HEVC_LOSSLESS
+                and source_decoded_hash is not None
+                and output_decoded_hash is not None
+                and source_decoded_hash["sha256"]
+                == output_decoded_hash["sha256"]
+            ),
             "reason": (
-                "QP 0 minimizes encoder loss, while profile/pixel-format "
-                "conversion and re-encoding can change decoded pixels."
+                "The HEVC Main lossless output must match the source decoded "
+                "yuv420p SHA256."
+                if args.mode == HEVC_LOSSLESS
+                else (
+                    "QP 0 minimizes encoder loss, while profile/pixel-format "
+                    "conversion and re-encoding can change decoded pixels."
+                )
             ),
             "intended_use": (
                 "NVDEC-compatible decode and pose-pipeline benchmarking"
@@ -507,6 +646,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             "probe": output_probe,
         },
         "transcode": {
+            "mode": args.mode,
             "command": command,
             "command_text": command_text(command),
             "max_frames": args.max_frames,
@@ -518,6 +658,16 @@ def main(argv: Sequence[str] | None = None) -> int:
                 completed.stderr.strip()[-4000:]
                 if completed is not None
                 else None
+            ),
+        },
+        "decoded_pixels": {
+            "source": source_decoded_hash,
+            "output": output_decoded_hash,
+            "equal": (
+                source_decoded_hash is not None
+                and output_decoded_hash is not None
+                and source_decoded_hash["sha256"]
+                == output_decoded_hash["sha256"]
             ),
         },
         "environment": {

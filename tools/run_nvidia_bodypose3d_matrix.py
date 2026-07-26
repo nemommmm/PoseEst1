@@ -215,6 +215,8 @@ def ensure_nvdec_proxy(
         str(PROJECT_ROOT / "tools" / "transcode_nvdec_compatible.py"),
         str(source),
         str(output),
+        "--mode",
+        "hevc_lossless_full_range",
     ]
     run_text(command, cwd=PROJECT_ROOT)
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))

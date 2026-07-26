@@ -167,6 +167,8 @@ def run_skt(config: dict, run_dir: Path) -> Path:
     sanity_ok_all: list[bool] = []
     sanity_reason_all: list[str] = []
     yolo_time_ms_all: list[float] = []
+    yolo_left_time_ms_all: list[float] = []
+    yolo_right_time_ms_all: list[float] = []
     decode_time_ms_all: list[float] = []
     geometry_time_ms_all: list[float] = []
     frame_time_ms_all: list[float] = []
@@ -180,8 +182,16 @@ def run_skt(config: dict, run_dir: Path) -> Path:
         decode_time_ms_all.append((time.perf_counter() - decode_t0) * 1000.0)
 
         yolo_t0 = time.perf_counter()
+        yolo_left_t0 = time.perf_counter()
         cand_l, track_l = infer_tracked_pose(model, frame_l, track_l, idx, tracking_cfg)
+        yolo_left_time_ms_all.append(
+            (time.perf_counter() - yolo_left_t0) * 1000.0
+        )
+        yolo_right_t0 = time.perf_counter()
         cand_r, track_r = infer_tracked_pose(model, frame_r, track_r, idx, tracking_cfg)
+        yolo_right_time_ms_all.append(
+            (time.perf_counter() - yolo_right_t0) * 1000.0
+        )
         yolo_time_ms_all.append((time.perf_counter() - yolo_t0) * 1000.0)
         geometry_t0 = time.perf_counter()
         pts_l, conf_l, bbox_l = _candidate_payload(cand_l)
@@ -286,6 +296,14 @@ def run_skt(config: dict, run_dir: Path) -> Path:
         stereo_sanity_ok=np.asarray(sanity_ok_all, dtype=bool),
         stereo_sanity_reason=np.asarray(sanity_reason_all),
         yolo_time_ms=np.asarray(yolo_time_ms_all, dtype=np.float64),
+        yolo_left_time_ms=np.asarray(
+            yolo_left_time_ms_all,
+            dtype=np.float64,
+        ),
+        yolo_right_time_ms=np.asarray(
+            yolo_right_time_ms_all,
+            dtype=np.float64,
+        ),
         decode_time_ms=np.asarray(decode_time_ms_all, dtype=np.float64),
         geometry_time_ms=np.asarray(geometry_time_ms_all, dtype=np.float64),
         frame_time_ms=np.asarray(frame_time_ms_all, dtype=np.float64),

@@ -23,6 +23,8 @@ from evaluate_nvidia_bodypose3d_stereo import (  # noqa: E402
 )
 from adapt_foundation_stereo_joint_depth import (  # noqa: E402
     disparity_to_left_camera_cm,
+    rectify_points_sequence,
+    restore_full_resolution_disparity,
     sample_joint_disparity,
 )
 
@@ -135,6 +137,36 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
         )
         self.assertTrue(np.isnan(values).all())
         self.assertTrue(np.all(mad > 0.1))
+
+    def test_disparity_resize_restores_full_resolution_units(self) -> None:
+        scaled = np.full((4, 5), 20.0, dtype=np.float32)
+        restored = restore_full_resolution_disparity(
+            scaled,
+            (10, 8),
+            scale=0.5,
+        )
+        self.assertEqual(restored.shape, (8, 10))
+        np.testing.assert_allclose(restored, 40.0)
+
+    def test_left_point_rectification_is_view_independent(self) -> None:
+        points = np.full((2, 17, 2), [120.0, 80.0])
+        points[1, 3] = np.nan
+        camera = np.asarray(
+            [
+                [500.0, 0.0, 100.0],
+                [0.0, 500.0, 70.0],
+                [0.0, 0.0, 1.0],
+            ]
+        )
+        output = rectify_points_sequence(
+            points,
+            camera,
+            np.zeros(5),
+            np.eye(3),
+            np.column_stack([camera, np.zeros(3)]),
+        )
+        np.testing.assert_allclose(output[0], points[0], atol=1e-9)
+        self.assertTrue(np.isnan(output[1, 3]).all())
 
 
 if __name__ == "__main__":

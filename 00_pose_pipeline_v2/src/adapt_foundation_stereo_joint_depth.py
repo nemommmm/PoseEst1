@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 from pathlib import Path
 from typing import Sequence
 
@@ -59,6 +60,53 @@ def sample_joint_disparity(
         if local_mad <= maximum_mad_px:
             values[joint_index] = median
     return values, mad
+
+
+def rectify_points_sequence(
+    points_xy: np.ndarray,
+    camera_matrix: np.ndarray,
+    distortion: np.ndarray,
+    rectification: np.ndarray,
+    projection: np.ndarray,
+) -> np.ndarray:
+    """Rectify a sequence of image points without using the other view."""
+    points = np.asarray(points_xy, dtype=np.float64)
+    if points.ndim != 3 or points.shape[1:] != (17, 2):
+        raise ValueError("Expected points with shape (N,17,2)")
+    output = np.full_like(points, np.nan, dtype=np.float64)
+    for frame_index, frame_points in enumerate(points):
+        valid = np.isfinite(frame_points).all(axis=1)
+        if not np.any(valid):
+            continue
+        rectified = cv2.undistortPoints(
+            frame_points[valid].reshape(-1, 1, 2),
+            np.asarray(camera_matrix, dtype=np.float64),
+            np.asarray(distortion, dtype=np.float64),
+            R=np.asarray(rectification, dtype=np.float64),
+            P=np.asarray(projection, dtype=np.float64),
+        ).reshape(-1, 2)
+        output[frame_index, valid] = rectified
+    return output
+
+
+def restore_full_resolution_disparity(
+    disparity_scaled: np.ndarray,
+    full_size: tuple[int, int],
+    scale: float,
+) -> np.ndarray:
+    """Resize model disparity to full resolution and restore pixel units."""
+    if not 0.0 < scale <= 1.0:
+        raise ValueError("scale must be in (0, 1]")
+    disparity = np.asarray(disparity_scaled, dtype=np.float32)
+    if disparity.ndim != 2:
+        raise ValueError("Expected a two-dimensional disparity image")
+    width, height = full_size
+    restored = cv2.resize(
+        disparity,
+        (int(width), int(height)),
+        interpolation=cv2.INTER_LINEAR,
+    )
+    return restored / float(scale)
 
 
 def disparity_to_left_camera_cm(
@@ -124,7 +172,15 @@ def adapt(
         )
         rotation = np.asarray(calibration["R"], dtype=np.float64)
         translation = np.asarray(calibration["T"], dtype=np.float64)
-    _, _, projection_left, _, _, _, _ = cv2.stereoRectify(
+    (
+        rectification_left,
+        rectification_right,
+        projection_left,
+        projection_right,
+        _,
+        _,
+        _,
+    ) = cv2.stereoRectify(
         matrix_left,
         distortion_left,
         matrix_right,
@@ -137,15 +193,29 @@ def adapt(
     baseline_cm = float(np.linalg.norm(translation))
     with np.load(baseline_path, allow_pickle=True) as baseline:
         timestamps = np.asarray(baseline["timestamps"], dtype=np.float64)
-        points_left = np.asarray(
-            baseline["keypoints_left_rect"],
+        points_left_raw = np.asarray(
+            baseline["keypoints_left_2d_raw"],
             dtype=np.float64,
         )
-        points_right = np.asarray(
-            baseline["keypoints_right_rect"],
+        points_right_raw = np.asarray(
+            baseline["keypoints_right_2d_raw"],
             dtype=np.float64,
         )
         confidence = np.asarray(baseline["conf_left"], dtype=np.float64)
+    points_left = rectify_points_sequence(
+        points_left_raw,
+        matrix_left,
+        distortion_left,
+        rectification_left,
+        projection_left,
+    )
+    points_right = rectify_points_sequence(
+        points_right_raw,
+        matrix_right,
+        distortion_right,
+        rectification_right,
+        projection_right,
+    )
     with np.load(disparity_path, allow_pickle=False) as disparity_payload:
         joint_disparity = np.asarray(
             disparity_payload["joint_disparity_px"],
@@ -159,6 +229,13 @@ def adapt(
             np.asarray(disparity_payload["inference_time_ms"])
             if "inference_time_ms" in disparity_payload
             else np.asarray([], dtype=np.float64)
+        )
+        inference_metadata = (
+            json.loads(
+                str(np.asarray(disparity_payload["metadata_json"]).item())
+            )
+            if "metadata_json" in disparity_payload
+            else {}
         )
     count = min(
         len(timestamps),
@@ -220,12 +297,16 @@ def adapt(
             "semantic_source": "YOLOv8m left-view 2D keypoints",
             "depth_source": candidate_name,
             "right_yolo_usage": "diagnostic_only",
+            "left_joint_rectification": (
+                "independent_from_raw_left_2d_without_right-view correction"
+            ),
             "joint_patch_size": 7,
             "maximum_local_disparity_mad_px": float(maximum_mad_px),
             "minimum_joint_confidence": float(minimum_confidence),
             "calibration_sha256": sha256_file(calibration_path),
             "disparity_sha256": sha256_file(disparity_path),
             "baseline_sha256": sha256_file(baseline_path),
+            "inference": inference_metadata,
             "reference_policy": (
                 "Xsens-derived reference is external comparison only."
             ),
@@ -283,4 +364,3 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

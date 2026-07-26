@@ -93,6 +93,10 @@ def collect_evaluations(run_dir: Path) -> list[dict[str, Any]]:
             row["baseline"]["absolute_error_deg"]["median"]
             for row in rows
         )
+        baseline_p95 = mean_finite(
+            row["baseline"]["absolute_error_deg"]["p95"]
+            for row in rows
+        )
         candidate_p95 = mean_finite(
             row["candidate"]["absolute_error_deg"]["p95"]
             for row in rows
@@ -100,8 +104,14 @@ def collect_evaluations(run_dir: Path) -> list[dict[str, Any]]:
         valid_ratio = mean_finite(
             row["candidate"]["valid_ratio"] for row in rows
         )
+        baseline_valid_ratio = mean_finite(
+            row["baseline"]["valid_ratio"] for row in rows
+        )
         rula = mean_finite(
             row["candidate"].get("rula_like_agreement") for row in rows
+        )
+        baseline_rula = mean_finite(
+            row["baseline"].get("rula_like_agreement") for row in rows
         )
         jumps = int(
             sum(
@@ -115,9 +125,12 @@ def collect_evaluations(run_dir: Path) -> list[dict[str, Any]]:
                 "dataset": display_dataset(str(metrics.get("dataset", ""))),
                 "median": candidate_median,
                 "baseline_median": baseline_median,
+                "baseline_p95": baseline_p95,
                 "p95": candidate_p95,
                 "valid_ratio": valid_ratio,
+                "baseline_valid_ratio": baseline_valid_ratio,
                 "rula": rula,
+                "baseline_rula": baseline_rula,
                 "jumps": jumps,
                 "improvement": metrics.get(
                     "aggregate_median_improvement_ratio"
@@ -130,13 +143,18 @@ def collect_evaluations(run_dir: Path) -> list[dict[str, Any]]:
     return records
 
 
-def collect_timings(run_dir: Path) -> dict[str, list[float]]:
+def collect_timings(run_dir: Path) -> dict[str, list[dict[str, float]]]:
     """Collect publishable open-model pipeline FPS values."""
-    result: dict[str, list[float]] = {}
+    result: dict[str, list[dict[str, float]]] = {}
     for path in sorted((run_dir / "baseline").glob("*/benchmark.json")):
         payload = load_json(path)
-        result.setdefault("YOLOv8m+SKT", []).append(
-            float(payload["online_fps"])
+        result.setdefault("YOLOv8m-PyTorch-SKT", []).append(
+            {
+                "fps": float(payload["online_fps"]),
+                "p95_ms": float(
+                    payload["stages"]["end_to_end_online"]["p95_ms"]
+                ),
+            }
         )
     for path in sorted(run_dir.glob("dense_stereo/**/timing_internal.json")):
         payload = load_json(path)
@@ -145,16 +163,26 @@ def collect_timings(run_dir: Path) -> dict[str, list[float]]:
         name = str(metadata.get("candidate_name", path.parent.name))
         fps = payload.get("complete_pipeline_fps")
         if fps is not None:
-            result.setdefault(name, []).append(float(fps))
+            result.setdefault(name, []).append(
+                {
+                    "fps": float(fps),
+                    "p95_ms": float(
+                        payload["complete_left_yolo_plus_dense"]["p95_ms"]
+                    ),
+                }
+            )
     return result
 
 
 def aggregate_methods(
     evaluations: Sequence[dict[str, Any]],
-    timings: dict[str, list[float]],
+    timings: dict[str, list[dict[str, float]]],
 ) -> list[dict[str, Any]]:
     """Aggregate dataset-level results by candidate name."""
-    names = sorted({str(row["candidate"]) for row in evaluations})
+    names = sorted(
+        {str(row["candidate"]) for row in evaluations}
+        | set(timings)
+    )
     output: list[dict[str, Any]] = []
     for name in names:
         rows = [row for row in evaluations if row["candidate"] == name]
@@ -168,14 +196,118 @@ def aggregate_methods(
                     row["valid_ratio"] for row in rows
                 ),
                 "rula": mean_finite(row["rula"] for row in rows),
+                "baseline_rula": mean_finite(
+                    row["baseline_rula"] for row in rows
+                ),
+                "baseline_median": mean_finite(
+                    row["baseline_median"] for row in rows
+                ),
+                "baseline_valid_ratio": mean_finite(
+                    row["baseline_valid_ratio"] for row in rows
+                ),
                 "improvement": mean_finite(
                     row["improvement"] for row in rows
                 ),
                 "jumps": sum(int(row["jumps"]) for row in rows),
-                "fps": mean_finite(timings.get(name, [])),
+                "fps": mean_finite(
+                    item["fps"] for item in timings.get(name, [])
+                ),
+                "latency_p95_ms": (
+                    max(
+                        item["p95_ms"]
+                        for item in timings.get(name, [])
+                    )
+                    if timings.get(name)
+                    else None
+                ),
             }
         )
     return output
+
+
+def assess_method_gates(
+    evaluations: Sequence[dict[str, Any]],
+    methods: Sequence[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Apply the frozen cross-dataset accuracy and real-time rules."""
+    expected = {"Fanbo3", "Fanbo4", "Fanbo7"}
+    decisions: dict[str, dict[str, Any]] = {}
+    for method in methods:
+        name = str(method["candidate"])
+        rows = [row for row in evaluations if row["candidate"] == name]
+        if name in {"YOLOv8m+SKT", "YOLOv8m-PyTorch-SKT"}:
+            decisions[name] = {
+                "offline_passed": True,
+                "realtime_passed": bool(
+                    method["fps"] is not None
+                    and method["fps"] >= 12.5
+                    and method["latency_p95_ms"] is not None
+                    and method["latency_p95_ms"] <= 80.0
+                ),
+                "reasons": ["control group"],
+            }
+            continue
+        reasons: list[str] = []
+        if {row["dataset"] for row in rows} != expected:
+            reasons.append("not all three datasets completed")
+        finite_rows = [
+            row
+            for row in rows
+            if row["median"] is not None
+            and row["baseline_median"] is not None
+        ]
+        if len(finite_rows) != 3:
+            reasons.append("one or more datasets have no valid metric")
+        else:
+            candidate_mean = float(
+                np.mean([row["median"] for row in finite_rows])
+            )
+            baseline_mean = float(
+                np.mean([row["baseline_median"] for row in finite_rows])
+            )
+            improvement = (
+                (baseline_mean - candidate_mean) / baseline_mean
+                if baseline_mean > 0
+                else float("-inf")
+            )
+            if improvement < 0.05:
+                reasons.append("overall median improvement is below 5%")
+            if any(
+                row["median"] - row["baseline_median"] > 1.0
+                for row in finite_rows
+            ):
+                reasons.append("a core dataset degrades by more than 1 degree")
+            if any(
+                row["rula"] is not None
+                and row["baseline_rula"] is not None
+                and row["rula"] < row["baseline_rula"]
+                for row in finite_rows
+            ):
+                reasons.append("RULA-like agreement decreases")
+            if any(
+                row["valid_ratio"] is not None
+                and row["baseline_valid_ratio"] is not None
+                and (
+                    row["valid_ratio"]
+                    < row["baseline_valid_ratio"] - 0.03
+                )
+                for row in finite_rows
+            ):
+                reasons.append("valid ratio decreases by more than 3 points")
+        offline_passed = not reasons
+        realtime_passed = bool(
+            offline_passed
+            and method["fps"] is not None
+            and method["fps"] >= 12.5
+            and method["latency_p95_ms"] is not None
+            and method["latency_p95_ms"] <= 80.0
+        )
+        decisions[name] = {
+            "offline_passed": offline_passed,
+            "realtime_passed": realtime_passed,
+            "reasons": reasons,
+        }
+    return decisions
 
 
 def save_charts(
@@ -250,8 +382,12 @@ def ensure_best_preview(
     evaluations: Sequence[dict[str, Any]],
     methods: Sequence[dict[str, Any]],
 ) -> Path | None:
-    """Render the best aggregate method's strongest dataset locally."""
-    eligible = [row for row in methods if row["median"] is not None]
+    """Render the strongest dataset from the best accepted method."""
+    eligible = [
+        row
+        for row in methods
+        if row["median"] is not None and row.get("offline_passed", False)
+    ]
     if not eligible:
         return None
     best_method = min(eligible, key=lambda row: row["median"])
@@ -370,7 +506,9 @@ def method_table(methods: Sequence[dict[str, Any]]) -> str:
     """Render cross-dataset method summaries."""
     rows = []
     for row in methods:
-        meets_speed = row["fps"] is not None and row["fps"] >= 12.5
+        offline_passed = bool(row.get("offline_passed", False))
+        realtime_passed = bool(row.get("realtime_passed", False))
+        reasons = "; ".join(str(value) for value in row.get("reasons", []))
         rows.append(
             "<tr>"
             f"<td>{html.escape(str(row['candidate']))}</td>"
@@ -379,11 +517,74 @@ def method_table(methods: Sequence[dict[str, Any]]) -> str:
             f"<td>{fmt(row['p95'])}</td>"
             f"<td>{fmt(row['valid_ratio'], 3)}</td>"
             f"<td>{fmt(row['fps'])}</td>"
-            f"<td class='{'ok' if meets_speed else 'bad'}'>"
-            f"{'yes' if meets_speed else 'no / unavailable'}</td>"
+            f"<td>{fmt(row['latency_p95_ms'])}</td>"
+            f"<td class='{'ok' if offline_passed else 'bad'}' "
+            f"title='{html.escape(reasons)}'>"
+            f"{'yes' if offline_passed else 'no'}</td>"
+            f"<td class='{'ok' if realtime_passed else 'bad'}' "
+            f"title='{html.escape(reasons)}'>"
+            f"{'yes' if realtime_passed else 'no / unavailable'}</td>"
             "</tr>"
         )
     return "".join(rows)
+
+
+def decision_summary(
+    methods: Sequence[dict[str, Any]],
+    chinese: bool,
+) -> tuple[str, str]:
+    """Return the accepted method name and a concise recommendation."""
+    controls = {
+        "YOLOv8m+SKT",
+        "YOLOv8m-PyTorch-SKT",
+    }
+    accepted = [
+        row
+        for row in methods
+        if row["candidate"] not in controls
+        and row.get("offline_passed", False)
+        and row["median"] is not None
+    ]
+    if not accepted:
+        if chinese:
+            return (
+                "YOLOv8m + SKT",
+                "没有新的候选同时通过三个数据集的精度、RULA和有效率门槛；"
+                "因此正式建议继续保留 YOLOv8m + SKT。局部数据集上的改善"
+                "只作为后续研究线索，不作为替换依据。",
+            )
+        return (
+            "YOLOv8m + SKT",
+            "No new candidate passed the cross-dataset accuracy, RULA, and "
+            "validity gates. The formal recommendation is therefore to "
+            "retain YOLOv8m + SKT. Isolated dataset gains are retained as "
+            "research evidence, not as grounds for replacement.",
+        )
+    offline = min(accepted, key=lambda row: row["median"])
+    realtime = [
+        row for row in accepted if row.get("realtime_passed", False)
+    ]
+    realtime_name = (
+        min(realtime, key=lambda row: row["median"])["candidate"]
+        if realtime
+        else None
+    )
+    if chinese:
+        text = f"离线精度候选为 {offline['candidate']}。"
+        text += (
+            f"实时候选为 {realtime_name}。"
+            if realtime_name is not None
+            else "尚无新候选同时通过完整 Pipeline 实时门槛。"
+        )
+    else:
+        text = f"The accepted offline candidate is {offline['candidate']}. "
+        text += (
+            f"The accepted real-time candidate is {realtime_name}."
+            if realtime_name is not None
+            else "No new candidate also passes the complete-pipeline "
+            "real-time gate."
+        )
+    return str(offline["candidate"]), text
 
 
 def evidence_gallery(run_dir: Path, evaluations: Sequence[dict[str, Any]], chinese: bool) -> str:
@@ -446,23 +647,19 @@ def build_report(
     pareto = charts["pareto"].relative_to(run_dir).as_posix()
     validity = charts["validity"].relative_to(run_dir).as_posix()
     completed = len(evaluations)
-    best = min(
-        (row for row in methods if row["median"] is not None),
-        key=lambda row: row["median"],
-        default=None,
-    )
-    best_name = str(best["candidate"]) if best else "—"
+    best_name, recommendation = decision_summary(methods, chinese)
     if chinese:
         title = "Fanbo3/4/7 NVIDIA 单目—双目 GPU 对比"
         subtitle = "固定标定 · 固定参考偏移 · 中位数/IQR/p95 优先 · RTX A6000"
         body = f"""
 <section id="summary"><h2>1. 结论摘要</h2>
-<div class="cards"><div class="card"><div class="metric">{completed}</div>成功的数据集—候选评估单元</div><div class="card"><div class="metric">{html.escape(best_name)}</div>当前最低聚合中位绝对差</div><div class="card"><div class="metric">12.5 fps</div>完整 Pipeline 实时门槛</div></div>
+<div class="cards"><div class="card"><div class="metric">{completed}</div>成功的数据集—候选评估单元</div><div class="card"><div class="metric">{html.escape(best_name)}</div>按预设门槛得到的正式选择</div><div class="card"><div class="metric">12.5 fps</div>完整 Pipeline 实时门槛</div></div>
+<div class="callout"><strong>选型结论：</strong>{html.escape(recommendation)}</div>
 <div class="callout">Xsens 仅作为 Xsens-derived reference / external comparison system；Fanbo4/7 使用 FastSAM3D comparison trajectory。没有为候选重新搜索时间偏移或手动挑选较好视角。</div></section>
 <section id="availability"><h2>2. NVIDIA 路线可用性</h2><table><tr><th>路线</th><th>状态</th><th>含义</th></tr>{blocked}</table>
 <p>BodyPoseNet 2D 和 Maxine 的阻塞会被单独记录，不会被写成“模型精度失败”。BodyPose3DNet、FoundationStereo 与 Fast-FoundationStereo 使用官方仓库/权重实测。</p></section>
 <section id="results"><h2>3. 逐数据集稳健指标</h2><table><tr><th>候选</th><th>数据</th><th>Median °</th><th>p95 °</th><th>SKT median °</th><th>有效率</th><th>RULA一致率</th><th>&gt;10°跳变</th><th>改善</th></tr>{metric_table(evaluations)}</table></section>
-<section id="aggregate"><h2>4. 精度—速度汇总</h2><table><tr><th>候选</th><th>数据集数</th><th>Median °</th><th>p95 °</th><th>有效率</th><th>完整 FPS</th><th>实时</th></tr>{method_table(methods)}</table>
+<section id="aggregate"><h2>4. 精度—速度汇总</h2><table><tr><th>候选</th><th>数据集数</th><th>Median °</th><th>p95 °</th><th>有效率</th><th>完整 FPS</th><th>p95延迟 ms</th><th>离线准入</th><th>实时准入</th></tr>{method_table(methods)}</table>
 <figure><img src="{pareto}"><figcaption>精度—速度 Pareto。DeepStream/Maxine 受许可约束的精确 timing 不在对外 HTML 中展开。</figcaption></figure>
 <figure><img src="{validity}"><figcaption>共同有效帧比例。</figcaption></figure></section>
 <section id="evidence"><h2>5. 直观图表</h2>{preview_gallery(run_dir, True)}{evidence_gallery(run_dir, evaluations, True)}</section>
@@ -473,12 +670,13 @@ def build_report(
         subtitle = "Frozen calibration · fixed reference offsets · median/IQR/p95 priority · RTX A6000"
         body = f"""
 <section id="summary"><h2>1. Executive summary</h2>
-<div class="cards"><div class="card"><div class="metric">{completed}</div>successful dataset–candidate evaluation cells</div><div class="card"><div class="metric">{html.escape(best_name)}</div>lowest current aggregate median absolute difference</div><div class="card"><div class="metric">12.5 fps</div>complete-pipeline real-time gate</div></div>
+<div class="cards"><div class="card"><div class="metric">{completed}</div>successful dataset–candidate evaluation cells</div><div class="card"><div class="metric">{html.escape(best_name)}</div>formal selection under the frozen gates</div><div class="card"><div class="metric">12.5 fps</div>complete-pipeline real-time gate</div></div>
+<div class="callout"><strong>Selection outcome:</strong> {html.escape(recommendation)}</div>
 <div class="callout">Xsens is treated only as an Xsens-derived reference / external comparison system. Fanbo4/7 use FastSAM3D comparison trajectories. Candidate-specific offset search and post-hoc view selection were prohibited.</div></section>
 <section id="availability"><h2>2. NVIDIA route availability</h2><table><tr><th>Route</th><th>Status</th><th>Meaning</th></tr>{blocked}</table>
 <p>BodyPoseNet 2D and Maxine blockers are reported separately from model accuracy. BodyPose3DNet, FoundationStereo, and Fast-FoundationStereo were run from official repositories and checkpoints.</p></section>
 <section id="results"><h2>3. Robust dataset-level metrics</h2><table><tr><th>Candidate</th><th>Dataset</th><th>Median °</th><th>p95 °</th><th>SKT median °</th><th>Valid ratio</th><th>RULA agreement</th><th>&gt;10° jumps</th><th>Improvement</th></tr>{metric_table(evaluations)}</table></section>
-<section id="aggregate"><h2>4. Accuracy–throughput summary</h2><table><tr><th>Candidate</th><th>Datasets</th><th>Median °</th><th>p95 °</th><th>Valid ratio</th><th>Complete FPS</th><th>Real-time</th></tr>{method_table(methods)}</table>
+<section id="aggregate"><h2>4. Accuracy–throughput summary</h2><table><tr><th>Candidate</th><th>Datasets</th><th>Median °</th><th>p95 °</th><th>Valid ratio</th><th>Complete FPS</th><th>p95 latency ms</th><th>Offline gate</th><th>Real-time gate</th></tr>{method_table(methods)}</table>
 <figure><img src="{pareto}"><figcaption>Accuracy–speed Pareto view. Exact proprietary DeepStream/Maxine timing is not expanded in the outward-facing HTML.</figcaption></figure>
 <figure><img src="{validity}"><figcaption>Common valid-frame ratio.</figcaption></figure></section>
 <section id="evidence"><h2>5. Visual evidence</h2>{preview_gallery(run_dir, False)}{evidence_gallery(run_dir, evaluations, False)}</section>
@@ -515,7 +713,6 @@ def write_manifest(run_dir: Path) -> Path:
     """Write a checksum manifest while excluding forbidden bulky assets."""
     forbidden = {
         ".avi",
-        ".mp4",
         ".mkv",
         ".pt",
         ".pth",
@@ -577,14 +774,18 @@ def write_experiment_log(
         "",
         "## Method summary",
         "",
-        "| Candidate | Datasets | Median deg | p95 deg | Valid ratio | FPS |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Candidate | Datasets | Median deg | p95 deg | Valid ratio | "
+        "FPS | p95 ms | Offline gate | Real-time gate |",
+        "|---|---:|---:|---:|---:|---:|---:|---|---|",
     ]
     for row in methods:
         lines.append(
             f"| {row['candidate']} | {row['datasets']} | "
             f"{fmt(row['median'])} | {fmt(row['p95'])} | "
-            f"{fmt(row['valid_ratio'], 3)} | {fmt(row['fps'])} |"
+            f"{fmt(row['valid_ratio'], 3)} | {fmt(row['fps'])} | "
+            f"{fmt(row['latency_p95_ms'])} | "
+            f"{'pass' if row.get('offline_passed') else 'reject'} | "
+            f"{'pass' if row.get('realtime_passed') else 'reject'} |"
         )
     lines.extend(["", "## Command records", ""])
     for record in status.get("records", []):
@@ -618,6 +819,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     evaluations = collect_evaluations(run_dir)
     timings = collect_timings(run_dir)
     methods = aggregate_methods(evaluations, timings)
+    decisions = assess_method_gates(evaluations, methods)
+    for method in methods:
+        method.update(decisions[str(method["candidate"])])
     charts = save_charts(run_dir, methods)
     ensure_best_preview(run_dir, evaluations, methods)
     (run_dir / "report.html").write_text(

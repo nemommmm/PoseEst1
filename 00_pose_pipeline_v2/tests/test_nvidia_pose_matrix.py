@@ -33,7 +33,10 @@ from adapt_foundation_stereo_joint_depth import (  # noqa: E402
 )
 from run_nvidia_bodypose3d_matrix import create_warmup_video  # noqa: E402
 from remote_gpu_pose_matrix import rsync_remote_destination  # noqa: E402
-from generate_nvidia_pose_matrix_report import collect_evaluations  # noqa: E402
+from generate_nvidia_pose_matrix_report import (  # noqa: E402
+    assess_method_gates,
+    collect_evaluations,
+)
 
 
 class NvidiaPoseMatrixTest(unittest.TestCase):
@@ -230,7 +233,12 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
                                     "jump_count": 2,
                                 },
                                 "baseline": {
-                                    "absolute_error_deg": {"median": 1.5}
+                                    "absolute_error_deg": {
+                                        "median": 1.5,
+                                        "p95": 3.0,
+                                    },
+                                    "valid_ratio": 0.85,
+                                    "rula_like_agreement": 0.9,
                                 },
                             }
                         ],
@@ -242,6 +250,61 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
             rows = collect_evaluations(root)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["dataset"], "Fanbo3")
+
+    def test_report_gate_rejects_missing_dataset_even_if_fast(self) -> None:
+        evaluations = [
+            {
+                "candidate": "Candidate",
+                "dataset": dataset,
+                "median": 5.0,
+                "baseline_median": 10.0,
+                "rula": 1.0,
+                "baseline_rula": 1.0,
+                "valid_ratio": 1.0,
+                "baseline_valid_ratio": 1.0,
+            }
+            for dataset in ("Fanbo3", "Fanbo7")
+        ]
+        methods = [
+            {
+                "candidate": "Candidate",
+                "fps": 30.0,
+                "latency_p95_ms": 40.0,
+            }
+        ]
+        result = assess_method_gates(evaluations, methods)["Candidate"]
+        self.assertFalse(result["offline_passed"])
+        self.assertFalse(result["realtime_passed"])
+        self.assertIn("not all three datasets completed", result["reasons"])
+
+    def test_report_gate_requires_accuracy_rula_validity_and_latency(self) -> None:
+        evaluations = [
+            {
+                "candidate": "Candidate",
+                "dataset": dataset,
+                "median": 9.0,
+                "baseline_median": 10.0,
+                "rula": 0.95,
+                "baseline_rula": 0.95,
+                "valid_ratio": 0.98,
+                "baseline_valid_ratio": 1.0,
+            }
+            for dataset in ("Fanbo3", "Fanbo4", "Fanbo7")
+        ]
+        methods = [
+            {
+                "candidate": "Candidate",
+                "fps": 15.0,
+                "latency_p95_ms": 75.0,
+            }
+        ]
+        result = assess_method_gates(evaluations, methods)["Candidate"]
+        self.assertTrue(result["offline_passed"])
+        self.assertTrue(result["realtime_passed"])
+        methods[0]["latency_p95_ms"] = 81.0
+        result = assess_method_gates(evaluations, methods)["Candidate"]
+        self.assertTrue(result["offline_passed"])
+        self.assertFalse(result["realtime_passed"])
 
 
 if __name__ == "__main__":

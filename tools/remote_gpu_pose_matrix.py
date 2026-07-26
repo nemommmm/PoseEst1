@@ -294,6 +294,14 @@ def run_formal(args: argparse.Namespace) -> None:
         ssh(args.host, candidate_script)
     finally:
         synchronize(args.host, args.remote_root, tag)
+    command(
+        [
+            "/opt/anaconda3/envs/pose/bin/python",
+            "tools/generate_nvidia_pose_matrix_report.py",
+            "--run-dir",
+            str(output_relative),
+        ]
+    )
     print(tag)
 
 

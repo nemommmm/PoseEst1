@@ -23,7 +23,7 @@ fi
 
 apt-get update
 DEBIAN_FRONTEND=noninteractive apt-get install -y \
-  build-essential libeigen3-dev libjson-glib-dev
+  build-essential libeigen3-dev libjson-glib-dev libmosquitto1
 ln -sfn eigen3/Eigen /usr/include/Eigen
 
 mkdir -p "${INSTALL_ROOT}"

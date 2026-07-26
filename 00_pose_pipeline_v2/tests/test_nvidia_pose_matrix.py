@@ -182,7 +182,8 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
             def create_mock_output(command: list[str], **_: object) -> str:
                 Path(command[-1]).write_bytes(b"warmup")
                 self.assertEqual(command[command.index("-frames:v") + 1], "10")
-                self.assertEqual(command[command.index("-c:v") + 1], "ffv1")
+                self.assertEqual(command[command.index("-c:v") + 1], "libx264")
+                self.assertEqual(command[command.index("-qp") + 1], "0")
                 return ""
 
             with patch(

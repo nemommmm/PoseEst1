@@ -129,6 +129,102 @@ def run_bodypose3d(
     """Run official BodyPose3DNet, adapt all routes, and evaluate them."""
     body_root = output_root / "bodypose3d"
     records: list[dict[str, Any]] = []
+    prepare = run_logged(
+        [
+            POSE_PYTHON,
+            "tools/run_nvidia_bodypose3d_matrix.py",
+            "--selection",
+            selection_path,
+            "--output-dir",
+            body_root,
+            "--prepare-only",
+        ],
+        body_root / "prepare_inputs.log",
+    )
+    prepare["route"] = "BodyPose3DNet_prepare_NVDEC_inputs"
+    records.append(prepare)
+    if prepare["return_code"] != 0:
+        return records
+
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    input_gate_passed = True
+    for dataset_name, dataset_spec in matrix["datasets"].items():
+        gate_root = body_root / "input_gate" / dataset_name
+        selected = selection["accepted"][dataset_name]
+        baseline = (
+            output_root / "baseline" / dataset_name
+            / "skt_pose_optimized.npz"
+        )
+        benchmark = run_logged(
+            [
+                POSE_PYTHON,
+                "00_pose_pipeline_v2/src/benchmark_realtime.py",
+                "--config",
+                dataset_spec["config"],
+                "--model",
+                "01_stereo_triangulation/src/yolov8m-pose.pt",
+                "--left-video",
+                body_root / "nvdec_inputs" / dataset_name / "left.mkv",
+                "--right-video",
+                body_root / "nvdec_inputs" / dataset_name / "right.mkv",
+                "--input-upright",
+                "--max-frames",
+                str(selected["synchronized_frames"]),
+                "--warmup-frames",
+                "10",
+                "--repeats",
+                "1",
+                "--run-dir",
+                gate_root,
+                "--output-json",
+                gate_root / "benchmark.json",
+            ],
+            gate_root / "benchmark.log",
+        )
+        benchmark.update(
+            {
+                "route": "BodyPose3DNet_NVDEC_input_gate_inference",
+                "dataset": dataset_name,
+            }
+        )
+        records.append(benchmark)
+        if benchmark["return_code"] != 0:
+            input_gate_passed = False
+            continue
+        comparison = run_logged(
+            [
+                POSE_PYTHON,
+                "tools/compare_pose_proxy.py",
+                "--matrix",
+                "00_pose_pipeline_v2/configs/nvidia_pose_matrix.yaml",
+                "--dataset",
+                dataset_name,
+                "--candidate",
+                gate_root / "skt_pose_optimized.npz",
+                "--reference",
+                baseline,
+                "--output",
+                gate_root / "equivalence.json",
+            ],
+            gate_root / "equivalence.log",
+        )
+        comparison.update(
+            {
+                "route": "BodyPose3DNet_NVDEC_input_equivalence",
+                "dataset": dataset_name,
+            }
+        )
+        records.append(comparison)
+        input_gate_passed &= comparison["return_code"] == 0
+    if not input_gate_passed:
+        records.append(
+            {
+                "route": "BodyPose3DNet_official_reference_app",
+                "status": "input_gate_failed",
+            }
+        )
+        return records
+
     runner = run_logged(
         [
             POSE_PYTHON,

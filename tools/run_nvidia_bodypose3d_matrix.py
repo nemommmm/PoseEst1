@@ -10,6 +10,7 @@ import platform
 import re
 import shlex
 import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Any, Sequence
@@ -188,6 +189,40 @@ def create_warmup_video(
     return output
 
 
+def ensure_nvdec_proxy(
+    source: Path,
+    output: Path,
+) -> tuple[Path, dict[str, Any]]:
+    """Create or validate the audited H.264 High yuv420p input proxy."""
+    manifest_path = output.with_name(f"{output.name}.manifest.json")
+    source_hash = sha256_file(source)
+    if output.is_file() and manifest_path.is_file():
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if (
+            manifest.get("status") == "completed"
+            and manifest.get("source", {}).get("sha256") == source_hash
+        ):
+            return output, manifest
+        raise RuntimeError(
+            f"Existing NVDEC proxy manifest does not match {source}"
+        )
+    if output.exists() or manifest_path.exists():
+        raise RuntimeError(
+            f"Incomplete NVDEC proxy pair: {output}, {manifest_path}"
+        )
+    command = [
+        sys.executable,
+        str(PROJECT_ROOT / "tools" / "transcode_nvdec_compatible.py"),
+        str(source),
+        str(output),
+    ]
+    run_text(command, cwd=PROJECT_ROOT)
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    if manifest.get("status") != "completed":
+        raise RuntimeError(f"NVDEC proxy creation failed: {manifest_path}")
+    return output, manifest
+
+
 def execute_one(
     *,
     app_root: Path,
@@ -305,17 +340,57 @@ def run_matrix(args: argparse.Namespace) -> Path:
     app_root = args.app_root.expanduser().resolve()
     output_root = project_path(args.output_dir)
     output_root.mkdir(parents=True, exist_ok=True)
+    dataset_names = args.datasets or list(matrix["datasets"])
+    input_records: list[dict[str, Any]] = []
+    nvdec_inputs: dict[tuple[str, str], Path] = {}
+    for dataset_name in dataset_names:
+        selected = selection["accepted"][dataset_name]
+        for side in args.sides:
+            source = project_path(selected[side])
+            output = (
+                output_root / "nvdec_inputs" / dataset_name / f"{side}.mkv"
+            )
+            proxy, manifest = ensure_nvdec_proxy(source, output)
+            nvdec_inputs[(dataset_name, side)] = proxy
+            input_records.append(
+                {
+                    "dataset": dataset_name,
+                    "side": side,
+                    "source": str(source),
+                    "proxy": str(proxy),
+                    "source_sha256": manifest["source"]["sha256"],
+                    "proxy_sha256": manifest["output"]["sha256"],
+                    "quality_classification": manifest[
+                        "quality_classification"
+                    ],
+                }
+            )
+    input_manifest_path = output_root / "bodypose3d_input_manifest.json"
+    input_manifest_path.write_text(
+        json.dumps(
+            {
+                "schema_version": "bodypose3d_nvdec_inputs_v1",
+                "inputs": input_records,
+            },
+            indent=2,
+            ensure_ascii=False,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+    if args.prepare_only:
+        return input_manifest_path
+
     results: list[dict[str, Any]] = []
     for mode in args.modes:
         model_config = configure_mode(app_root, mode)
-        for dataset_name in args.datasets or list(matrix["datasets"]):
+        for dataset_name in dataset_names:
             config_path = project_path(
                 matrix["datasets"][dataset_name]["config"]
             )
             focal_length = load_focal_length(config_path)
-            selected = selection["accepted"][dataset_name]
-            for side in ("left", "right"):
-                video = project_path(selected[side])
+            for side in args.sides:
+                video = nvdec_inputs[(dataset_name, side)]
                 cell_dir = output_root / "raw" / dataset_name / mode / side
                 pose_json = cell_dir / "pose.json"
                 record: dict[str, Any] = {
@@ -383,8 +458,15 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         default=["accuracy", "performance"],
     )
     parser.add_argument("--datasets", nargs="*", default=[])
+    parser.add_argument(
+        "--sides",
+        nargs="+",
+        choices=["left", "right"],
+        default=["left", "right"],
+    )
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--warmup-frames", type=int, default=10)
+    parser.add_argument("--prepare-only", action="store_true")
     return parser.parse_args(argv)
 
 

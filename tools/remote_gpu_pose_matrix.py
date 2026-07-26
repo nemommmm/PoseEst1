@@ -90,6 +90,8 @@ def prepare_inputs(args: argparse.Namespace) -> None:
         call.extend(["--crfs", *[str(value) for value in args.crfs]])
     if args.include_lossless:
         call.append("--include-lossless")
+    if args.max_frames is not None:
+        call.extend(["--max-frames", str(args.max_frames)])
     command(call)
 
 
@@ -278,6 +280,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     prepare.add_argument("--datasets", nargs="*", default=[])
     prepare.add_argument("--crfs", nargs="*", type=int)
     prepare.add_argument("--include-lossless", action="store_true")
+    prepare.add_argument("--max-frames", type=int)
 
     bootstrap_parser = subparsers.add_parser("bootstrap")
     bootstrap_parser.add_argument("--host", default="poseest1-runpod")

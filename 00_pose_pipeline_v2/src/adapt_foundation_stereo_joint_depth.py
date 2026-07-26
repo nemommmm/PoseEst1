@@ -156,12 +156,42 @@ def adapt(
         section(config, "calibration").get("camera_params"),
         must_exist=True,
     )
-    left_video = resolve_path(dataset.get("left_video"), must_exist=True)
-    assert calibration_path and left_video
-    capture = cv2.VideoCapture(str(left_video))
-    width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
-    height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    capture.release()
+    assert calibration_path
+    with np.load(disparity_path, allow_pickle=False) as disparity_payload:
+        joint_disparity = np.asarray(
+            disparity_payload["joint_disparity_px"],
+            dtype=np.float64,
+        )
+        local_mad = np.asarray(
+            disparity_payload["local_disparity_mad_px"],
+            dtype=np.float64,
+        )
+        inference_ms = (
+            np.asarray(disparity_payload["inference_time_ms"])
+            if "inference_time_ms" in disparity_payload
+            else np.asarray([], dtype=np.float64)
+        )
+        inference_metadata = (
+            json.loads(
+                str(np.asarray(disparity_payload["metadata_json"]).item())
+            )
+            if "metadata_json" in disparity_payload
+            else {}
+        )
+    metadata_size = inference_metadata.get("image_size")
+    if (
+        isinstance(metadata_size, list)
+        and len(metadata_size) == 2
+        and all(int(value) > 0 for value in metadata_size)
+    ):
+        width, height = (int(value) for value in metadata_size)
+    else:
+        left_video = resolve_path(dataset.get("left_video"), must_exist=True)
+        assert left_video is not None
+        capture = cv2.VideoCapture(str(left_video))
+        width = int(capture.get(cv2.CAP_PROP_FRAME_WIDTH))
+        height = int(capture.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        capture.release()
     with np.load(calibration_path) as calibration:
         matrix_left = np.asarray(calibration["mtx_l"], dtype=np.float64)
         distortion_left = np.asarray(calibration["dist_l"], dtype=np.float64)
@@ -216,27 +246,6 @@ def adapt(
         rectification_right,
         projection_right,
     )
-    with np.load(disparity_path, allow_pickle=False) as disparity_payload:
-        joint_disparity = np.asarray(
-            disparity_payload["joint_disparity_px"],
-            dtype=np.float64,
-        )
-        local_mad = np.asarray(
-            disparity_payload["local_disparity_mad_px"],
-            dtype=np.float64,
-        )
-        inference_ms = (
-            np.asarray(disparity_payload["inference_time_ms"])
-            if "inference_time_ms" in disparity_payload
-            else np.asarray([], dtype=np.float64)
-        )
-        inference_metadata = (
-            json.loads(
-                str(np.asarray(disparity_payload["metadata_json"]).item())
-            )
-            if "metadata_json" in disparity_payload
-            else {}
-        )
     count = min(
         len(timestamps),
         len(points_left),

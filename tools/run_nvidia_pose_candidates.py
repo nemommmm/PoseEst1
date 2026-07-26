@@ -139,6 +139,8 @@ def run_bodypose3d(
             body_root,
             "--repeats",
             str(repeats),
+            "--warmup-frames",
+            "10",
         ],
         body_root / "matrix_runner.log",
     )

@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "00_pose_pipeline_v2" / "src"))
+sys.path.insert(0, str(ROOT / "tools"))
 
 from adapt_nvidia_bodypose3d_monocular import (  # noqa: E402
     right_camera_to_left,
@@ -27,6 +30,7 @@ from adapt_foundation_stereo_joint_depth import (  # noqa: E402
     restore_full_resolution_disparity,
     sample_joint_disparity,
 )
+from run_nvidia_bodypose3d_matrix import create_warmup_video  # noqa: E402
 
 
 class NvidiaPoseMatrixTest(unittest.TestCase):
@@ -167,6 +171,26 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
         )
         np.testing.assert_allclose(output[0], points[0], atol=1e-9)
         self.assertTrue(np.isnan(output[1, 3]).all())
+
+    def test_bodypose_warmup_uses_exact_short_frame_count(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            source = root / "source.mkv"
+            source.write_bytes(b"source")
+            output = root / "warmup.mkv"
+
+            def create_mock_output(command: list[str], **_: object) -> str:
+                Path(command[-1]).write_bytes(b"warmup")
+                self.assertEqual(command[command.index("-frames:v") + 1], "10")
+                self.assertEqual(command[command.index("-c:v") + 1], "ffv1")
+                return ""
+
+            with patch(
+                "run_nvidia_bodypose3d_matrix.run_text",
+                side_effect=create_mock_output,
+            ):
+                result = create_warmup_video(source, output, 10)
+            self.assertEqual(result, output)
 
 
 if __name__ == "__main__":

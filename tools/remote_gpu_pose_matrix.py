@@ -225,8 +225,7 @@ def run_formal(args: argparse.Namespace) -> None:
         )
         config = spec["config"]
         model = "01_stereo_triangulation/src/yolov8m-pose.pt"
-        commands.append(
-            shlex.join(
+        benchmark_command = shlex.join(
                 [
                     "/workspace/venv-pose/bin/python",
                     "00_pose_pipeline_v2/src/benchmark_realtime.py",
@@ -250,6 +249,12 @@ def run_formal(args: argparse.Namespace) -> None:
                     "--output-json",
                     str(output / "benchmark.json"),
                 ]
+            )
+        commands.append(
+            (
+                f"if [ -s {shlex.quote(str(output / 'benchmark.json'))} ]; "
+                f"then echo '[resume] baseline exists: {dataset_name}'; "
+                f"else {benchmark_command}; fi"
             )
         )
     remote_script = "\n".join(
@@ -288,11 +293,16 @@ def run_formal(args: argparse.Namespace) -> None:
             str(matrix["evaluation"]["repeats"]),
         ]
     )
+    candidate_status = output_relative / "candidate_matrix_status.json"
     candidate_script = "\n".join(
         [
             "set -eu",
             f"cd {shlex.quote(args.remote_root)}",
-            candidate_command,
+            (
+                f"if [ -s {shlex.quote(str(candidate_status))} ]; "
+                "then echo '[resume] candidate matrix already complete'; "
+                f"else {candidate_command}; fi"
+            ),
         ]
     )
     try:

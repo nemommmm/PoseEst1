@@ -150,6 +150,40 @@ def app_command(
     return command
 
 
+def create_warmup_video(
+    source: Path,
+    output: Path,
+    frame_count: int,
+) -> Path:
+    """Create a short, lossless, same-resolution video for model warm-up."""
+    if frame_count <= 0:
+        raise ValueError("Warm-up frame count must be positive")
+    output.parent.mkdir(parents=True, exist_ok=True)
+    command = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        str(source),
+        "-frames:v",
+        str(frame_count),
+        "-an",
+        "-c:v",
+        "ffv1",
+        "-level",
+        "3",
+        "-g",
+        "1",
+        str(output),
+    ]
+    run_text(command)
+    if not output.is_file() or output.stat().st_size == 0:
+        raise RuntimeError(f"Warm-up video was not created: {output}")
+    return output
+
+
 def execute_one(
     *,
     app_root: Path,
@@ -158,13 +192,24 @@ def execute_one(
     pose_json: Path,
     output_dir: Path,
     repeats: int,
+    warmup_frames: int,
 ) -> dict[str, Any]:
     """Warm the engine, then run repeatable end-to-end application trials."""
     output_dir.mkdir(parents=True, exist_ok=True)
     binary = app_root / "sources" / "deepstream-pose-estimation-app"
     if not binary.is_file():
         raise FileNotFoundError(binary)
-    warmup_command = app_command(binary, video, focal_length, None)
+    warmup_video = create_warmup_video(
+        video,
+        output_dir / "warmup_input.mkv",
+        warmup_frames,
+    )
+    warmup_command = app_command(
+        binary,
+        warmup_video,
+        focal_length,
+        None,
+    )
     warmup_started = time.perf_counter()
     warmup_output = run_text(
         warmup_command,
@@ -207,6 +252,8 @@ def execute_one(
         "input_sha256": sha256_file(video),
         "pose_json": str(pose_json),
         "pose_json_sha256": sha256_file(pose_json),
+        "warmup_frames": int(warmup_frames),
+        "warmup_input_sha256": sha256_file(warmup_video),
         "warmup_elapsed_seconds": warmup_elapsed,
         "trials": trials,
     }
@@ -284,6 +331,7 @@ def run_matrix(args: argparse.Namespace) -> Path:
                             pose_json=pose_json,
                             output_dir=cell_dir,
                             repeats=args.repeats,
+                            warmup_frames=args.warmup_frames,
                         )
                     )
                 except Exception as error:  # noqa: BLE001
@@ -332,6 +380,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--datasets", nargs="*", default=[])
     parser.add_argument("--repeats", type=int, default=3)
+    parser.add_argument("--warmup-frames", type=int, default=10)
     return parser.parse_args(argv)
 
 
@@ -340,6 +389,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parse_args(argv)
     if args.repeats <= 0:
         raise ValueError("--repeats must be positive")
+    if args.warmup_frames <= 0:
+        raise ValueError("--warmup-frames must be positive")
     result = run_matrix(args)
     print(result)
     return 0

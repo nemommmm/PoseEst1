@@ -149,10 +149,6 @@
 </table>
 </div>
 
-<div class="note">
-  30–35 FPS表示A6000处理两路存储视频文件的速度，还不是实机摄像头的live FPS。当前继续使用确定性PyTorch，是因为如果GPU后端改变了最终人体工程学结果，那么仅仅模型推理更快并没有实际意义。
-</div>
-
 <h2 id="nvidia">3. NVIDIA模型的逐数据集稳健指标</h2>
 
 <p>本部分的主题是测试NVIDIA官方的姿态估计及相关双目模型。BodyPose3DNet直接从单张图像估计人体姿态；FoundationStereo不是人体模型，而是先计算双目稠密深度，再结合左图YOLO关节得到3D骨架。三套数据都使用固定时间偏移的FastSAM3D comparison trajectory。Fanbo3汇总八个工效学关节角；Fanbo4和Fanbo7评估RightElbow。</p>

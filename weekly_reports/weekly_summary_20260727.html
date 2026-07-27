@@ -150,10 +150,6 @@
 </table>
 </div>
 
-<div class="note">
-  The reported 30–35 FPS is the processing speed for two stored video files on an A6000, not yet a measured live-camera frame rate. The accepted implementation is still deterministic PyTorch because a faster backend is not useful if it changes the ergonomic result.
-</div>
-
 <h2 id="nvidia">3. NVIDIA official pose-estimation and related stereo models</h2>
 
 <p>This section tests NVIDIA official pose-estimation and related stereo models. BodyPose3DNet estimates human pose from a single image. FoundationStereo is not a human-pose model: it first estimates dense stereo depth and then combines that depth with left-view YOLO joints. All three datasets use the FastSAM3D comparison trajectory with fixed offsets. Fanbo3 aggregates eight ergonomic joint angles; Fanbo4 and Fanbo7 evaluate RightElbow.</p>

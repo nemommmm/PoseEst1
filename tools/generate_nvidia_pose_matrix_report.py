@@ -89,6 +89,10 @@ def collect_evaluations(run_dir: Path) -> list[dict[str, Any]]:
             row["candidate"]["absolute_error_deg"]["median"]
             for row in rows
         )
+        candidate_mae = mean_finite(
+            row["candidate"]["absolute_error_deg"]["mean"]
+            for row in rows
+        )
         baseline_median = mean_finite(
             row["baseline"]["absolute_error_deg"]["median"]
             for row in rows
@@ -123,6 +127,7 @@ def collect_evaluations(run_dir: Path) -> list[dict[str, Any]]:
             {
                 "candidate": candidate,
                 "dataset": display_dataset(str(metrics.get("dataset", ""))),
+                "mae": candidate_mae,
                 "median": candidate_median,
                 "baseline_median": baseline_median,
                 "baseline_p95": baseline_p95,
@@ -138,6 +143,11 @@ def collect_evaluations(run_dir: Path) -> list[dict[str, Any]]:
                 "metrics_path": path,
                 "plot_path": path.parent / "angle_summary.png",
                 "reference": metrics.get("reference", {}),
+                "angles": [
+                    str(row["angle"])
+                    for row in rows
+                    if row.get("angle") is not None
+                ],
             }
         )
     return records
@@ -498,24 +508,89 @@ def status_rows(run_dir: Path, chinese: bool) -> str:
     return "".join(rows)
 
 
-def metric_table(evaluations: Sequence[dict[str, Any]]) -> str:
-    """Render dataset-level robust results."""
-    rows = []
-    for row in evaluations:
-        rows.append(
-            "<tr>"
-            f"<td>{html.escape(str(row['candidate']))}</td>"
-            f"<td>{html.escape(str(row['dataset']))}</td>"
-            f"<td>{fmt(row['median'])}</td>"
-            f"<td>{fmt(row['p95'])}</td>"
-            f"<td>{fmt(row['baseline_median'])}</td>"
-            f"<td>{fmt(row['valid_ratio'], 3)}</td>"
-            f"<td>{fmt(row['rula'], 3)}</td>"
-            f"<td>{row['jumps']}</td>"
-            f"<td>{fmt_percent(row['improvement'])}</td>"
-            "</tr>"
+def is_skt_baseline(candidate: str) -> bool:
+    """Return whether a candidate is the deterministic SKT control."""
+    return candidate in {"YOLOv8m+SKT", "YOLOv8m-PyTorch-SKT"}
+
+
+def display_candidate(candidate: str, chinese: bool) -> str:
+    """Return a concise display label, marking the control explicitly."""
+    if is_skt_baseline(candidate):
+        suffix = "（基线）" if chinese else " (baseline)"
+        return f"YOLOv8m + SKT{suffix}"
+    return candidate
+
+
+def dataset_metric_tables(
+    evaluations: Sequence[dict[str, Any]],
+    chinese: bool,
+) -> str:
+    """Render one robust-metric table per dataset with SKT first."""
+    tables: list[str] = []
+    dataset_order = ("Fanbo3", "Fanbo4", "Fanbo7")
+    for dataset in dataset_order:
+        dataset_rows = [
+            row for row in evaluations if row["dataset"] == dataset
+        ]
+        if not dataset_rows:
+            continue
+        dataset_rows.sort(
+            key=lambda row: (
+                not is_skt_baseline(str(row["candidate"])),
+                str(row["candidate"]),
+            )
         )
-    return "".join(rows)
+        reference = dataset_rows[0].get("reference", {})
+        reference_label = str(reference.get("label", "—"))
+        angles = dataset_rows[0].get("angles", [])
+        angle_scope = (
+            f"{len(angles)} 个关节角"
+            if chinese and len(angles) > 1
+            else f"{len(angles)} joint angles"
+            if len(angles) > 1
+            else str(angles[0])
+            if angles
+            else "—"
+        )
+        rows = []
+        for row in dataset_rows:
+            candidate = display_candidate(str(row["candidate"]), chinese)
+            candidate_cell = html.escape(candidate)
+            if is_skt_baseline(str(row["candidate"])):
+                candidate_cell = f"<strong>{candidate_cell}</strong>"
+            rows.append(
+                "<tr>"
+                f"<td>{candidate_cell}</td>"
+                f"<td>{fmt(row['mae'])}</td>"
+                f"<td>{fmt(row['median'])}</td>"
+                f"<td>{fmt(row['p95'])}</td>"
+                f"<td>{fmt(row['valid_ratio'], 3)}</td>"
+                f"<td>{fmt(row['rula'], 3)}</td>"
+                f"<td>{row['jumps']}</td>"
+                f"<td>{fmt_percent(row['improvement'])}</td>"
+                "</tr>"
+            )
+        comparison_label = "对比参考" if chinese else "Comparison reference"
+        scope_label = "评价角度" if chinese else "Evaluated angles"
+        improvement_label = (
+            "Median 相对 SKT 改善"
+            if chinese
+            else "Median improvement vs SKT"
+        )
+        tables.append(
+            f"<h3>{dataset}</h3>"
+            f"<p><strong>{comparison_label}：</strong>"
+            f"{html.escape(reference_label)}；"
+            f"<strong>{scope_label}：</strong>{html.escape(angle_scope)}</p>"
+            "<table><tr>"
+            f"<th>{'候选' if chinese else 'Candidate'}</th>"
+            "<th>MAE °</th><th>Median °</th><th>p95 °</th>"
+            f"<th>{'有效率' if chinese else 'Valid ratio'}</th>"
+            f"<th>{'RULA一致率' if chinese else 'RULA agreement'}</th>"
+            f"<th>{'&gt;10°跳变' if chinese else '&gt;10° jumps'}</th>"
+            f"<th>{improvement_label}</th></tr>{''.join(rows)}</table>"
+        )
+    return "".join(tables)
 
 
 def method_table(methods: Sequence[dict[str, Any]]) -> str:
@@ -756,7 +831,9 @@ def build_report(
 <div class="callout">Xsens 仅作为 Xsens-derived reference / external comparison system；Fanbo4/7 使用 FastSAM3D comparison trajectory。没有为候选重新搜索时间偏移或手动挑选较好视角。</div></section>
 <section id="availability"><h2>2. NVIDIA 路线可用性</h2><table><tr><th>路线</th><th>状态</th><th>含义</th></tr>{blocked}</table>
 <p>BodyPoseNet 2D 和 Maxine 的阻塞会被单独记录，不会被写成“模型精度失败”。BodyPose3DNet、FoundationStereo 与 Fast-FoundationStereo 使用官方仓库/权重实测。</p></section>
-<section id="results"><h2>3. 逐数据集稳健指标</h2><table><tr><th>候选</th><th>数据</th><th>Median °</th><th>p95 °</th><th>SKT median °</th><th>有效率</th><th>RULA一致率</th><th>&gt;10°跳变</th><th>改善</th></tr>{metric_table(evaluations)}</table></section>
+<section id="results"><h2>3. 逐数据集稳健指标</h2>
+<p>每个数据集单独展示；YOLOv8m + SKT 固定为第一行基线。MAE 是绝对角度差的平均值，Median 是绝对角度差的中位数。</p>
+{dataset_metric_tables(evaluations, True)}</section>
 <section id="aggregate"><h2>4. 精度—速度汇总</h2><table><tr><th>候选</th><th>数据集数</th><th>Median °</th><th>p95 °</th><th>有效率</th><th>完整 FPS</th><th>p95延迟 ms</th><th>离线准入</th><th>实时准入</th></tr>{method_table(methods)}</table>
 <figure><img src="{pareto}"><figcaption>精度—速度 Pareto。DeepStream/Maxine 受许可约束的精确 timing 不在对外 HTML 中展开。</figcaption></figure>
 <figure><img src="{validity}"><figcaption>共同有效帧比例。</figcaption></figure></section>
@@ -774,7 +851,9 @@ def build_report(
 <div class="callout">Xsens is treated only as an Xsens-derived reference / external comparison system. Fanbo4/7 use FastSAM3D comparison trajectories. Candidate-specific offset search and post-hoc view selection were prohibited.</div></section>
 <section id="availability"><h2>2. NVIDIA route availability</h2><table><tr><th>Route</th><th>Status</th><th>Meaning</th></tr>{blocked}</table>
 <p>BodyPoseNet 2D and Maxine blockers are reported separately from model accuracy. BodyPose3DNet, FoundationStereo, and Fast-FoundationStereo were run from official repositories and checkpoints.</p></section>
-<section id="results"><h2>3. Robust dataset-level metrics</h2><table><tr><th>Candidate</th><th>Dataset</th><th>Median °</th><th>p95 °</th><th>SKT median °</th><th>Valid ratio</th><th>RULA agreement</th><th>&gt;10° jumps</th><th>Improvement</th></tr>{metric_table(evaluations)}</table></section>
+<section id="results"><h2>3. Robust dataset-level metrics</h2>
+<p>Each dataset is shown separately, with YOLOv8m + SKT fixed as the first-row baseline. MAE is the mean absolute angular difference; Median is its median.</p>
+{dataset_metric_tables(evaluations, False)}</section>
 <section id="aggregate"><h2>4. Accuracy–throughput summary</h2><table><tr><th>Candidate</th><th>Datasets</th><th>Median °</th><th>p95 °</th><th>Valid ratio</th><th>Complete FPS</th><th>p95 latency ms</th><th>Offline gate</th><th>Real-time gate</th></tr>{method_table(methods)}</table>
 <figure><img src="{pareto}"><figcaption>Accuracy–speed Pareto view. Exact proprietary DeepStream/Maxine timing is not expanded in the outward-facing HTML.</figcaption></figure>
 <figure><img src="{validity}"><figcaption>Common valid-frame ratio.</figcaption></figure></section>

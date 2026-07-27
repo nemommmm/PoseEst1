@@ -119,8 +119,6 @@
   <strong>Decision:</strong> continue using <strong>YOLOv8m</strong>. YOLO11L can be better in some intervals, but the current data do not provide a reliable distance threshold for switching models. YOLOv8m is also smaller, faster and was more robust in the broader pipeline ablation. A dynamic switch should only be reconsidered after recording the same movement and viewpoint at several controlled distances.
 </div>
 
-<p class="small">Full evidence: <a href="../00_pose_pipeline_v2/runs/fastsam_hip_distance_boxplot_20260727/report.html">FastSAM3D-referenced hip-distance report</a>.</p>
-
 <h2 id="deployment">2. Moving the offline pipeline to a cloud GPU</h2>
 
 <p>This week I deployed the offline stereo program on a RunPod NVIDIA RTX A6000 with 48 GB VRAM. One experiment—from reading the videos through triangulation, angles and RULA—runs entirely inside the remote Pod. Only the resulting NPZ files, tables, figures and reports are downloaded to the local computer for inspection.</p>
@@ -155,8 +153,6 @@
 <div class="note">
   The reported 30–35 FPS is the processing speed for two stored video files on an A6000, not yet a measured live-camera frame rate. The accepted implementation is still deterministic PyTorch because a faster backend is not useful if it changes the ergonomic result.
 </div>
-
-<p class="small">Full evidence: <a href="../docs/gpu_deployment_note.html">A6000 deployment and model-admission note</a>.</p>
 
 <h2 id="nvidia">3. NVIDIA official pose-estimation and related stereo models</h2>
 
@@ -228,8 +224,5 @@
   <strong>Final selection:</strong> no new candidate passed every frozen cross-dataset gate. YOLOv8m + SKT remains the deployment baseline because it is the only route that is currently robust across all three datasets and real-time on the A6000. FoundationStereo is retained as a promising offline/distant-view research direction.
 </div>
 
-<p class="small">Full evidence: <a href="../00_pose_pipeline_v2/runs/nvidia_pose_matrix/fanbo347_nvidia_pose_matrix__20260726__c5de117/report.html">Fanbo3/4/7 NVIDIA model-matrix report</a>.</p>
-
-<footer>Generated for the weekly project discussion on 2026-07-27.</footer>
 </body>
 </html>

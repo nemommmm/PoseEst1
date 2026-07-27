@@ -118,8 +118,6 @@
   <strong>当前决定：</strong>继续使用<strong>YOLOv8m</strong>。YOLO11L在部分区间确实更好，但现有数据无法给出可靠的距离切换阈值。YOLOv8m本身更小、更快，并且在前面的完整Pipeline消融实验中更稳健。只有以后采集“相同动作、相同视角、不同距离”的受控数据，才适合重新讨论动态切换。
 </div>
 
-<p class="small">完整证据：<a href="../00_pose_pipeline_v2/runs/fastsam_hip_distance_boxplot_20260727/report_CN.html">FastSAM3D髋部误差—距离报告</a>。</p>
-
 <h2 id="deployment">2. 将本地离线代码迁移到云端GPU</h2>
 
 <p>本周把原来在本地运行的离线双目程序部署到了RunPod NVIDIA RTX A6000（48 GB显存）。一次实验从读取视频到三角化、角度和RULA计算都在远程Pod内完成；完成后才把NPZ、表格、图和报告下载回本地查看。</p>
@@ -154,8 +152,6 @@
 <div class="note">
   30–35 FPS表示A6000处理两路存储视频文件的速度，还不是实机摄像头的live FPS。当前继续使用确定性PyTorch，是因为如果GPU后端改变了最终人体工程学结果，那么仅仅模型推理更快并没有实际意义。
 </div>
-
-<p class="small">完整证据：<a href="../docs/gpu_deployment_note_CN.html">A6000部署与模型准入报告</a>。</p>
 
 <h2 id="nvidia">3. NVIDIA模型的逐数据集稳健指标</h2>
 
@@ -227,8 +223,5 @@
   <strong>最终选型：</strong>没有新候选同时通过三个数据集的冻结准入规则。YOLOv8m + SKT仍然是正式部署基线，因为它是目前唯一同时具有跨数据稳定性和A6000实时性能的路线。FoundationStereo保留为远距离和离线高精度方向继续研究。
 </div>
 
-<p class="small">完整证据：<a href="../00_pose_pipeline_v2/runs/nvidia_pose_matrix/fanbo347_nvidia_pose_matrix__20260726__c5de117/report_CN.html">Fanbo3/4/7 NVIDIA模型矩阵报告</a>。</p>
-
-<footer>生成用于2026-07-27项目周会讨论。</footer>
 </body>
 </html>

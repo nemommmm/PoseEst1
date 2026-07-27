@@ -189,6 +189,7 @@ def _model_payload(
 ) -> dict[str, Any]:
     """Load processed joint angles, timeline, keypoints, and quality metrics."""
     config = load_config(model_spec.config_path)
+    config.setdefault("evaluation", {})["angle_names"] = [joint]
     time_s, all_angles, info = prepare_angles(
         config, model_spec.run_dir, fixed_offset_seconds
     )
@@ -318,6 +319,70 @@ def extract_rows(
     ]
     frame_data.loc[~frame_data["model_valid"], numeric_columns[2:6]] = np.nan
     return frame_data, sources
+
+
+def extract_joint_median_rows(
+    sessions: list[SessionSpec],
+    joints: tuple[str, ...],
+    label: str,
+) -> tuple[pd.DataFrame, list[dict[str, Any]]]:
+    """Aggregate one or two joint errors into one per-frame analysis target."""
+    if len(joints) == 1:
+        frame_data, sources = extract_rows(sessions, joints[0])
+        frame_data["joint"] = label
+        frame_data["component_joints"] = joints[0]
+        return frame_data, sources
+    if len(joints) != 2:
+        raise ValueError("A distance-analysis target must contain one or two joints")
+    left, sources = extract_rows(sessions, joints[0])
+    right, _ = extract_rows(sessions, joints[1])
+    identity = [
+        "session_id",
+        "session",
+        "frame",
+        "time_s",
+        "model",
+        "fixed_offset_s",
+        "optical_depth_m",
+        "radial_range_m",
+    ]
+    metrics = [
+        "vision_angle_deg",
+        "reference_angle_deg",
+        "signed_difference_deg",
+        "abs_difference_deg",
+        "model_valid",
+        "common_valid",
+    ]
+    left_columns = {
+        name: f"{joints[0]}_{name}"
+        for name in metrics
+    }
+    right_columns = {
+        name: f"{joints[1]}_{name}"
+        for name in metrics
+    }
+    merged = left[identity + metrics].rename(columns=left_columns).merge(
+        right[identity + metrics].rename(columns=right_columns),
+        on=identity,
+        how="inner",
+        validate="one_to_one",
+    )
+    valid_columns = [f"{joint}_model_valid" for joint in joints]
+    common_columns = [f"{joint}_common_valid" for joint in joints]
+    merged["model_valid"] = merged[valid_columns].all(axis=1)
+    merged["common_valid"] = merged[common_columns].all(axis=1)
+    for metric in (
+        "vision_angle_deg",
+        "reference_angle_deg",
+        "signed_difference_deg",
+        "abs_difference_deg",
+    ):
+        columns = [f"{joint}_{metric}" for joint in joints]
+        merged[metric] = merged[columns].median(axis=1, skipna=False)
+    merged["joint"] = label
+    merged["component_joints"] = ",".join(joints)
+    return merged, sources
 
 
 def add_distance_bins(frame_data: pd.DataFrame, width_m: float) -> pd.DataFrame:
@@ -523,7 +588,10 @@ def _error_axis_max(values: pd.Series) -> float:
 
 
 def plot_core_distance_curve(
-    bin_summary: pd.DataFrame, path: Path, chinese: bool
+    bin_summary: pd.DataFrame,
+    path: Path,
+    chinese: bool,
+    body_region: str,
 ) -> None:
     """Plot the report's primary median-error versus distance curve."""
     _configure_plot_style(chinese)
@@ -561,9 +629,15 @@ def plot_core_distance_curve(
         else "Median absolute angular disagreement (deg)"
     )
     axis.set_title(
-        "核心结果：角度差没有随距离平滑增加"
+        (
+            f"{'右肩主指标' if body_region == 'shoulder' else '双髋验证指标'}："
+            "角度差随距离的变化"
+        )
         if chinese
-        else "Core result: angular disagreement does not rise smoothly with distance",
+        else (
+            f"{'Primary right-shoulder metric' if body_region == 'shoulder' else 'Bilateral-hip validation metric'}: "
+            "angular disagreement versus distance"
+        ),
         fontweight="bold",
     )
     axis.grid(True, color="#DCE3EC", linewidth=0.8, alpha=0.8)
@@ -629,7 +703,12 @@ def plot_scatter(
     _save_figure(fig, path)
 
 
-def plot_boxplots(valid: pd.DataFrame, path: Path, chinese: bool) -> None:
+def plot_boxplots(
+    valid: pd.DataFrame,
+    path: Path,
+    chinese: bool,
+    body_region: str,
+) -> None:
     """Plot side-by-side detector distributions for each distance bin."""
     _configure_plot_style(chinese)
     bins = [str(value) for value in valid["distance_bin"].dropna().cat.categories]
@@ -662,7 +741,15 @@ def plot_boxplots(valid: pd.DataFrame, path: Path, chinese: bool) -> None:
         box.set_facecolor(color)
         box.set_alpha(0.55)
     axis.set_xticks(range(len(bins)), bins)
-    axis.set_ylim(0, _error_axis_max(valid["abs_difference_deg"]))
+    finite_error = valid.loc[
+        np.isfinite(valid["abs_difference_deg"]), "abs_difference_deg"
+    ].to_numpy(dtype=float)
+    full_max = float(np.max(finite_error))
+    robust_top = math.ceil(
+        (float(np.percentile(finite_error, 99)) + 5.0) / 10.0
+    ) * 10.0
+    axis_max = min(full_max * 1.05, max(30.0, robust_top))
+    axis.set_ylim(0, axis_max)
     axis.set_xlabel(
         "估计光轴深度分箱（m）"
         if chinese
@@ -672,11 +759,36 @@ def plot_boxplots(valid: pd.DataFrame, path: Path, chinese: bool) -> None:
         "绝对角度差（°）" if chinese else "Absolute angular disagreement (deg)"
     )
     axis.set_title(
-        "距离分箱内的完整误差分布"
+        (
+            f"{'右肩主指标' if body_region == 'shoulder' else '双髋验证指标'}："
+            "距离分箱误差分布"
+        )
         if chinese
-        else "Full disagreement distribution within each distance bin",
+        else (
+            f"{'Primary right-shoulder metric' if body_region == 'shoulder' else 'Bilateral-hip validation metric'}: "
+            "distributions by distance bin"
+        ),
         fontweight="bold",
     )
+    if full_max > axis_max:
+        clipped_count = int(np.sum(finite_error > axis_max))
+        axis.text(
+            0.99,
+            0.96,
+            (
+                f"纵轴聚焦至 P99；{clipped_count} 个极端点高于显示范围"
+                if chinese
+                else (
+                    f"Axis focused through P99; {clipped_count} extreme points "
+                    "are above the displayed range"
+                )
+            ),
+            transform=axis.transAxes,
+            ha="right",
+            va="top",
+            fontsize=9,
+            color="#5D6B7A",
+        )
     legend_handles = [
         plt.Line2D([0], [0], color=MODEL_COLORS[model], linewidth=8, alpha=0.55)
         for model in ("YOLOv8m", "YOLO11L")
@@ -909,9 +1021,9 @@ def build_report(
         )
         nav = ["核心图", "详细散点图", "箱线图", "模型成对比较", "平均值问题", "限制与下一步"]
         body = f"""
-<section id="summary"><h2>1. 核心图：误差随距离如何变化？</h2><div class="cards"><div class="card"><div class="metric">{eight['median_deg']:.2f}°</div>YOLOv8m 总体中位绝对差</div><div class="card"><div class="metric">{eleven['median_deg']:.2f}°</div>YOLO11L 总体中位绝对差</div><div class="card"><div class="metric">{bins_favouring_11l}/{bin_count}</div>合格距离分箱中，11L 中位数更低</div></div><figure><img src="{figures['core']}"><figcaption>横轴为估计光轴深度；纵轴为每 0.5 m 距离分箱内的右肘中位绝对角度差，色带为 P25–P75。曲线明显不平滑、也不是单调上升，说明距离或分辨率下降不是唯一原因；视角、动作、遮挡以及不同序列之间的差异也很重要。</figcaption></figure><p>当前本地结果<strong>不支持</strong>“近距离固定用 YOLO11L、远距离固定用 YOLOv8m”这一明确切换规则。YOLO11L 在个别序列的平均值更低，但中位数优势不稳定；YOLOv8m 的总体中位差和远距离稳定性更好。</p><div class="callout">所有比较都使用同一批有效帧、每个序列一个固定时间偏移，并把 YOLOv8m 的躯干深度作为两个模型共同的横坐标。这样不会因为 11L 自己的错误深度而改变横坐标；每个纳入结论的距离分箱至少包含 20 个共同有效帧。</div>{table}</section>
-<section id="scatter"><h2>2. 详细散点图</h2><figure><img src="{figures['scatter']}"><figcaption>每个点是一帧。粗线是每 0.5 m 分箱的中位数，色带是 P25–P75。点很散，说明估计深度之外还有其他因素，但当前数据不能分离视角、动作和遮挡各自的影响。</figcaption></figure><figure><img src="{figures['session']}"><figcaption>将每个序列压缩为一个中位数和一个 P95 后，可以看到远距离序列的高尾部差异更明显，但趋势并不平滑。</figcaption></figure></section>
-<section id="box"><h2>3. 箱线图：不要只看平均值</h2><figure><img src="{figures['box']}"><figcaption>箱体展示中间 50% 的帧，中线是中位数，散点是离群帧。它比一个平均值更直观地显示了稳定性和失败尾部。</figcaption></figure></section>
+<section id="summary"><h2>1. 核心图：误差随距离如何变化？</h2><div class="cards"><div class="card"><div class="metric">{eight['median_deg']:.2f}°</div>YOLOv8m 右肩中位误差</div><div class="card"><div class="metric">{eleven['median_deg']:.2f}°</div>YOLO11L 右肩中位误差</div><div class="card"><div class="metric">{bins_favouring_11l}/{bin_count}</div>合格距离分箱中，11L 中位数更低</div></div><figure><img src="{figures['core']}"><figcaption><strong>主指标：</strong>右肩在四组距离数据中都有可用参考，并且现有误差明显低于肘部。曲线为每 0.5 m 距离分箱的中位绝对角度差，色带为 P25–P75。</figcaption></figure><figure><img src="{figures['hip']}"><figcaption><strong>验证指标：</strong>每帧汇总左右髋部的绝对角度差，再按距离分箱统计。只有肩部和髋部都呈现相似趋势时，才更有把握认为距离确实产生了影响。</figcaption></figure><p>两组近端关节曲线并没有呈现一致的平滑单调上升：右肩在最远距离没有恶化，双髋反而总体下降。因此当前记录不能证明“距离越远，角度误差越大”；动作、视角、遮挡和序列差异仍然混在距离因素中。右肘结果不再作为主要结论依据。</p><div class="callout">所有比较都使用同一批有效帧、每个序列一个固定时间偏移，并把 YOLOv8m 的躯干深度作为两个模型共同的横坐标。每个纳入结论的距离分箱至少包含 20 个共同有效帧。Fanbo7 的左肩参考不可用，因此主指标固定使用所有距离都可用的右肩，避免在不同距离混用单肩和双肩。下表为右肩主指标的序列级统计。</div>{table}</section>
+<section id="scatter"><h2>2. 右肩主指标的详细散点图</h2><figure><img src="{figures['scatter']}"><figcaption>每个点是一帧的右肩绝对角度差。粗线是每 0.5 m 分箱的中位数，色带是 P25–P75。点很散，说明估计深度之外还有其他因素，但当前数据不能分离视角、动作和遮挡各自的影响。</figcaption></figure><figure><img src="{figures['session']}"><figcaption>将每个序列压缩为一个中位数和一个 P95 后，仍然没有形成随距离平滑上升的趋势。</figcaption></figure></section>
+<section id="box"><h2>3. 箱线图：距离趋势是否稳定？</h2><figure><img src="{figures['box']}"><figcaption><strong>右肩主指标：</strong>箱体展示中间 50% 的帧，中线是中位数，散点是离群帧。相邻距离箱如果大量重叠，说明距离不能单独解释误差变化。</figcaption></figure><figure><img src="{figures['hip_box']}"><figcaption><strong>双髋验证指标：</strong>与右肩箱线图对照。只有两类近端关节都出现相似的箱体移动，距离趋势才更可信。</figcaption></figure></section>
 <section id="paired"><h2>4. 同一帧直接比较两个模型</h2><figure><img src="{figures['paired']}"><figcaption>纵轴是“YOLO11L 绝对差 − YOLOv8m 绝对差”。负值才表示 11L 更好；误差线为 P25–P75。当前并未形成一个可靠的近远距离切换点。</figcaption></figure><p>因此，更稳妥的工程建议是：目前继续保留 YOLOv8m；如果以后要做动态切换，需要增加更多距离、相同动作和相同视角的受控记录，再预先定义切换阈值并在新序列上验证。</p></section>
 <section id="mean"><h2>5. 为什么老师强调 Median？</h2><figure><img src="{figures['mean_median']}"><figcaption>方块是平均值，圆点是中位数。两者距离越大，说明少数非常差的帧对平均值影响越大。Fanbo7 中就出现了“平均值看起来 11L 更好，但中位数并没有更好”的情况。</figcaption></figure></section>
 <section id="limits"><h2>6. 限制与下一步</h2><ul><li>横轴是双目重建得到的<strong>估计光轴深度</strong>，不是卷尺测得的独立距离。</li><li>不同距离来自不同序列，动作、视角和遮挡没有完全控制，所以这里只能说“有关联”，不能说“距离造成了全部误差”。</li><li>Xsens 只是 external comparison system / Xsens-derived reference，不是绝对 Ground Truth。</li><li>下一次可在 2.0–4.5 m 每 0.5 m 固定站位、重复相同动作，再画同样四张图；那时才适合决定是否按距离切换模型。</li></ul><p>本地已保存逐帧 CSV、分箱统计、manifest 和所有图。恢复 GPU 后再补 TensorRT/TAO 的真实速度测试，不会与本次统计混在一起。</p></section>"""
@@ -923,9 +1035,9 @@ def build_report(
         )
         nav = ["Core chart", "Detailed scatter", "Box plots", "Paired comparison", "Mean vs median", "Limitations"]
         body = f"""
-<section id="summary"><h2>1. Core chart: how does disagreement change with distance?</h2><div class="cards"><div class="card"><div class="metric">{eight['median_deg']:.2f}°</div>YOLOv8m pooled median</div><div class="card"><div class="metric">{eleven['median_deg']:.2f}°</div>YOLO11L pooled median</div><div class="card"><div class="metric">{bins_favouring_11l}/{bin_count}</div>eligible distance bins with a lower YOLO11L median</div></div><figure><img src="{figures['core']}"><figcaption>The horizontal axis is estimated optical depth. The vertical axis is the median absolute right-elbow angular disagreement in each 0.5 m distance bin; bands show P25–P75. The curve is neither smooth nor monotonic, indicating that distance or reduced resolution is not the only factor. Viewpoint, action, occlusion, and between-session differences also matter.</figcaption></figure><p>The current local evidence does <strong>not</strong> support a fixed rule that selects YOLO11L at short range and YOLOv8m at long range. YOLO11L lowers the mean in an individual short-range sequence, but its median advantage is not robust; YOLOv8m has the lower pooled median and more stable long-range behaviour.</p><div class="callout">Both models are evaluated on the same valid frames with one fixed offset per session. The YOLOv8m torso-depth estimate is used as their common horizontal coordinate, preventing an erroneous YOLO11L depth from moving its own sample along the x-axis. Each bin used for conclusions contains at least 20 common valid frames.</div>{table}</section>
-<section id="scatter"><h2>2. Detailed scatter view</h2><figure><img src="{figures['scatter']}"><figcaption>Each point is one frame. The thick line is the 0.5 m-bin median and the band is P25–P75. The broad scatter indicates that factors beyond estimated depth matter, but this dataset does not isolate viewpoint, action, and occlusion effects.</figcaption></figure><figure><img src="{figures['session']}"><figcaption>Session medians and P95 values show a larger long-range disagreement tail, but not a smooth monotonic curve.</figcaption></figure></section>
-<section id="box"><h2>3. Distribution view</h2><figure><img src="{figures['box']}"><figcaption>Boxes show the middle 50% of frames, the centre line is the median, and dots show outliers. This exposes stability and failure tails that a single mean hides.</figcaption></figure></section>
+<section id="summary"><h2>1. Core chart: how does disagreement change with distance?</h2><div class="cards"><div class="card"><div class="metric">{eight['median_deg']:.2f}°</div>YOLOv8m right-shoulder median</div><div class="card"><div class="metric">{eleven['median_deg']:.2f}°</div>YOLO11L right-shoulder median</div><div class="card"><div class="metric">{bins_favouring_11l}/{bin_count}</div>eligible distance bins with a lower YOLO11L median</div></div><figure><img src="{figures['core']}"><figcaption><strong>Primary metric:</strong> the right shoulder has an available reference in all four distance records and substantially lower disagreement than the elbow. The curve shows median absolute angular disagreement in each 0.5 m distance bin; bands show P25–P75.</figcaption></figure><figure><img src="{figures['hip']}"><figcaption><strong>Validation metric:</strong> each frame aggregates the left- and right-hip absolute disagreements before distance-bin statistics are calculated. A distance interpretation is more credible only if shoulder and hip trends agree.</figcaption></figure><p>The two proximal-joint metrics do not show a consistent smooth monotonic increase: the right shoulder does not deteriorate at the farthest distance, while the bilateral-hip metric generally decreases. These recordings therefore cannot establish that angular disagreement increases with distance; action, viewpoint, occlusion, and between-session differences remain confounded with distance. Right-elbow results are no longer used as the main evidence.</p><div class="callout">Both models are evaluated on the same valid frames with one fixed offset per session. The YOLOv8m torso-depth estimate is used as their common horizontal coordinate. Each bin used for conclusions contains at least 20 common valid frames. Fanbo7 has no usable left-shoulder reference, so the primary metric is fixed to the right shoulder, which is available at every distance, instead of mixing unilateral and bilateral metrics. The table below reports the session-level right-shoulder metric.</div>{table}</section>
+<section id="scatter"><h2>2. Detailed right-shoulder scatter view</h2><figure><img src="{figures['scatter']}"><figcaption>Each point is one frame's right-shoulder absolute disagreement. The thick line is the 0.5 m-bin median and the band is P25–P75. The broad scatter indicates that factors beyond estimated depth matter, but this dataset does not isolate viewpoint, action, and occlusion effects.</figcaption></figure><figure><img src="{figures['session']}"><figcaption>Session medians and P95 values still do not form a smooth increasing trend with distance.</figcaption></figure></section>
+<section id="box"><h2>3. Box plots: is the distance trend stable?</h2><figure><img src="{figures['box']}"><figcaption><strong>Primary right-shoulder metric:</strong> boxes show the middle 50% of frames, the centre line is the median, and dots show outliers. Strong overlap between adjacent distance bins means that distance alone cannot explain the disagreement.</figcaption></figure><figure><img src="{figures['hip_box']}"><figcaption><strong>Bilateral-hip validation metric:</strong> this is compared with the right-shoulder distribution. A distance trend is more credible only if both proximal-joint distributions move similarly.</figcaption></figure></section>
 <section id="paired"><h2>4. Same-frame detector comparison</h2><figure><img src="{figures['paired']}"><figcaption>The vertical axis is YOLO11L absolute disagreement minus YOLOv8m absolute disagreement. Only negative values favour YOLO11L; error bars show P25–P75. No reliable near/far switching threshold appears.</figcaption></figure><p>The current engineering recommendation is therefore to retain YOLOv8m. A dynamic switch would require controlled recordings at additional distances with the same action and viewpoint, followed by prospective validation on held-out sequences.</p></section>
 <section id="mean"><h2>5. Why median matters</h2><figure><img src="{figures['mean_median']}"><figcaption>Squares show means and circles show medians. A large gap indicates that a small number of severe failures pulls the mean upward. Fanbo7 includes the specific case where the mean appears to favour YOLO11L while the median does not.</figcaption></figure></section>
 <section id="limits"><h2>6. Limitations and next step</h2><ul><li>The horizontal coordinate is estimated optical depth from stereo reconstruction, not an independent tape-measure distance.</li><li>Distance is confounded with session, action, viewpoint, and occlusion; the evidence is associative, not causal.</li><li>Xsens is an external comparison system / Xsens-derived reference, not absolute Ground Truth.</li><li>A controlled 2.0–4.5 m experiment at 0.5 m intervals should repeat the same action before defining a switching threshold.</li></ul><p>Per-frame CSV data, summaries, a source manifest, and all figures are stored locally. TensorRT/TAO throughput tests will be added only after NVIDIA GPU access is restored.</p></section>"""
@@ -933,6 +1045,9 @@ def build_report(
         "core": "角度误差随距离变化的核心曲线"
         if chinese
         else "Core median angular disagreement versus distance curve",
+        "hip": "髋部角度误差随距离变化的验证曲线"
+        if chinese
+        else "Hip angular disagreement versus distance validation curve",
         "scatter": "逐帧角度差异与估计深度散点图"
         if chinese
         else "Per-frame angular disagreement versus estimated depth",
@@ -942,6 +1057,9 @@ def build_report(
         "box": "按距离分箱的角度差异箱线图"
         if chinese
         else "Angular disagreement box plots by depth bin",
+        "hip_box": "按距离分箱的髋部角度差异箱线图"
+        if chinese
+        else "Hip angular disagreement box plots by depth bin",
         "paired": "YOLO11L与YOLOv8m同帧差值图"
         if chinese
         else "Paired same-frame YOLO11L versus YOLOv8m differences",
@@ -968,7 +1086,20 @@ def write_outputs(config_path: Path) -> Path:
     """Run the complete local analysis and write auditable outputs."""
     payload, sessions = load_analysis_config(config_path)
     analysis_cfg = payload.get("analysis", {})
-    joint = str(analysis_cfg.get("primary_joint", "RightElbow"))
+    primary_joints = tuple(
+        str(name)
+        for name in analysis_cfg.get(
+            "primary_joints", ["LeftShoulder", "RightShoulder"]
+        )
+    )
+    validation_joints = tuple(
+        str(name)
+        for name in analysis_cfg.get(
+            "validation_joints", ["LeftHip", "RightHip"]
+        )
+    )
+    if len(primary_joints) not in (1, 2) or len(validation_joints) not in (1, 2):
+        raise ValueError("Distance-analysis targets require one or two joints")
     width_m = float(analysis_cfg.get("distance_bin_width_m", 0.5))
     min_bin_count = int(analysis_cfg.get("min_common_frames_per_bin", 20))
     output_dir = _resolve(
@@ -979,17 +1110,45 @@ def write_outputs(config_path: Path) -> Path:
     figures_dir = output_dir / "figures"
     figures_dir.mkdir(parents=True, exist_ok=True)
 
-    frame_data, sources = extract_rows(sessions, joint)
+    frame_data, sources = extract_joint_median_rows(
+        sessions,
+        primary_joints,
+        "RightShoulder",
+    )
+    validation_frame_data, _ = extract_joint_median_rows(
+        sessions,
+        validation_joints,
+        "BilateralHipMedian",
+    )
     frame_data = add_distance_bins(frame_data, width_m)
+    validation_frame_data = add_distance_bins(validation_frame_data, width_m)
     session_summary, bin_summary, paired_summary, extras = summarize_data(frame_data)
+    (
+        validation_session_summary,
+        validation_bin_summary,
+        validation_paired_summary,
+        validation_extras,
+    ) = summarize_data(validation_frame_data)
     valid = frame_data[frame_data["common_valid"]].copy()
 
     paired_summary["meets_minimum_count"] = (
         paired_summary["n_common_frames"] >= min_bin_count
     )
+    validation_paired_summary["meets_minimum_count"] = (
+        validation_paired_summary["n_common_frames"] >= min_bin_count
+    )
     frame_data.to_csv(output_dir / "per_frame_distance_angle_data.csv", index=False)
+    validation_frame_data.to_csv(
+        output_dir / "per_frame_distance_hip_validation_data.csv", index=False
+    )
     session_summary.to_csv(output_dir / "session_summary.csv", index=False)
+    validation_session_summary.to_csv(
+        output_dir / "hip_validation_session_summary.csv", index=False
+    )
     bin_summary.to_csv(output_dir / "distance_bin_summary.csv", index=False)
+    validation_bin_summary.to_csv(
+        output_dir / "hip_validation_distance_bin_summary.csv", index=False
+    )
     paired_summary.to_csv(output_dir / "paired_model_summary.csv", index=False)
     extras["paired_frames"].to_csv(output_dir / "paired_frame_differences.csv", index=False)
 
@@ -999,11 +1158,32 @@ def write_outputs(config_path: Path) -> Path:
         bin_summary["distance_bin"].astype(str).isin(eligible_labels)
     ].copy()
     plot_valid = valid[valid["distance_bin"].astype(str).isin(eligible_labels)].copy()
+    eligible_validation_paired = validation_paired_summary[
+        validation_paired_summary["meets_minimum_count"]
+    ].copy()
+    eligible_validation_labels = set(
+        eligible_validation_paired["distance_bin"].astype(str)
+    )
+    eligible_validation_bin_summary = validation_bin_summary[
+        validation_bin_summary["distance_bin"]
+        .astype(str)
+        .isin(eligible_validation_labels)
+    ].copy()
+    validation_valid = validation_frame_data[
+        validation_frame_data["common_valid"]
+    ].copy()
+    validation_plot_valid = validation_valid[
+        validation_valid["distance_bin"].astype(str).isin(
+            eligible_validation_labels
+        )
+    ].copy()
 
     figure_paths = {
         "core": figures_dir / "00_core_median_error_vs_distance.png",
+        "hip": figures_dir / "00b_hip_validation_error_vs_distance.png",
         "scatter": figures_dir / "01_scatter_depth_error.png",
         "box": figures_dir / "02_boxplot_distance_bins.png",
+        "hip_box": figures_dir / "02b_hip_boxplot_distance_bins.png",
         "session": figures_dir / "03_session_median_p95.png",
         "paired": figures_dir / "04_paired_model_difference.png",
         "mean_median": figures_dir / "05_mean_vs_median.png",
@@ -1015,6 +1195,15 @@ def write_outputs(config_path: Path) -> Path:
                 f"00_core_median_error_vs_distance{suffix}.png"
             ),
             chinese,
+            "shoulder",
+        )
+        plot_core_distance_curve(
+            eligible_validation_bin_summary,
+            figure_paths["hip"].with_name(
+                f"00b_hip_validation_error_vs_distance{suffix}.png"
+            ),
+            chinese,
+            "hip",
         )
         plot_scatter(
             valid,
@@ -1030,6 +1219,15 @@ def write_outputs(config_path: Path) -> Path:
                 f"02_boxplot_distance_bins{suffix}.png"
             ),
             chinese,
+            "shoulder",
+        )
+        plot_boxplots(
+            validation_plot_valid,
+            figure_paths["hip_box"].with_name(
+                f"02b_hip_boxplot_distance_bins{suffix}.png"
+            ),
+            chinese,
+            "hip",
         )
         plot_session_summary(
             session_summary,
@@ -1059,8 +1257,10 @@ def write_outputs(config_path: Path) -> Path:
         thesis_figure_dir.mkdir(parents=True, exist_ok=True)
         thesis_names = {
             "core": "thesis_detector_distance_core_curve.png",
+            "hip": "thesis_detector_distance_hip_validation.png",
             "scatter": "thesis_detector_distance_scatter.png",
             "box": "thesis_detector_distance_boxplot.png",
+            "hip_box": "thesis_detector_distance_hip_boxplot.png",
             "paired": "thesis_detector_paired_difference.png",
             "mean_median": "thesis_detector_mean_vs_median.png",
         }
@@ -1073,7 +1273,22 @@ def write_outputs(config_path: Path) -> Path:
         "created_from_commit": _git_commit(),
         "analysis_config": str(config_path.relative_to(PROJECT_ROOT)),
         "analysis_config_sha256": _sha256(config_path),
-        "primary_joint": joint,
+        "primary_metric": {
+            "aggregation": (
+                "single-joint absolute disagreement"
+                if len(primary_joints) == 1
+                else "per-frame bilateral median absolute disagreement"
+            ),
+            "joints": list(primary_joints),
+        },
+        "validation_metric": {
+            "aggregation": (
+                "single-joint absolute disagreement"
+                if len(validation_joints) == 1
+                else "per-frame bilateral median absolute disagreement"
+            ),
+            "joints": list(validation_joints),
+        },
         "reference": analysis_cfg.get("reference_label", "Xsens-derived reference"),
         "distance_source": analysis_cfg.get("distance_source"),
         "distance_bin_width_m": width_m,
@@ -1083,11 +1298,13 @@ def write_outputs(config_path: Path) -> Path:
             "YOLOv8m-estimated optical depth."
         ),
         "overall": overall,
+        "validation_overall": validation_extras["overall"],
         "sources": sources,
         "limitations": [
             "Estimated optical depth is not an independent physical distance measurement.",
             "Distance is confounded with session, action, viewpoint, and occlusion.",
             "Frame-level observations are temporally autocorrelated.",
+            "Fanbo7 has no usable left-shoulder reference; the primary metric is consistently right shoulder.",
             "Xsens is an external comparison system, not absolute Ground Truth.",
         ],
     }
@@ -1105,14 +1322,17 @@ def write_outputs(config_path: Path) -> Path:
     readme = f"""# Distance-stratified detector analysis
 
 主结论：在 {overall['common_valid_unique_frames']} 个共同有效帧中，YOLOv8m 与
-YOLO11L 的总体右肘中位绝对差分别为
+YOLO11L 的总体右肩中位绝对差分别为
 {overall['models']['YOLOv8m']['median_deg']:.2f}° 和
-{overall['models']['YOLO11L']['median_deg']:.2f}°。当前结果不支持固定的近距/远距模型切换规则。
+{overall['models']['YOLO11L']['median_deg']:.2f}°。双髋指标作为独立的趋势验证。
 
 - `report_CN.html` / `report.html`: 中英文图文报告
-- `per_frame_distance_angle_data.csv`: 全部逐帧行，可直接用 Excel 打开
-- `session_summary.csv`: 序列级 median、IQR、P95 和有效率
+- `per_frame_distance_angle_data.csv`: 右肩主指标逐帧数据，可直接用 Excel 打开
+- `per_frame_distance_hip_validation_data.csv`: 双髋验证指标逐帧数据
+- `session_summary.csv`: 右肩主指标序列级 median、IQR、P95 和有效率
+- `hip_validation_session_summary.csv`: 双髋验证指标序列级统计
 - `distance_bin_summary.csv`: 0.5 m 分箱统计
+- `hip_validation_distance_bin_summary.csv`: 双髋验证指标分箱统计
 - `paired_model_summary.csv`: 同一帧 YOLO11L - YOLOv8m 成对统计
 - `analysis_manifest.json`: 配置、commit、输入和标定 SHA256
 - `figures/`: 中英文散点图、箱线图及成对比较图

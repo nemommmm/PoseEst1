@@ -1,6 +1,7 @@
 analysis:
   title: Distance-stratified detector comparison
-  primary_joint: RightElbow
+  primary_joints: [RightShoulder]
+  validation_joints: [LeftHip, RightHip]
   distance_bin_width_m: 0.5
   min_common_frames_per_bin: 20
   output_dir: 00_pose_pipeline_v2/runs/distance_error_analysis_20260720

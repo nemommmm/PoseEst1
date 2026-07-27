@@ -522,6 +522,56 @@ def _error_axis_max(values: pd.Series) -> float:
     return float(min(180.0, max(50.0, rounded)))
 
 
+def plot_core_distance_curve(
+    bin_summary: pd.DataFrame, path: Path, chinese: bool
+) -> None:
+    """Plot the report's primary median-error versus distance curve."""
+    _configure_plot_style(chinese)
+    fig, axis = plt.subplots(figsize=(10.4, 5.6))
+    for model in ("YOLOv8m", "YOLO11L"):
+        trend = bin_summary[bin_summary["model"] == model].sort_values(
+            "distance_bin_left_m"
+        )
+        x = trend["median_optical_depth_m"].to_numpy(dtype=float)
+        median = trend["median_deg"].to_numpy(dtype=float)
+        p25 = trend["p25_deg"].to_numpy(dtype=float)
+        p75 = trend["p75_deg"].to_numpy(dtype=float)
+        axis.fill_between(
+            x,
+            p25,
+            p75,
+            color=MODEL_COLORS[model],
+            alpha=0.13,
+        )
+        axis.plot(
+            x,
+            median,
+            "o-",
+            color=MODEL_COLORS[model],
+            linewidth=2.6,
+            markersize=7,
+            label=model,
+        )
+    axis.set_xlabel(
+        "估计光轴深度（m）" if chinese else "Estimated optical depth (m)"
+    )
+    axis.set_ylabel(
+        "中位绝对角度差（°）"
+        if chinese
+        else "Median absolute angular disagreement (deg)"
+    )
+    axis.set_title(
+        "核心结果：角度差没有随距离平滑增加"
+        if chinese
+        else "Core result: angular disagreement does not rise smoothly with distance",
+        fontweight="bold",
+    )
+    axis.grid(True, color="#DCE3EC", linewidth=0.8, alpha=0.8)
+    axis.legend(frameon=False, ncol=2)
+    fig.tight_layout()
+    _save_figure(fig, path)
+
+
 def plot_scatter(
     valid: pd.DataFrame, bin_summary: pd.DataFrame, path: Path, chinese: bool
 ) -> None:
@@ -857,10 +907,10 @@ def build_report(
             "YOLOv8m vs YOLO11L · 同一有效帧 · 固定时间偏移 · "
             "Xsens-derived reference 仅作外部比较"
         )
-        nav = ["结论", "散点图", "箱线图", "模型成对比较", "平均值问题", "限制与下一步"]
+        nav = ["核心图", "详细散点图", "箱线图", "模型成对比较", "平均值问题", "限制与下一步"]
         body = f"""
-<section id="summary"><h2>1. 先说结论</h2><div class="cards"><div class="card"><div class="metric">{eight['median_deg']:.2f}°</div>YOLOv8m 总体中位绝对差</div><div class="card"><div class="metric">{eleven['median_deg']:.2f}°</div>YOLO11L 总体中位绝对差</div><div class="card"><div class="metric">{bins_favouring_11l}/{bin_count}</div>合格距离分箱中，11L 中位数更低</div></div><p>当前本地结果<strong>不支持</strong>“近距离固定用 YOLO11L、远距离固定用 YOLOv8m”这一明确切换规则。YOLO11L 在个别序列的平均值更低，但中位数优势不稳定；YOLOv8m 的总体中位差和远距离稳定性更好。</p><div class="callout">所有比较都使用同一批有效帧、每个序列一个固定时间偏移，并把 YOLOv8m 的躯干深度作为两个模型共同的横坐标。这样不会因为 11L 自己的错误深度而改变横坐标；每个纳入结论的距离分箱至少包含 20 个共同有效帧。</div>{table}</section>
-<section id="scatter"><h2>2. 散点图：距离和角度差异有什么关系？</h2><figure><img src="{figures['scatter']}"><figcaption>每个点是一帧。粗线是每 0.5 m 分箱的中位数，色带是 P25–P75。点很散，说明估计深度之外还有其他因素，但当前数据不能分离视角、动作和遮挡各自的影响。</figcaption></figure><figure><img src="{figures['session']}"><figcaption>将每个序列压缩为一个中位数和一个 P95 后，可以看到远距离序列的高尾部差异更明显，但趋势并不平滑。</figcaption></figure></section>
+<section id="summary"><h2>1. 核心图：误差随距离如何变化？</h2><div class="cards"><div class="card"><div class="metric">{eight['median_deg']:.2f}°</div>YOLOv8m 总体中位绝对差</div><div class="card"><div class="metric">{eleven['median_deg']:.2f}°</div>YOLO11L 总体中位绝对差</div><div class="card"><div class="metric">{bins_favouring_11l}/{bin_count}</div>合格距离分箱中，11L 中位数更低</div></div><figure><img src="{figures['core']}"><figcaption>横轴为估计光轴深度；纵轴为每 0.5 m 距离分箱内的右肘中位绝对角度差，色带为 P25–P75。曲线明显不平滑、也不是单调上升，说明距离或分辨率下降不是唯一原因；视角、动作、遮挡以及不同序列之间的差异也很重要。</figcaption></figure><p>当前本地结果<strong>不支持</strong>“近距离固定用 YOLO11L、远距离固定用 YOLOv8m”这一明确切换规则。YOLO11L 在个别序列的平均值更低，但中位数优势不稳定；YOLOv8m 的总体中位差和远距离稳定性更好。</p><div class="callout">所有比较都使用同一批有效帧、每个序列一个固定时间偏移，并把 YOLOv8m 的躯干深度作为两个模型共同的横坐标。这样不会因为 11L 自己的错误深度而改变横坐标；每个纳入结论的距离分箱至少包含 20 个共同有效帧。</div>{table}</section>
+<section id="scatter"><h2>2. 详细散点图</h2><figure><img src="{figures['scatter']}"><figcaption>每个点是一帧。粗线是每 0.5 m 分箱的中位数，色带是 P25–P75。点很散，说明估计深度之外还有其他因素，但当前数据不能分离视角、动作和遮挡各自的影响。</figcaption></figure><figure><img src="{figures['session']}"><figcaption>将每个序列压缩为一个中位数和一个 P95 后，可以看到远距离序列的高尾部差异更明显，但趋势并不平滑。</figcaption></figure></section>
 <section id="box"><h2>3. 箱线图：不要只看平均值</h2><figure><img src="{figures['box']}"><figcaption>箱体展示中间 50% 的帧，中线是中位数，散点是离群帧。它比一个平均值更直观地显示了稳定性和失败尾部。</figcaption></figure></section>
 <section id="paired"><h2>4. 同一帧直接比较两个模型</h2><figure><img src="{figures['paired']}"><figcaption>纵轴是“YOLO11L 绝对差 − YOLOv8m 绝对差”。负值才表示 11L 更好；误差线为 P25–P75。当前并未形成一个可靠的近远距离切换点。</figcaption></figure><p>因此，更稳妥的工程建议是：目前继续保留 YOLOv8m；如果以后要做动态切换，需要增加更多距离、相同动作和相同视角的受控记录，再预先定义切换阈值并在新序列上验证。</p></section>
 <section id="mean"><h2>5. 为什么老师强调 Median？</h2><figure><img src="{figures['mean_median']}"><figcaption>方块是平均值，圆点是中位数。两者距离越大，说明少数非常差的帧对平均值影响越大。Fanbo7 中就出现了“平均值看起来 11L 更好，但中位数并没有更好”的情况。</figcaption></figure></section>
@@ -871,15 +921,18 @@ def build_report(
             "YOLOv8m vs YOLO11L · same valid frames · fixed alignment · "
             "Xsens-derived reference used only for external comparison"
         )
-        nav = ["Conclusions", "Scatter", "Box plots", "Paired comparison", "Mean vs median", "Limitations"]
+        nav = ["Core chart", "Detailed scatter", "Box plots", "Paired comparison", "Mean vs median", "Limitations"]
         body = f"""
-<section id="summary"><h2>1. Main conclusion</h2><div class="cards"><div class="card"><div class="metric">{eight['median_deg']:.2f}°</div>YOLOv8m pooled median</div><div class="card"><div class="metric">{eleven['median_deg']:.2f}°</div>YOLO11L pooled median</div><div class="card"><div class="metric">{bins_favouring_11l}/{bin_count}</div>eligible distance bins with a lower YOLO11L median</div></div><p>The current local evidence does <strong>not</strong> support a fixed rule that selects YOLO11L at short range and YOLOv8m at long range. YOLO11L lowers the mean in an individual short-range sequence, but its median advantage is not robust; YOLOv8m has the lower pooled median and more stable long-range behaviour.</p><div class="callout">Both models are evaluated on the same valid frames with one fixed offset per session. The YOLOv8m torso-depth estimate is used as their common horizontal coordinate, preventing an erroneous YOLO11L depth from moving its own sample along the x-axis. Each bin used for conclusions contains at least 20 common valid frames.</div>{table}</section>
-<section id="scatter"><h2>2. Scatter view</h2><figure><img src="{figures['scatter']}"><figcaption>Each point is one frame. The thick line is the 0.5 m-bin median and the band is P25–P75. The broad scatter indicates that factors beyond estimated depth matter, but this dataset does not isolate viewpoint, action, and occlusion effects.</figcaption></figure><figure><img src="{figures['session']}"><figcaption>Session medians and P95 values show a larger long-range disagreement tail, but not a smooth monotonic curve.</figcaption></figure></section>
+<section id="summary"><h2>1. Core chart: how does disagreement change with distance?</h2><div class="cards"><div class="card"><div class="metric">{eight['median_deg']:.2f}°</div>YOLOv8m pooled median</div><div class="card"><div class="metric">{eleven['median_deg']:.2f}°</div>YOLO11L pooled median</div><div class="card"><div class="metric">{bins_favouring_11l}/{bin_count}</div>eligible distance bins with a lower YOLO11L median</div></div><figure><img src="{figures['core']}"><figcaption>The horizontal axis is estimated optical depth. The vertical axis is the median absolute right-elbow angular disagreement in each 0.5 m distance bin; bands show P25–P75. The curve is neither smooth nor monotonic, indicating that distance or reduced resolution is not the only factor. Viewpoint, action, occlusion, and between-session differences also matter.</figcaption></figure><p>The current local evidence does <strong>not</strong> support a fixed rule that selects YOLO11L at short range and YOLOv8m at long range. YOLO11L lowers the mean in an individual short-range sequence, but its median advantage is not robust; YOLOv8m has the lower pooled median and more stable long-range behaviour.</p><div class="callout">Both models are evaluated on the same valid frames with one fixed offset per session. The YOLOv8m torso-depth estimate is used as their common horizontal coordinate, preventing an erroneous YOLO11L depth from moving its own sample along the x-axis. Each bin used for conclusions contains at least 20 common valid frames.</div>{table}</section>
+<section id="scatter"><h2>2. Detailed scatter view</h2><figure><img src="{figures['scatter']}"><figcaption>Each point is one frame. The thick line is the 0.5 m-bin median and the band is P25–P75. The broad scatter indicates that factors beyond estimated depth matter, but this dataset does not isolate viewpoint, action, and occlusion effects.</figcaption></figure><figure><img src="{figures['session']}"><figcaption>Session medians and P95 values show a larger long-range disagreement tail, but not a smooth monotonic curve.</figcaption></figure></section>
 <section id="box"><h2>3. Distribution view</h2><figure><img src="{figures['box']}"><figcaption>Boxes show the middle 50% of frames, the centre line is the median, and dots show outliers. This exposes stability and failure tails that a single mean hides.</figcaption></figure></section>
 <section id="paired"><h2>4. Same-frame detector comparison</h2><figure><img src="{figures['paired']}"><figcaption>The vertical axis is YOLO11L absolute disagreement minus YOLOv8m absolute disagreement. Only negative values favour YOLO11L; error bars show P25–P75. No reliable near/far switching threshold appears.</figcaption></figure><p>The current engineering recommendation is therefore to retain YOLOv8m. A dynamic switch would require controlled recordings at additional distances with the same action and viewpoint, followed by prospective validation on held-out sequences.</p></section>
 <section id="mean"><h2>5. Why median matters</h2><figure><img src="{figures['mean_median']}"><figcaption>Squares show means and circles show medians. A large gap indicates that a small number of severe failures pulls the mean upward. Fanbo7 includes the specific case where the mean appears to favour YOLO11L while the median does not.</figcaption></figure></section>
 <section id="limits"><h2>6. Limitations and next step</h2><ul><li>The horizontal coordinate is estimated optical depth from stereo reconstruction, not an independent tape-measure distance.</li><li>Distance is confounded with session, action, viewpoint, and occlusion; the evidence is associative, not causal.</li><li>Xsens is an external comparison system / Xsens-derived reference, not absolute Ground Truth.</li><li>A controlled 2.0–4.5 m experiment at 0.5 m intervals should repeat the same action before defining a switching threshold.</li></ul><p>Per-frame CSV data, summaries, a source manifest, and all figures are stored locally. TensorRT/TAO throughput tests will be added only after NVIDIA GPU access is restored.</p></section>"""
     alt_texts = {
+        "core": "角度误差随距离变化的核心曲线"
+        if chinese
+        else "Core median angular disagreement versus distance curve",
         "scatter": "逐帧角度差异与估计深度散点图"
         if chinese
         else "Per-frame angular disagreement versus estimated depth",
@@ -948,6 +1001,7 @@ def write_outputs(config_path: Path) -> Path:
     plot_valid = valid[valid["distance_bin"].astype(str).isin(eligible_labels)].copy()
 
     figure_paths = {
+        "core": figures_dir / "00_core_median_error_vs_distance.png",
         "scatter": figures_dir / "01_scatter_depth_error.png",
         "box": figures_dir / "02_boxplot_distance_bins.png",
         "session": figures_dir / "03_session_median_p95.png",
@@ -955,6 +1009,13 @@ def write_outputs(config_path: Path) -> Path:
         "mean_median": figures_dir / "05_mean_vs_median.png",
     }
     for chinese, suffix in ((False, ""), (True, "_CN")):
+        plot_core_distance_curve(
+            eligible_bin_summary,
+            figure_paths["core"].with_name(
+                f"00_core_median_error_vs_distance{suffix}.png"
+            ),
+            chinese,
+        )
         plot_scatter(
             valid,
             eligible_bin_summary,
@@ -997,6 +1058,7 @@ def write_outputs(config_path: Path) -> Path:
         thesis_figure_dir = _resolve(thesis_figure_dir_value)
         thesis_figure_dir.mkdir(parents=True, exist_ok=True)
         thesis_names = {
+            "core": "thesis_detector_distance_core_curve.png",
             "scatter": "thesis_detector_distance_scatter.png",
             "box": "thesis_detector_distance_boxplot.png",
             "paired": "thesis_detector_paired_difference.png",

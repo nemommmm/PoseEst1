@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>weekly_summary_20260727</title>
+<style>
+  :root {
+    --blue: #1f5f9e;
+    --light-blue: #eef6ff;
+    --green: #18794e;
+    --light-green: #eaf8f0;
+    --red: #b42318;
+    --light-red: #fff0ee;
+    --amber: #9a6700;
+    --light-amber: #fff8df;
+    --line: #d8e0e9;
+    --muted: #5d6b79;
+  }
+  * { box-sizing: border-box; }
+  body {
+    max-width: 1080px;
+    margin: 30px auto;
+    padding: 0 28px 50px;
+    color: #172033;
+    font: 15px/1.7 -apple-system, BlinkMacSystemFont, "Segoe UI", Arial, sans-serif;
+  }
+  h1 { color: #153f6c; border-bottom: 3px solid var(--blue); padding-bottom: 10px; }
+  h2 { color: #153f6c; border-left: 5px solid var(--blue); padding-left: 12px; margin-top: 42px; }
+  h3 { color: var(--blue); margin-top: 25px; }
+  a { color: var(--blue); }
+  .meta { color: var(--muted); }
+  .nav, .summary, .decision, .note {
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 18px 0;
+  }
+  .nav { background: #f1f5f9; }
+  .nav a { margin-right: 20px; text-decoration: none; font-weight: 600; }
+  .summary { background: var(--light-blue); border-left: 5px solid var(--blue); }
+  .decision { background: var(--light-green); border-left: 5px solid var(--green); }
+  .note { background: var(--light-amber); border-left: 5px solid var(--amber); }
+  .flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 18px 0;
+  }
+  .flow span {
+    padding: 9px 13px;
+    border: 1px solid #b9c9da;
+    border-radius: 7px;
+    background: #f7faff;
+    font-weight: 600;
+  }
+  .flow b { color: var(--blue); }
+  figure { margin: 24px 0; text-align: center; }
+  figure img { width: 100%; border: 1px solid var(--line); border-radius: 8px; }
+  figcaption { color: var(--muted); font-size: 13px; margin-top: 7px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: right; }
+  th { background: #eaf2fb; color: #153f6c; }
+  th:first-child, td:first-child { text-align: left; }
+  tr.baseline td { background: #f2f8ff; font-weight: 700; }
+  .good { color: var(--green); font-weight: 700; }
+  .bad { color: var(--red); font-weight: 700; }
+  .small { color: var(--muted); font-size: 13px; }
+  footer { margin-top: 45px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  @media (max-width: 700px) {
+    body { padding: 0 16px 35px; }
+    .nav a { display: block; margin: 4px 0; }
+  }
+</style>
+</head>
+<body>
+
+<h1>Stereo Pose Pipeline — Weekly Report</h1>
+<p class="meta"><strong>Date:</strong> 2026-07-27 &nbsp;·&nbsp; <strong>Author:</strong> Fanbo Meng &nbsp;·&nbsp; <strong>Project:</strong> Master Thesis</p>
+
+<div class="nav">
+  <a href="#distance">1. Distance and model selection</a>
+  <a href="#deployment">2. GPU deployment</a>
+  <a href="#nvidia">3. NVIDIA model matrix</a>
+</div>
+
+<div class="summary">
+  <strong>Summary of this week</strong>
+  <ul>
+    <li>The distance-binned box plots do not show a stable rule such as “use YOLO11L nearby and YOLOv8m far away”. I will therefore keep <strong>YOLOv8m</strong> as the default model.</li>
+    <li>The offline stereo pipeline was moved to an RTX A6000 cloud GPU. The accepted deterministic PyTorch YOLOv8m + SKT pipeline processes stored stereo video at approximately <strong>30–35 FPS</strong>.</li>
+    <li>NVIDIA monocular and dense-stereo models produced strong results in individual datasets, but none passed the combined accuracy, RULA, validity and real-time criteria across Fanbo3/4/7. The formal baseline therefore remains <strong>YOLOv8m + SKT</strong>.</li>
+  </ul>
+</div>
+
+<h2 id="distance">1. Angle disagreement versus distance and YOLO model selection</h2>
+
+<p>I compared YOLOv8m and YOLO11L in five distance intervals. For every common valid frame, I calculated the left- and right-hip angular disagreements against the FastSAM3D comparison trajectory and used the median of the two hips. FastSAM3D is treated as an external comparison trajectory, not absolute Ground Truth.</p>
+
+<figure>
+  <img src="../00_pose_pipeline_v2/runs/fastsam_hip_distance_boxplot_20260727/figures/hip_error_boxplot_by_distance.png" alt="YOLOv8m and YOLO11L bilateral hip disagreement box plots across distance intervals">
+  <figcaption>Blue: YOLOv8m. Red: YOLO11L. Lower boxes indicate smaller bilateral hip-angle disagreement against FastSAM3D. Only identical valid frames shared by both models enter each interval.</figcaption>
+</figure>
+
+<p>The result is not a smooth distance pattern. YOLOv8m is clearly better around 2.0–2.5 m and slightly better around 3.5–4.0 m, while YOLO11L has lower medians in the other three intervals. In addition, the boxes overlap substantially and the distance intervals contain different sessions, movements and viewpoints. Therefore, the apparent winner is not controlled by distance alone.</p>
+
+<div class="note">
+  This does not directly contradict the earlier distant Fanbo4 result where YOLOv8m was better: that experiment focused on the right elbow and stereo geometric consistency, whereas this figure uses bilateral hip angles against FastSAM3D across mixed sessions. Together they show that model performance also depends on the joint, movement and viewpoint.
+</div>
+
+<div class="decision">
+  <strong>Decision:</strong> continue using <strong>YOLOv8m</strong>. YOLO11L can be better in some intervals, but the current data do not provide a reliable distance threshold for switching models. YOLOv8m is also smaller, faster and was more robust in the broader pipeline ablation. A dynamic switch should only be reconsidered after recording the same movement and viewpoint at several controlled distances.
+</div>
+
+<p class="small">Full evidence: <a href="../00_pose_pipeline_v2/runs/fastsam_hip_distance_boxplot_20260727/report.html">FastSAM3D-referenced hip-distance report</a>.</p>
+
+<h2 id="deployment">2. Moving the offline pipeline to a cloud GPU</h2>
+
+<p>The original code processed recorded stereo videos offline on the local CPU. I rebuilt the environment on a RunPod NVIDIA RTX A6000 with 48 GB VRAM, CUDA-enabled PyTorch, TensorRT and DeepStream, and added a reproducible remote workflow.</p>
+
+<div class="flow">
+  <span>Recorded left/right video</span><b>→</b>
+  <span>GPU video decode</span><b>→</b>
+  <span>GPU 2D pose inference</span><b>→</b>
+  <span>SKT geometry</span><b>→</b>
+  <span>Angles and RULA</span>
+</div>
+
+<h3>Main code and deployment changes</h3>
+<ul>
+  <li><strong>CUDA execution:</strong> the pose model and input tensors are moved to the GPU; inference runs without gradient tracking, and tensors are converted back to NumPy only when the geometry stage requires CPU data.</li>
+  <li><strong>Reliable timing:</strong> warm-up frames and repeated runs were added, with decode, pose inference, 3D geometry and complete-pipeline time measured separately. GPU synchronization is used when timing asynchronous CUDA work.</li>
+  <li><strong>Backend adapters and equivalence checks:</strong> PyTorch, TensorRT FP32 and TensorRT FP16 were connected to the same downstream output format. A candidate backend is rejected when its 2D/3D/angle output changes beyond the frozen tolerance, even if model-only inference is faster.</li>
+  <li><strong>Video and remote workflow:</strong> NVDEC/DeepStream-compatible inputs, environment bootstrap scripts, manifests, SHA256 records, SSH/rsync and automatic result download were added so that experiments can be reconstructed after a Pod migration.</li>
+</ul>
+
+<div class="table-wrap">
+<table>
+  <tr><th>Route</th><th>Observed result</th><th>Decision</th></tr>
+  <tr class="baseline"><td>PyTorch FP32 + YOLOv8m + SKT</td><td>Approximately 30–35 FPS; deterministic reconstruction reproduced</td><td class="good">Accepted baseline</td></tr>
+  <tr><td>TensorRT FP32 / FP16</td><td>Model latency sometimes decreased, but complete stereo throughput did not improve consistently and the reconstruction changed</td><td class="bad">Rejected</td></tr>
+  <tr><td>NVDEC proxy</td><td>Decode-only speed improved by 1.512×, but the proxy changed the pose/reconstruction output</td><td class="bad">Rejected as formal input</td></tr>
+</table>
+</div>
+
+<div class="note">
+  The reported 30–35 FPS is the processing speed for two stored video files on an A6000, not yet a measured live-camera frame rate. The accepted implementation is still deterministic PyTorch because a faster backend is not useful if it changes the ergonomic result.
+</div>
+
+<p class="small">Full evidence: <a href="../docs/gpu_deployment_note.html">A6000 deployment and model-admission note</a>.</p>
+
+<h2 id="nvidia">3. Robust per-dataset NVIDIA model comparison</h2>
+
+<p>I then compared representative NVIDIA monocular and dense-stereo routes on Fanbo3, Fanbo4 and Fanbo7. All three datasets use the FastSAM3D comparison trajectory with fixed offsets. Fanbo3 reports the mean of eight ergonomic joint-angle metrics; Fanbo4 and Fanbo7 report RightElbow. The table below shows median absolute angular disagreement.</p>
+
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>Representative route</th>
+    <th>Fanbo3<br>median</th>
+    <th>Fanbo4<br>median</th>
+    <th>Fanbo7<br>median</th>
+    <th>A6000 FPS</th>
+  </tr>
+  <tr class="baseline">
+    <td>YOLOv8m + SKT baseline</td><td>11.42°</td><td>10.88°</td><td>2.72°</td><td>33–35</td>
+  </tr>
+  <tr>
+    <td>BodyPose3DNet Accuracy — monocular left</td><td class="good">7.35°</td><td class="bad">29.61°</td><td class="good">1.85°</td><td>Internal only*</td>
+  </tr>
+  <tr>
+    <td>FoundationStereo ViT-L — 32 iterations</td><td>10.46°</td><td class="good">2.94°</td><td class="good">2.47°</td><td class="bad">0.73</td>
+  </tr>
+  <tr>
+    <td>Fast-FoundationStereo — 4 iterations</td><td>10.63°</td><td class="good">4.68°</td><td class="good">2.39°</td><td class="bad">6.42</td>
+  </tr>
+</table>
+</div>
+
+<p class="small">* BodyPose3DNet is an internal DeepStream single-stream application measurement and is not directly equivalent to the complete stereo SKT route. Exact outward-facing SDK benchmark use remains subject to NVIDIA licence review.</p>
+
+<ul>
+  <li><strong>BodyPose3DNet</strong> performed well on Fanbo3 and Fanbo7 but failed badly on distant Fanbo4, so its cross-distance robustness is insufficient.</li>
+  <li><strong>FoundationStereo</strong> was the strongest distant-view result: Fanbo4 decreased from 10.88° to 2.94°. However, the complete route ran at only 0.73 FPS and its Fanbo3 RULA-like agreement decreased.</li>
+  <li><strong>Fast-FoundationStereo</strong> retained most of the Fanbo4/7 improvement but reached only 6.42 FPS, below the 12.5 FPS real-time target.</li>
+</ul>
+
+<div class="decision">
+  <strong>Final selection:</strong> no new candidate passed every frozen cross-dataset gate. YOLOv8m + SKT remains the deployment baseline because it is the only route that is currently robust across all three datasets and real-time on the A6000. FoundationStereo is retained as a promising offline/distant-view research direction.
+</div>
+
+<p class="small">Full evidence: <a href="../00_pose_pipeline_v2/runs/nvidia_pose_matrix/fanbo347_nvidia_pose_matrix__20260726__c5de117/report.html">Fanbo3/4/7 NVIDIA model-matrix report</a>.</p>
+
+<footer>Generated for the weekly project discussion on 2026-07-27.</footer>
+</body>
+</html>

@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>weekly_summary_20260727_CN</title>
+<style>
+  :root {
+    --blue: #1f5f9e;
+    --light-blue: #eef6ff;
+    --green: #18794e;
+    --light-green: #eaf8f0;
+    --red: #b42318;
+    --light-amber: #fff8df;
+    --amber: #9a6700;
+    --line: #d8e0e9;
+    --muted: #5d6b79;
+  }
+  * { box-sizing: border-box; }
+  body {
+    max-width: 1080px;
+    margin: 30px auto;
+    padding: 0 28px 50px;
+    color: #172033;
+    font: 15px/1.75 -apple-system, BlinkMacSystemFont, "PingFang SC", "Microsoft YaHei", sans-serif;
+  }
+  h1 { color: #153f6c; border-bottom: 3px solid var(--blue); padding-bottom: 10px; }
+  h2 { color: #153f6c; border-left: 5px solid var(--blue); padding-left: 12px; margin-top: 42px; }
+  h3 { color: var(--blue); margin-top: 25px; }
+  a { color: var(--blue); }
+  .meta { color: var(--muted); }
+  .nav, .summary, .decision, .note {
+    border-radius: 8px;
+    padding: 14px 18px;
+    margin: 18px 0;
+  }
+  .nav { background: #f1f5f9; }
+  .nav a { margin-right: 20px; text-decoration: none; font-weight: 600; }
+  .summary { background: var(--light-blue); border-left: 5px solid var(--blue); }
+  .decision { background: var(--light-green); border-left: 5px solid var(--green); }
+  .note { background: var(--light-amber); border-left: 5px solid var(--amber); }
+  .flow {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin: 18px 0;
+  }
+  .flow span {
+    padding: 9px 13px;
+    border: 1px solid #b9c9da;
+    border-radius: 7px;
+    background: #f7faff;
+    font-weight: 600;
+  }
+  .flow b { color: var(--blue); }
+  figure { margin: 24px 0; text-align: center; }
+  figure img { width: 100%; border: 1px solid var(--line); border-radius: 8px; }
+  figcaption { color: var(--muted); font-size: 13px; margin-top: 7px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 13.5px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: right; }
+  th { background: #eaf2fb; color: #153f6c; }
+  th:first-child, td:first-child { text-align: left; }
+  tr.baseline td { background: #f2f8ff; font-weight: 700; }
+  .good { color: var(--green); font-weight: 700; }
+  .bad { color: var(--red); font-weight: 700; }
+  .small { color: var(--muted); font-size: 13px; }
+  footer { margin-top: 45px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
+  @media (max-width: 700px) {
+    body { padding: 0 16px 35px; }
+    .nav a { display: block; margin: 4px 0; }
+  }
+</style>
+</head>
+<body>
+
+<h1>双目姿态重建项目 — Weekly Summary</h1>
+<p class="meta"><strong>日期：</strong>2026-07-27 &nbsp;·&nbsp; <strong>作者：</strong>Fanbo Meng &nbsp;·&nbsp; <strong>项目：</strong>Master Thesis</p>
+
+<div class="nav">
+  <a href="#distance">1. 距离与模型选择</a>
+  <a href="#deployment">2. GPU部署</a>
+  <a href="#nvidia">3. NVIDIA模型矩阵</a>
+</div>
+
+<div class="summary">
+  <strong>本周总结</strong>
+  <ul>
+    <li>按距离绘制的箱线图没有显示出稳定的“近处使用YOLO11L、远处使用YOLOv8m”规律，因此目前继续选择更稳健的<strong>YOLOv8m</strong>。</li>
+    <li>离线双目代码已经迁移到RTX A6000云端GPU。通过验证的确定性PyTorch YOLOv8m + SKT，在两路存储视频上约为<strong>30–35 FPS</strong>。</li>
+    <li>NVIDIA单目和稠密双目模型在个别数据集上表现很好，但没有候选同时通过Fanbo3/4/7的精度、RULA、有效率和实时门槛，因此正式基线仍为<strong>YOLOv8m + SKT</strong>。</li>
+  </ul>
+</div>
+
+<h2 id="distance">1. 角度差随距离变化与YOLO模型选择</h2>
+
+<p>我把YOLOv8m和YOLO11L的结果按照距离分成五个区间。每个共同有效帧分别计算左右髋相对FastSAM3D comparison trajectory的绝对角度差，再取两侧中位数。FastSAM3D在这里是外部比较轨迹，不是绝对Ground Truth。</p>
+
+<figure>
+  <img src="../00_pose_pipeline_v2/runs/fastsam_hip_distance_boxplot_20260727/figures/hip_error_boxplot_by_distance_CN.png" alt="YOLOv8m和YOLO11L在不同距离区间的双髋角度差箱线图">
+  <figcaption>蓝色为YOLOv8m，红色为YOLO11L。箱体越低，表示与FastSAM3D的双髋角度差越小。每个距离区间只使用两个模型都有效的相同帧。</figcaption>
+</figure>
+
+<p>结果没有形成平滑的距离规律：YOLOv8m在2.0–2.5 m明显更好，在3.5–4.0 m略好；YOLO11L在另外三个区间的中位数更低。但是两类箱体大量重叠，而且各距离区间包含不同session、动作和视角。因此，模型胜负不只是由距离决定的。</p>
+
+<div class="note">
+  这与之前“远距Fanbo4中YOLOv8m更好”的结论不直接矛盾：之前主要检查右肘和双目几何一致性，这张图检查的是混合session中相对FastSAM3D的双髋角度。两者合起来说明，模型表现还会受到身体部位、动作和视角影响。
+</div>
+
+<div class="decision">
+  <strong>当前决定：</strong>继续使用<strong>YOLOv8m</strong>。YOLO11L在部分区间确实更好，但现有数据无法给出可靠的距离切换阈值。YOLOv8m本身更小、更快，并且在前面的完整Pipeline消融实验中更稳健。只有以后采集“相同动作、相同视角、不同距离”的受控数据，才适合重新讨论动态切换。
+</div>
+
+<p class="small">完整证据：<a href="../00_pose_pipeline_v2/runs/fastsam_hip_distance_boxplot_20260727/report_CN.html">FastSAM3D髋部误差—距离报告</a>。</p>
+
+<h2 id="deployment">2. 将本地离线代码迁移到云端GPU</h2>
+
+<p>原始代码主要在本地CPU上处理已经录制好的双目视频。本周在RunPod NVIDIA RTX A6000（48 GB显存）上重建了CUDA PyTorch、TensorRT和DeepStream环境，并增加了可重复的远程运行流程。</p>
+
+<div class="flow">
+  <span>左右存储视频</span><b>→</b>
+  <span>GPU视频解码</span><b>→</b>
+  <span>GPU 2D姿态识别</span><b>→</b>
+  <span>SKT几何重建</span><b>→</b>
+  <span>角度与RULA</span>
+</div>
+
+<h3>代码和部署层面的主要修改</h3>
+<ul>
+  <li><strong>CUDA运行：</strong>姿态模型和输入Tensor放到GPU上，在不计算梯度的模式下推理；只有进入CPU几何计算阶段时才把最终结果转换为NumPy。</li>
+  <li><strong>可靠测速：</strong>加入warm-up和多次重复，把视频解码、姿态推理、3D几何和完整Pipeline分别计时；测量异步CUDA任务时进行GPU同步。</li>
+  <li><strong>统一后端和等价性检查：</strong>PyTorch、TensorRT FP32和FP16接到同一输出接口。即使模型推理变快，只要2D、3D或角度结果超过冻结容差，就不允许替换正式基线。</li>
+  <li><strong>视频与远程流程：</strong>增加NVDEC/DeepStream输入测试、环境重建脚本、manifest和SHA256记录，并使用SSH/rsync自动下载结果，使Pod迁移后仍能复现实验。</li>
+</ul>
+
+<div class="table-wrap">
+<table>
+  <tr><th>路线</th><th>测试结果</th><th>决定</th></tr>
+  <tr class="baseline"><td>PyTorch FP32 + YOLOv8m + SKT</td><td>约30–35 FPS；能够完全复现已接受的确定性重建</td><td class="good">保留为正式基线</td></tr>
+  <tr><td>TensorRT FP32 / FP16</td><td>模型阶段有时更快，但完整双目吞吐没有稳定提高，而且重建结果发生变化</td><td class="bad">拒绝</td></tr>
+  <tr><td>NVDEC代理视频</td><td>纯解码提高1.512×，但代理视频改变了姿态和重建结果</td><td class="bad">不能作为正式输入</td></tr>
+</table>
+</div>
+
+<div class="note">
+  30–35 FPS表示A6000处理两路存储视频文件的速度，还不是实机摄像头的live FPS。当前继续使用确定性PyTorch，是因为如果GPU后端改变了最终人体工程学结果，那么仅仅模型推理更快并没有实际意义。
+</div>
+
+<p class="small">完整证据：<a href="../docs/gpu_deployment_note_CN.html">A6000部署与模型准入报告</a>。</p>
+
+<h2 id="nvidia">3. NVIDIA模型的逐数据集稳健指标</h2>
+
+<p>随后在Fanbo3、Fanbo4和Fanbo7上比较了有代表性的NVIDIA单目和稠密双目路线。三套数据都使用固定时间偏移的FastSAM3D comparison trajectory。Fanbo3汇总八个工效学关节角；Fanbo4和Fanbo7评估RightElbow。下表展示绝对角度差的中位数。</p>
+
+<div class="table-wrap">
+<table>
+  <tr>
+    <th>代表路线</th>
+    <th>Fanbo3<br>Median</th>
+    <th>Fanbo4<br>Median</th>
+    <th>Fanbo7<br>Median</th>
+    <th>A6000 FPS</th>
+  </tr>
+  <tr class="baseline">
+    <td>YOLOv8m + SKT基线</td><td>11.42°</td><td>10.88°</td><td>2.72°</td><td>33–35</td>
+  </tr>
+  <tr>
+    <td>BodyPose3DNet Accuracy — 单目左视图</td><td class="good">7.35°</td><td class="bad">29.61°</td><td class="good">1.85°</td><td>60–70*</td>
+  </tr>
+  <tr>
+    <td>FoundationStereo ViT-L — 32次迭代</td><td>10.46°</td><td class="good">2.94°</td><td class="good">2.47°</td><td class="bad">0.73</td>
+  </tr>
+  <tr>
+    <td>Fast-FoundationStereo — 4次迭代</td><td>10.63°</td><td class="good">4.68°</td><td class="good">2.39°</td><td class="bad">6.42</td>
+  </tr>
+</table>
+</div>
+
+<p class="small">* BodyPose3DNet是内部DeepStream单流完整应用测速，不能直接等同于完整双目SKT Pipeline；其精确SDK性能数字对外使用前仍需检查NVIDIA许可。</p>
+
+<ul>
+  <li><strong>BodyPose3DNet</strong>在Fanbo3和Fanbo7很好，但在远距离Fanbo4明显失败，说明跨距离鲁棒性不足。</li>
+  <li><strong>FoundationStereo</strong>在远距Fanbo4最有价值：Median从10.88°降到2.94°。但是完整路线只有0.73 FPS，而且Fanbo3的RULA-like一致率下降。</li>
+  <li><strong>Fast-FoundationStereo</strong>保留了Fanbo4/7的大部分改善，但只有6.42 FPS，仍低于12.5 FPS实时目标。</li>
+</ul>
+
+<div class="decision">
+  <strong>最终选型：</strong>没有新候选同时通过三个数据集的冻结准入规则。YOLOv8m + SKT仍然是正式部署基线，因为它是目前唯一同时具有跨数据稳定性和A6000实时性能的路线。FoundationStereo保留为远距离和离线高精度方向继续研究。
+</div>
+
+<p class="small">完整证据：<a href="../00_pose_pipeline_v2/runs/nvidia_pose_matrix/fanbo347_nvidia_pose_matrix__20260726__c5de117/report_CN.html">Fanbo3/4/7 NVIDIA模型矩阵报告</a>。</p>
+
+<footer>生成用于2026-07-27项目周会讨论。</footer>
+</body>
+</html>

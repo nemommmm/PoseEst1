@@ -1,0 +1,64 @@
+analysis:
+  title: YOLOv8m versus YOLO11L dynamic-switch pattern analysis
+  output_dir: 00_pose_pipeline_v2/runs/dynamic_model_switch_analysis_20260727
+  window_seconds: 1.0
+  min_valid_frames_per_window: 5
+  min_common_angles_per_frame: 4
+  motion_thresholds_deg_s: [5.0, 20.0]
+  distance_bin_width_m: 0.5
+  pixel_bin_count: 4
+  minimum_windows_per_plot_bin: 5
+  minimum_windows_per_heatmap_cell: 3
+  minimum_oracle_gain_percent: 5.0
+  minimum_switch_gain_percent: 5.0
+  maximum_group_degradation_deg: 1.0
+  reference_label: Xsens-derived reference
+
+pairs:
+  - name: 2025 Ergonomics
+    session_id: ergonomics_2025
+    validation_group: ergonomics_2025
+    base_config: 00_pose_pipeline_v2/configs/current_2025_ergonomics.yaml
+    fixed_offset_seconds: 17.27
+    yolov8m_npz: 00_pose_pipeline_v2/runs/current_2025_ergonomics_yolov8m_v2_full_skt/skt_pose_optimized.npz
+    yolo11l_npz: 00_pose_pipeline_v2/runs/current_2025_ergonomics_yolo11l_full_skt/skt_pose_optimized.npz
+
+  - name: Fanbo3 A255
+    session_id: fanbo3_a255
+    validation_group: fanbo3
+    base_config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo3_v2_yolov8m.yaml
+    fixed_offset_seconds: 2.00
+    yolov8m_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo3_v2_yolov8m/skt_pose_optimized.npz
+    yolo11l_npz: 00_pose_pipeline_v2/runs/assar2026_fanbo3_a255_walking/skt_pose_optimized.npz
+
+  - name: Fanbo4 A257
+    session_id: fanbo4_a257
+    validation_group: fanbo4
+    base_config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo4_v2_yolov8m.yaml
+    fixed_offset_seconds: 3.72
+    yolov8m_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo4_v2_yolov8m/skt_pose_optimized.npz
+    yolo11l_npz: 00_pose_pipeline_v2/runs/assar2026_fanbo4_a257_stage1_geometry/skt_pose_optimized.npz
+
+  - name: Fanbo7 A257
+    session_id: fanbo7_a257
+    validation_group: fanbo7
+    base_config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo7_v2_yolov8m.yaml
+    fixed_offset_seconds: 6.23
+    yolov8m_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo7_v2_yolov8m/skt_pose_optimized.npz
+    yolo11l_npz: 00_pose_pipeline_v2/runs/assar2026_fanbo7_a257_stage1_geometry/skt_pose_optimized.npz
+
+  - name: Fanbo9 A255
+    session_id: fanbo9_a255
+    validation_group: fanbo9
+    base_config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a255_v2_yolov8m.yaml
+    fixed_offset_seconds: -5.44
+    yolov8m_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo9_a255_v2_yolov8m/skt_pose_optimized.npz
+    yolo11l_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo9_a255_v2_yolo11l/skt_pose_optimized.npz
+
+  - name: Fanbo9 A257
+    session_id: fanbo9_a257
+    validation_group: fanbo9
+    base_config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a257_v2_yolov8m.yaml
+    fixed_offset_seconds: -5.99
+    yolov8m_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo9_a257_v2_yolov8m/skt_pose_optimized.npz
+    yolo11l_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo9_a257_v2_yolo11l/skt_pose_optimized.npz

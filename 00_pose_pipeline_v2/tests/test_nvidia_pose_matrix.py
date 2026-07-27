@@ -35,8 +35,10 @@ from run_nvidia_bodypose3d_matrix import create_warmup_video  # noqa: E402
 from remote_gpu_pose_matrix import rsync_remote_destination  # noqa: E402
 from generate_nvidia_pose_matrix_report import (  # noqa: E402
     assess_method_gates,
+    collect_dataset_fps,
     collect_evaluations,
     reconcile_repaired_evaluation_statuses,
+    relative_score_class,
 )
 
 
@@ -251,6 +253,80 @@ class NvidiaPoseMatrixTest(unittest.TestCase):
             rows = collect_evaluations(root)
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["dataset"], "Fanbo3")
+
+    def test_report_collects_dataset_fps_and_conservative_stereo(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            baseline = root / "baseline/fanbo3/benchmark.json"
+            baseline.parent.mkdir(parents=True)
+            baseline.write_text(
+                json.dumps({"online_fps": 30.0}),
+                encoding="utf-8",
+            )
+            selection = {
+                "accepted": {
+                    "fanbo3": {"synchronized_frames": 100},
+                }
+            }
+            (root / "input_selection.json").write_text(
+                json.dumps(selection),
+                encoding="utf-8",
+            )
+            body_root = root / "bodypose3d"
+            body_root.mkdir()
+            summary = {
+                "results": [
+                    {
+                        "dataset": "fanbo3",
+                        "mode": "accuracy",
+                        "side": "left",
+                        "trials": [{"elapsed_seconds": 2.0}],
+                    },
+                    {
+                        "dataset": "fanbo3",
+                        "mode": "accuracy",
+                        "side": "right",
+                        "trials": [{"elapsed_seconds": 4.0}],
+                    },
+                ]
+            }
+            (body_root / "bodypose3d_run_summary.json").write_text(
+                json.dumps(summary),
+                encoding="utf-8",
+            )
+            values = collect_dataset_fps(root)
+            self.assertEqual(
+                values[("YOLOv8m-PyTorch-SKT", "Fanbo3")],
+                30.0,
+            )
+            self.assertEqual(
+                values[
+                    (
+                        "BodyPose3DNet-accuracy_monocular_left",
+                        "Fanbo3",
+                    )
+                ],
+                50.0,
+            )
+            self.assertAlmostEqual(
+                values[("BodyPose3DNet-accuracy-stereo", "Fanbo3")],
+                1.0 / (1.0 / 50.0 + 1.0 / 25.0),
+            )
+
+    def test_report_score_colors_respect_metric_direction(self) -> None:
+        values = [1.0, 2.0, 3.0, 4.0]
+        self.assertEqual(
+            relative_score_class(1.0, values, higher_is_better=False),
+            "score-good",
+        )
+        self.assertEqual(
+            relative_score_class(4.0, values, higher_is_better=False),
+            "score-bad",
+        )
+        self.assertEqual(
+            relative_score_class(4.0, values, higher_is_better=True),
+            "score-good",
+        )
 
     def test_report_gate_rejects_missing_dataset_even_if_fast(self) -> None:
         evaluations = [

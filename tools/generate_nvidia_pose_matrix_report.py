@@ -31,6 +31,8 @@ section{background:#fff;border:1px solid var(--line);border-radius:13px;padding:
 h2{margin:0 0 14px;color:#102a43;font-size:23px}h3{margin:20px 0 8px}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:11px;margin:15px 0}
 .card{border:1px solid var(--line);border-radius:9px;padding:13px}.metric{font-size:23px;font-weight:750;color:var(--blue)}
 table{width:100%;border-collapse:collapse;margin:13px 0 19px;font-size:13px}th{background:#eef4ff;text-align:left}th,td{border:1px solid var(--line);padding:8px;vertical-align:top}tr:nth-child(even) td{background:#fafbfd}
+.score-good{background:#dcfce7!important;color:#166534;font-weight:750}.score-mid{background:#fef3c7!important;color:#92400e;font-weight:700}.score-bad{background:#fee2e2!important;color:#991b1b;font-weight:750}
+.legend{display:flex;flex-wrap:wrap;gap:12px;margin:10px 0 15px;color:var(--muted);font-size:13px}.legend span{display:inline-flex;align-items:center;gap:5px}.swatch{width:13px;height:13px;border-radius:3px;display:inline-block}.swatch.good{background:#dcfce7}.swatch.mid{background:#fef3c7}.swatch.bad{background:#fee2e2}
 .ok{color:var(--green);font-weight:700}.bad{color:var(--red);font-weight:700}.blocked{color:var(--amber);font-weight:700}
 .callout{border-left:4px solid var(--blue);background:#f1f6ff;padding:12px 15px;margin:15px 0}
 figure{margin:18px 0}figure img{width:100%;border:1px solid var(--line);border-radius:9px}figcaption{font-size:13px;color:var(--muted)}
@@ -90,7 +92,7 @@ def collect_evaluations(run_dir: Path) -> list[dict[str, Any]]:
             for row in rows
         )
         candidate_mae = mean_finite(
-            row["candidate"]["absolute_error_deg"]["mean"]
+            row["candidate"]["absolute_error_deg"].get("mean")
             for row in rows
         )
         baseline_median = mean_finite(
@@ -181,6 +183,70 @@ def collect_timings(run_dir: Path) -> dict[str, list[dict[str, float]]]:
                     ),
                 }
             )
+    return result
+
+
+def collect_dataset_fps(run_dir: Path) -> dict[tuple[str, str], float]:
+    """Collect per-dataset complete-pipeline FPS for report tables."""
+    result: dict[tuple[str, str], float] = {}
+    for path in sorted((run_dir / "baseline").glob("*/benchmark.json")):
+        payload = load_json(path)
+        fps = payload.get("online_fps")
+        if fps is not None:
+            result[
+                ("YOLOv8m-PyTorch-SKT", display_dataset(path.parent.name))
+            ] = float(fps)
+
+    dense_root = run_dir / "dense_stereo" / "full"
+    for path in sorted(dense_root.glob("*/*/timing_internal.json")):
+        payload = load_json(path)
+        metadata_path = path.parent / "run_metadata.json"
+        metadata = load_json(metadata_path) if metadata_path.is_file() else {}
+        candidate = metadata.get("candidate_name")
+        fps = payload.get("complete_pipeline_fps")
+        if candidate is not None and fps is not None:
+            result[
+                (str(candidate), display_dataset(path.parents[1].name))
+            ] = float(fps)
+
+    summary_path = run_dir / "bodypose3d" / "bodypose3d_run_summary.json"
+    selection_path = run_dir / "input_selection.json"
+    if not summary_path.is_file() or not selection_path.is_file():
+        return result
+    summary = load_json(summary_path)
+    selection = load_json(selection_path).get("accepted", {})
+    bodypose_by_route: dict[tuple[str, str, str], float] = {}
+    for record in summary.get("results", []):
+        dataset_key = str(record.get("dataset", ""))
+        dataset_selection = selection.get(dataset_key, {})
+        frame_count = dataset_selection.get("synchronized_frames")
+        trials = record.get("trials", [])
+        trial_fps = [
+            float(frame_count) / float(trial["elapsed_seconds"])
+            for trial in trials
+            if frame_count is not None
+            and float(trial.get("elapsed_seconds", 0.0)) > 0.0
+        ]
+        if not trial_fps:
+            continue
+        dataset = display_dataset(dataset_key)
+        mode = str(record.get("mode", ""))
+        side = str(record.get("side", ""))
+        fps = float(np.median(np.asarray(trial_fps, dtype=np.float64)))
+        bodypose_by_route[(dataset, mode, side)] = fps
+        result[
+            (f"BodyPose3DNet-{mode}_monocular_{side}", dataset)
+        ] = fps
+    for dataset in ("Fanbo3", "Fanbo4", "Fanbo7"):
+        for mode in ("accuracy", "performance"):
+            left = bodypose_by_route.get((dataset, mode, "left"))
+            right = bodypose_by_route.get((dataset, mode, "right"))
+            if left is None or right is None:
+                continue
+            conservative_stereo_fps = 1.0 / (1.0 / left + 1.0 / right)
+            result[
+                (f"BodyPose3DNet-{mode}-stereo", dataset)
+            ] = conservative_stereo_fps
     return result
 
 
@@ -521,8 +587,56 @@ def display_candidate(candidate: str, chinese: bool) -> str:
     return candidate
 
 
+def relative_score_class(
+    value: float | None,
+    values: Sequence[float | None],
+    *,
+    higher_is_better: bool,
+) -> str:
+    """Classify one value into the best, middle, or worst relative third."""
+    if value is None or not np.isfinite(value):
+        return ""
+    unique = sorted(
+        {
+            float(item)
+            for item in values
+            if item is not None and np.isfinite(item)
+        },
+        reverse=higher_is_better,
+    )
+    if len(unique) <= 1:
+        return "score-mid"
+    rank = unique.index(float(value)) / (len(unique) - 1)
+    if rank <= 1.0 / 3.0:
+        return "score-good"
+    if rank >= 2.0 / 3.0:
+        return "score-bad"
+    return "score-mid"
+
+
+def score_cell(
+    value: float | None,
+    values: Sequence[float | None],
+    *,
+    higher_is_better: bool,
+    digits: int = 2,
+    suffix: str = "",
+) -> str:
+    """Render one color-coded relative score cell."""
+    class_name = relative_score_class(
+        value,
+        values,
+        higher_is_better=higher_is_better,
+    )
+    rendered = fmt(value, digits)
+    if value is not None:
+        rendered += suffix
+    return f"<td class='{class_name}'>{rendered}</td>"
+
+
 def dataset_metric_tables(
     evaluations: Sequence[dict[str, Any]],
+    dataset_fps: dict[tuple[str, str], float],
     chinese: bool,
 ) -> str:
     """Render one robust-metric table per dataset with SKT first."""
@@ -552,43 +666,66 @@ def dataset_metric_tables(
             if angles
             else "—"
         )
+        mae_values = [row["mae"] for row in dataset_rows]
+        median_values = [row["median"] for row in dataset_rows]
+        p95_values = [row["p95"] for row in dataset_rows]
+        fps_values = [
+            (
+                None
+                if (
+                    not chinese
+                    and str(row["candidate"]).startswith("BodyPose3DNet-")
+                )
+                else dataset_fps.get(
+                    (str(row["candidate"]), str(row["dataset"]))
+                )
+            )
+            for row in dataset_rows
+        ]
         rows = []
-        for row in dataset_rows:
+        for row, fps in zip(dataset_rows, fps_values, strict=True):
             candidate = display_candidate(str(row["candidate"]), chinese)
             candidate_cell = html.escape(candidate)
             if is_skt_baseline(str(row["candidate"])):
                 candidate_cell = f"<strong>{candidate_cell}</strong>"
+            fps_cell = score_cell(
+                fps,
+                fps_values,
+                higher_is_better=True,
+                digits=1,
+                suffix="*" if str(row["candidate"]).startswith(
+                    "BodyPose3DNet-"
+                ) else "",
+            )
+            if (
+                not chinese
+                and str(row["candidate"]).startswith("BodyPose3DNet-")
+            ):
+                fps_cell = "<td>internal only*</td>"
             rows.append(
                 "<tr>"
                 f"<td>{candidate_cell}</td>"
-                f"<td>{fmt(row['mae'])}</td>"
-                f"<td>{fmt(row['median'])}</td>"
-                f"<td>{fmt(row['p95'])}</td>"
-                f"<td>{fmt(row['valid_ratio'], 3)}</td>"
-                f"<td>{fmt(row['rula'], 3)}</td>"
-                f"<td>{row['jumps']}</td>"
-                f"<td>{fmt_percent(row['improvement'])}</td>"
+                f"{score_cell(row['mae'], mae_values, higher_is_better=False)}"
+                f"{score_cell(row['median'], median_values, higher_is_better=False)}"
+                f"{score_cell(row['p95'], p95_values, higher_is_better=False)}"
+                f"{fps_cell}"
                 "</tr>"
             )
         comparison_label = "对比参考" if chinese else "Comparison reference"
         scope_label = "评价角度" if chinese else "Evaluated angles"
-        improvement_label = (
-            "Median 相对 SKT 改善"
-            if chinese
-            else "Median improvement vs SKT"
-        )
+        label_separator = "：" if chinese else ": "
+        field_separator = "；" if chinese else "; "
         tables.append(
             f"<h3>{dataset}</h3>"
-            f"<p><strong>{comparison_label}：</strong>"
-            f"{html.escape(reference_label)}；"
-            f"<strong>{scope_label}：</strong>{html.escape(angle_scope)}</p>"
+            f"<p><strong>{comparison_label}{label_separator}</strong>"
+            f"{html.escape(reference_label)}{field_separator}"
+            f"<strong>{scope_label}{label_separator}</strong>"
+            f"{html.escape(angle_scope)}</p>"
             "<table><tr>"
             f"<th>{'候选' if chinese else 'Candidate'}</th>"
             "<th>MAE °</th><th>Median °</th><th>p95 °</th>"
-            f"<th>{'有效率' if chinese else 'Valid ratio'}</th>"
-            f"<th>{'RULA一致率' if chinese else 'RULA agreement'}</th>"
-            f"<th>{'&gt;10°跳变' if chinese else '&gt;10° jumps'}</th>"
-            f"<th>{improvement_label}</th></tr>{''.join(rows)}</table>"
+            "<th>FPS</th></tr>"
+            f"{''.join(rows)}</table>"
         )
     return "".join(tables)
 
@@ -811,6 +948,7 @@ def build_report(
     run_dir: Path,
     evaluations: Sequence[dict[str, Any]],
     methods: Sequence[dict[str, Any]],
+    dataset_fps: dict[tuple[str, str], float],
     charts: dict[str, Path],
     chinese: bool,
 ) -> str:
@@ -828,17 +966,19 @@ def build_report(
 <div class="cards"><div class="card"><div class="metric">{completed}</div>成功的数据集—候选评估单元</div><div class="card"><div class="metric">{html.escape(best_name)}</div>按预设门槛得到的正式选择</div><div class="card"><div class="metric">12.5 fps</div>完整 Pipeline 实时门槛</div></div>
 <div class="callout"><strong>选型结论：</strong>{html.escape(recommendation)}</div>
 {notable_findings(evaluations, methods, True)}
-<div class="callout">Xsens 仅作为 Xsens-derived reference / external comparison system；Fanbo4/7 使用 FastSAM3D comparison trajectory。没有为候选重新搜索时间偏移或手动挑选较好视角。</div></section>
+<div class="callout">Fanbo3/4/7 均使用 FastSAM3D comparison trajectory；它是外部比较轨迹，不是绝对 Ground Truth。没有为候选重新搜索时间偏移或手动挑选较好视角。</div></section>
 <section id="availability"><h2>2. NVIDIA 路线可用性</h2><table><tr><th>路线</th><th>状态</th><th>含义</th></tr>{blocked}</table>
 <p>BodyPoseNet 2D 和 Maxine 的阻塞会被单独记录，不会被写成“模型精度失败”。BodyPose3DNet、FoundationStereo 与 Fast-FoundationStereo 使用官方仓库/权重实测。</p></section>
 <section id="results"><h2>3. 逐数据集稳健指标</h2>
-<p>每个数据集单独展示；YOLOv8m + SKT 固定为第一行基线。MAE 是绝对角度差的平均值，Median 是绝对角度差的中位数。</p>
-{dataset_metric_tables(evaluations, True)}</section>
+<p>每个数据集单独展示；YOLOv8m + SKT 固定为第一行基线。误差越低越好，FPS 越高越好。</p>
+<div class="legend"><span><i class="swatch good"></i>相对较好（前1/3）</span><span><i class="swatch mid"></i>中间（中间1/3）</span><span><i class="swatch bad"></i>相对较差（后1/3）</span></div>
+{dataset_metric_tables(evaluations, dataset_fps, True)}
+<p><small>* BodyPose3DNet 单目 FPS 为官方 DeepStream 单流完整应用实测；双目 FPS 是根据左右两路顺序处理时间计算的保守吞吐量。其他 FPS 为相应完整 Pipeline 实测。</small></p></section>
 <section id="aggregate"><h2>4. 精度—速度汇总</h2><table><tr><th>候选</th><th>数据集数</th><th>Median °</th><th>p95 °</th><th>有效率</th><th>完整 FPS</th><th>p95延迟 ms</th><th>离线准入</th><th>实时准入</th></tr>{method_table(methods)}</table>
 <figure><img src="{pareto}"><figcaption>精度—速度 Pareto。DeepStream/Maxine 受许可约束的精确 timing 不在对外 HTML 中展开。</figcaption></figure>
 <figure><img src="{validity}"><figcaption>共同有效帧比例。</figcaption></figure></section>
 <section id="evidence"><h2>5. 直观图表</h2>{preview_gallery(run_dir, True)}{evidence_gallery(run_dir, evaluations, True)}</section>
-<section id="rules"><h2>6. 判定规则与可复现性</h2><ul><li>固定 Fanbo3 2.00 s、Fanbo4 5.4 s、Fanbo7 7.3 s 参考偏移。</li><li>主要展示 median、IQR、p95、RULA 和有效率；MAE/RMSE仅作辅助。</li><li>实时要求完整 Pipeline ≥12.5 fps 且 p95 ≤80 ms。</li><li>许可权重、TensorRT engine、原始输入视频和凭据均不进入本地结果包；仅保留计划要求的 20 秒重建预览。</li></ul></section>"""
+<section id="rules"><h2>6. 判定规则与可复现性</h2><ul><li>FastSAM3D 固定参考偏移：Fanbo3 3.0 s、Fanbo4 5.4 s、Fanbo7 7.3 s。</li><li>主要展示 median、IQR、p95、RULA 和有效率；MAE/RMSE仅作辅助。</li><li>实时要求完整 Pipeline ≥12.5 fps 且 p95 ≤80 ms。</li><li>许可权重、TensorRT engine、原始输入视频和凭据均不进入本地结果包；仅保留计划要求的 20 秒重建预览。</li></ul></section>"""
         nav = ["摘要", "可用性", "结果", "精度—速度", "图表", "规则"]
     else:
         title = "Fanbo3/4/7 NVIDIA Monocular–Stereo GPU Comparison"
@@ -848,17 +988,19 @@ def build_report(
 <div class="cards"><div class="card"><div class="metric">{completed}</div>successful dataset–candidate evaluation cells</div><div class="card"><div class="metric">{html.escape(best_name)}</div>formal selection under the frozen gates</div><div class="card"><div class="metric">12.5 fps</div>complete-pipeline real-time gate</div></div>
 <div class="callout"><strong>Selection outcome:</strong> {html.escape(recommendation)}</div>
 {notable_findings(evaluations, methods, False)}
-<div class="callout">Xsens is treated only as an Xsens-derived reference / external comparison system. Fanbo4/7 use FastSAM3D comparison trajectories. Candidate-specific offset search and post-hoc view selection were prohibited.</div></section>
+<div class="callout">Fanbo3/4/7 all use FastSAM3D comparison trajectories. These are external comparison trajectories, not absolute Ground Truth. Candidate-specific offset search and post-hoc view selection were prohibited.</div></section>
 <section id="availability"><h2>2. NVIDIA route availability</h2><table><tr><th>Route</th><th>Status</th><th>Meaning</th></tr>{blocked}</table>
 <p>BodyPoseNet 2D and Maxine blockers are reported separately from model accuracy. BodyPose3DNet, FoundationStereo, and Fast-FoundationStereo were run from official repositories and checkpoints.</p></section>
 <section id="results"><h2>3. Robust dataset-level metrics</h2>
-<p>Each dataset is shown separately, with YOLOv8m + SKT fixed as the first-row baseline. MAE is the mean absolute angular difference; Median is its median.</p>
-{dataset_metric_tables(evaluations, False)}</section>
+<p>Each dataset is shown separately, with YOLOv8m + SKT fixed as the first-row baseline. Lower error and higher FPS are better.</p>
+<div class="legend"><span><i class="swatch good"></i>better third</span><span><i class="swatch mid"></i>middle third</span><span><i class="swatch bad"></i>worse third</span></div>
+{dataset_metric_tables(evaluations, dataset_fps, False)}
+<p><small>* Exact BodyPose3DNet SDK timing is retained in the internal report evidence pending NVIDIA licence review. Other values are measured complete-pipeline FPS.</small></p></section>
 <section id="aggregate"><h2>4. Accuracy–throughput summary</h2><table><tr><th>Candidate</th><th>Datasets</th><th>Median °</th><th>p95 °</th><th>Valid ratio</th><th>Complete FPS</th><th>p95 latency ms</th><th>Offline gate</th><th>Real-time gate</th></tr>{method_table(methods)}</table>
 <figure><img src="{pareto}"><figcaption>Accuracy–speed Pareto view. Exact proprietary DeepStream/Maxine timing is not expanded in the outward-facing HTML.</figcaption></figure>
 <figure><img src="{validity}"><figcaption>Common valid-frame ratio.</figcaption></figure></section>
 <section id="evidence"><h2>5. Visual evidence</h2>{preview_gallery(run_dir, False)}{evidence_gallery(run_dir, evaluations, False)}</section>
-<section id="rules"><h2>6. Decision rules and reproducibility</h2><ul><li>Frozen reference offsets: Fanbo3 2.00 s, Fanbo4 5.4 s, Fanbo7 7.3 s.</li><li>Primary metrics are median, IQR, p95, RULA agreement, and validity; MAE/RMSE are secondary.</li><li>Real-time requires a complete pipeline ≥12.5 fps and p95 latency ≤80 ms.</li><li>Licensed weights, TensorRT engines, raw input videos, and credentials are excluded from the local result bundle; only the planned 20-second reconstruction preview is retained.</li></ul></section>"""
+<section id="rules"><h2>6. Decision rules and reproducibility</h2><ul><li>Frozen FastSAM3D reference offsets: Fanbo3 3.0 s, Fanbo4 5.4 s, Fanbo7 7.3 s.</li><li>Primary metrics are median, IQR, p95, RULA agreement, and validity; MAE/RMSE are secondary.</li><li>Real-time requires a complete pipeline ≥12.5 fps and p95 latency ≤80 ms.</li><li>Licensed weights, TensorRT engines, raw input videos, and credentials are excluded from the local result bundle; only the planned 20-second reconstruction preview is retained.</li></ul></section>"""
         nav = ["Summary", "Availability", "Results", "Accuracy–speed", "Evidence", "Rules"]
     ids = ["summary", "availability", "results", "aggregate", "evidence", "rules"]
     links = "".join(
@@ -946,8 +1088,8 @@ def write_experiment_log(
         f"- Finalized UTC: {datetime.now(timezone.utc).isoformat()}",
         f"- Run directory: `{run_dir}`",
         f"- Successful evaluation cells: {len(evaluations)}",
-        "- Reference policy: Xsens-derived reference is an external "
-        "comparison system, not absolute Ground Truth.",
+        "- Reference policy: Fanbo3/4/7 use FastSAM3D comparison "
+        "trajectories, not absolute Ground Truth.",
         "- Candidate-specific time-offset search: disabled.",
         "",
         "## Method summary",
@@ -1051,6 +1193,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     run_dir = project_path(args.run_dir)
     evaluations = collect_evaluations(run_dir)
     timings = collect_timings(run_dir)
+    dataset_fps = collect_dataset_fps(run_dir)
     methods = aggregate_methods(evaluations, timings)
     decisions = assess_method_gates(evaluations, methods)
     for method in methods:
@@ -1059,11 +1202,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     charts = save_charts(run_dir, methods)
     ensure_best_preview(run_dir, evaluations, methods)
     (run_dir / "report.html").write_text(
-        build_report(run_dir, evaluations, methods, charts, False),
+        build_report(
+            run_dir,
+            evaluations,
+            methods,
+            dataset_fps,
+            charts,
+            False,
+        ),
         encoding="utf-8",
     )
     (run_dir / "report_CN.html").write_text(
-        build_report(run_dir, evaluations, methods, charts, True),
+        build_report(
+            run_dir,
+            evaluations,
+            methods,
+            dataset_fps,
+            charts,
+            True,
+        ),
         encoding="utf-8",
     )
     write_experiment_log(run_dir, evaluations, methods)

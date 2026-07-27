@@ -7,9 +7,9 @@ datasets:
     config: 00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo3_v2_yolov8m.yaml
     baseline_npz: 00_pose_pipeline_v2/runs/ablation_pipeline_model/fanbo3_v2_yolov8m/skt_pose_optimized.npz
     reference:
-      kind: xsens
-      label: Xsens-derived reference
-      offset_seconds: 2.0
+      kind: fastsam
+      label: FastSAM3D comparison trajectory
+      offset_seconds: 3.0
     angle_names:
       - LeftShoulder
       - RightShoulder
@@ -104,4 +104,3 @@ evaluation:
   maximum_valid_ratio_drop: 0.03
   jump_threshold_deg: 10.0
   report_exact_proprietary_sdk_timing: false
-

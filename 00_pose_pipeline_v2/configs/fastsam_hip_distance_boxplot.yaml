@@ -1,0 +1,9 @@
+analysis:
+  title: Bilateral hip disagreement versus distance using FastSAM3D
+  output_dir: 00_pose_pipeline_v2/runs/fastsam_hip_distance_boxplot_20260727
+  paired_results_config: 00_pose_pipeline_v2/configs/dynamic_model_switch_analysis.yaml
+  hip_joints: [LeftHip, RightHip]
+  distance_bin_width_m: 0.5
+  minimum_common_frames_per_bin: 20
+  reference_label: FastSAM3D comparison trajectory
+  distance_source: YOLOv8m stereo torso depth in the left-camera frame

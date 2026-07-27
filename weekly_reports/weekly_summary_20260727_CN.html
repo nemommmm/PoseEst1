@@ -66,6 +66,11 @@
   tr.baseline td { background: #f2f8ff; font-weight: 700; }
   .good { color: var(--green); font-weight: 700; }
   .bad { color: var(--red); font-weight: 700; }
+  .score-good { background: #dcfce7 !important; color: #166534; font-weight: 750; }
+  .score-mid { background: #fef3c7 !important; color: #92400e; font-weight: 700; }
+  .score-bad { background: #fee2e2 !important; color: #991b1b; font-weight: 750; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; font-size: 13px; color: var(--muted); }
+  .legend span { padding: 3px 8px; border-radius: 4px; }
   .small { color: var(--muted); font-size: 13px; }
   footer { margin-top: 45px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
   @media (max-width: 700px) {
@@ -82,7 +87,7 @@
 <div class="nav">
   <a href="#distance">1. 距离与模型选择</a>
   <a href="#deployment">2. GPU部署</a>
-  <a href="#nvidia">3. NVIDIA模型矩阵</a>
+  <a href="#nvidia">3. NVIDIA官方模型测试</a>
 </div>
 
 <div class="summary">
@@ -117,22 +122,24 @@
 
 <h2 id="deployment">2. 将本地离线代码迁移到云端GPU</h2>
 
-<p>原始代码主要在本地CPU上处理已经录制好的双目视频。本周在RunPod NVIDIA RTX A6000（48 GB显存）上重建了CUDA PyTorch、TensorRT和DeepStream环境，并增加了可重复的远程运行流程。</p>
+<p>本周把原来在本地运行的离线双目程序部署到了RunPod NVIDIA RTX A6000（48 GB显存）。一次实验从读取视频到三角化、角度和RULA计算都在远程Pod内完成；完成后才把NPZ、表格、图和报告下载回本地查看。</p>
 
 <div class="flow">
   <span>左右存储视频</span><b>→</b>
-  <span>GPU视频解码</span><b>→</b>
-  <span>GPU 2D姿态识别</span><b>→</b>
-  <span>SKT几何重建</span><b>→</b>
-  <span>角度与RULA</span>
+  <span>远程CPU读取</span><b>→</b>
+  <span>GPU运行YOLO 2D姿态识别</span><b>→</b>
+  <span>远程CPU完成SKT三角化</span><b>→</b>
+  <span>远程CPU计算角度与RULA</span><b>→</b>
+  <span>结果下载到本地</span>
 </div>
 
-<h3>代码和部署层面的主要修改</h3>
+<h3>必要的代码和部署修改</h3>
 <ul>
-  <li><strong>CUDA运行：</strong>姿态模型和输入Tensor放到GPU上，在不计算梯度的模式下推理；只有进入CPU几何计算阶段时才把最终结果转换为NumPy。</li>
-  <li><strong>可靠测速：</strong>加入warm-up和多次重复，把视频解码、姿态推理、3D几何和完整Pipeline分别计时；测量异步CUDA任务时进行GPU同步。</li>
-  <li><strong>统一后端和等价性检查：</strong>PyTorch、TensorRT FP32和FP16接到同一输出接口。即使模型推理变快，只要2D、3D或角度结果超过冻结容差，就不允许替换正式基线。</li>
-  <li><strong>视频与远程流程：</strong>增加NVDEC/DeepStream输入测试、环境重建脚本、manifest和SHA256记录，并使用SSH/rsync自动下载结果，使Pod迁移后仍能复现实验。</li>
+  <li><strong>建立GPU环境：</strong>在新Pod安装支持CUDA的PyTorch、Ultralytics及项目依赖。Ultralytics会自动把YOLO的图像计算交给GPU，不需要重写原来的模型。</li>
+  <li><strong>保证结果可重复：</strong>增加确定性CUDA设置，减少GPU自动选算法造成的细小变化。因为2D关节的微小变化可能经过人物追踪和双目三角化放大成明显的3D与角度变化。</li>
+  <li><strong>增加完整测速：</strong>加入warm-up和重复测试，分别记录视频读取、左右YOLO、三角化和完整Pipeline耗时，而不是只报告模型单张图像的速度。</li>
+  <li><strong>验证加速前后结果：</strong>比较2D、3D、角度和RULA。TensorRT即使模型阶段更快，只要改变正式重建结果，就不能替换PyTorch基线。</li>
+  <li><strong>远程运行与保存：</strong>记录GPU、软件版本、项目commit和文件哈希，并通过SSH/rsync把结果下载到本地，避免Pod过期后丢失实验。</li>
 </ul>
 
 <div class="table-wrap">
@@ -152,31 +159,61 @@
 
 <h2 id="nvidia">3. NVIDIA模型的逐数据集稳健指标</h2>
 
-<p>随后在Fanbo3、Fanbo4和Fanbo7上比较了有代表性的NVIDIA单目和稠密双目路线。三套数据都使用固定时间偏移的FastSAM3D comparison trajectory。Fanbo3汇总八个工效学关节角；Fanbo4和Fanbo7评估RightElbow。下表展示绝对角度差的中位数。</p>
+<p>本部分的主题是测试NVIDIA官方的姿态估计及相关双目模型。BodyPose3DNet直接从单张图像估计人体姿态；FoundationStereo不是人体模型，而是先计算双目稠密深度，再结合左图YOLO关节得到3D骨架。三套数据都使用固定时间偏移的FastSAM3D comparison trajectory。Fanbo3汇总八个工效学关节角；Fanbo4和Fanbo7评估RightElbow。</p>
 
-<div class="table-wrap">
-<table>
-  <tr>
-    <th>代表路线</th>
-    <th>Fanbo3<br>Median</th>
-    <th>Fanbo4<br>Median</th>
-    <th>Fanbo7<br>Median</th>
-    <th>A6000 FPS</th>
-  </tr>
-  <tr class="baseline">
-    <td>YOLOv8m + SKT基线</td><td>11.42°</td><td>10.88°</td><td>2.72°</td><td>33–35</td>
-  </tr>
-  <tr>
-    <td>BodyPose3DNet Accuracy — 单目左视图</td><td class="good">7.35°</td><td class="bad">29.61°</td><td class="good">1.85°</td><td>60–70*</td>
-  </tr>
-  <tr>
-    <td>FoundationStereo ViT-L — 32次迭代</td><td>10.46°</td><td class="good">2.94°</td><td class="good">2.47°</td><td class="bad">0.73</td>
-  </tr>
-  <tr>
-    <td>Fast-FoundationStereo — 4次迭代</td><td>10.63°</td><td class="good">4.68°</td><td class="good">2.39°</td><td class="bad">6.42</td>
-  </tr>
-</table>
+<div class="legend">
+  <span class="score-good">绿色：相对较好</span>
+  <span class="score-mid">黄色：中间</span>
+  <span class="score-bad">红色：相对较差</span>
 </div>
+
+<h3>Fanbo3</h3>
+<p><strong>对比参考：</strong>FastSAM3D comparison trajectory；<strong>评价角度：</strong>8个关节角</p>
+<div class="table-wrap"><table>
+<tr><th>候选</th><th>MAE °</th><th>Median °</th><th>p95 °</th><th>FPS</th></tr>
+<tr class="baseline"><td>YOLOv8m + SKT（基线）</td><td class="score-mid">15.46</td><td class="score-bad">11.42</td><td class="score-mid">46.28</td><td class="score-mid">35.3</td></tr>
+<tr><td>BodyPose3DNet-accuracy-stereo</td><td class="score-good">13.54</td><td class="score-good">9.30</td><td class="score-mid">40.88</td><td class="score-mid">34.7*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_left</td><td class="score-good">9.67</td><td class="score-good">7.35</td><td class="score-good">29.15</td><td class="score-good">69.7*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_right</td><td class="score-good">11.45</td><td class="score-good">7.82</td><td class="score-good">36.54</td><td class="score-good">69.2*</td></tr>
+<tr><td>BodyPose3DNet-performance-stereo</td><td class="score-bad">17.37</td><td class="score-bad">12.51</td><td class="score-bad">50.24</td><td class="score-bad">33.9*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_left</td><td class="score-good">11.71</td><td class="score-good">9.28</td><td class="score-good">31.07</td><td class="score-good">67.6*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_right</td><td class="score-mid">13.60</td><td class="score-mid">9.97</td><td class="score-good">40.11</td><td class="score-good">67.8*</td></tr>
+<tr><td>Fast-FoundationStereo-4iter</td><td class="score-bad">16.52</td><td class="score-bad">10.63</td><td class="score-bad">50.45</td><td class="score-bad">6.4</td></tr>
+<tr><td>Fast-FoundationStereo-8iter</td><td class="score-bad">16.44</td><td class="score-mid">10.40</td><td class="score-bad">50.62</td><td class="score-bad">5.6</td></tr>
+<tr><td>FoundationStereo-ViT-L-32iter</td><td class="score-bad">16.35</td><td class="score-bad">10.46</td><td class="score-bad">49.90</td><td class="score-bad">0.7</td></tr>
+</table></div>
+
+<h3>Fanbo4</h3>
+<p><strong>对比参考：</strong>FastSAM3D comparison trajectory；<strong>评价角度：</strong>RightElbow</p>
+<div class="table-wrap"><table>
+<tr><th>候选</th><th>MAE °</th><th>Median °</th><th>p95 °</th><th>FPS</th></tr>
+<tr class="baseline"><td>YOLOv8m + SKT（基线）</td><td class="score-mid">10.46</td><td class="score-mid">10.88</td><td class="score-mid">25.83</td><td class="score-mid">34.9</td></tr>
+<tr><td>BodyPose3DNet-accuracy-stereo</td><td>—</td><td>—</td><td>—</td><td class="score-bad">29.3*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_left</td><td class="score-mid">25.28</td><td class="score-bad">29.61</td><td class="score-mid">46.10</td><td class="score-good">59.6*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_right</td><td class="score-bad">32.62</td><td class="score-bad">25.25</td><td class="score-bad">76.98</td><td class="score-good">57.8*</td></tr>
+<tr><td>BodyPose3DNet-performance-stereo</td><td>—</td><td>—</td><td>—</td><td class="score-mid">29.4*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_left</td><td class="score-bad">33.82</td><td class="score-bad">40.57</td><td class="score-bad">62.84</td><td class="score-good">59.5*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_right</td><td class="score-bad">28.89</td><td class="score-mid">18.88</td><td class="score-bad">58.91</td><td class="score-good">57.9*</td></tr>
+<tr><td>Fast-FoundationStereo-4iter</td><td class="score-good">4.70</td><td class="score-good">4.68</td><td class="score-good">10.27</td><td class="score-bad">6.5</td></tr>
+<tr><td>Fast-FoundationStereo-8iter</td><td class="score-good">4.75</td><td class="score-good">5.23</td><td class="score-good">10.34</td><td class="score-bad">5.6</td></tr>
+<tr><td>FoundationStereo-ViT-L-32iter</td><td class="score-good">3.68</td><td class="score-good">2.94</td><td class="score-good">9.65</td><td class="score-bad">0.7</td></tr>
+</table></div>
+
+<h3>Fanbo7</h3>
+<p><strong>对比参考：</strong>FastSAM3D comparison trajectory；<strong>评价角度：</strong>RightElbow</p>
+<div class="table-wrap"><table>
+<tr><th>候选</th><th>MAE °</th><th>Median °</th><th>p95 °</th><th>FPS</th></tr>
+<tr class="baseline"><td>YOLOv8m + SKT（基线）</td><td class="score-bad">3.35</td><td class="score-bad">2.72</td><td class="score-bad">8.33</td><td class="score-mid">33.4</td></tr>
+<tr><td>BodyPose3DNet-accuracy-stereo</td><td class="score-mid">3.03</td><td class="score-bad">2.67</td><td class="score-mid">7.24</td><td class="score-bad">29.8*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_left</td><td class="score-mid">3.05</td><td class="score-good">1.85</td><td class="score-bad">10.10</td><td class="score-good">61.4*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_right</td><td class="score-good">2.73</td><td class="score-good">2.38</td><td class="score-good">6.15</td><td class="score-good">57.9*</td></tr>
+<tr><td>BodyPose3DNet-performance-stereo</td><td class="score-bad">4.59</td><td class="score-bad">3.69</td><td class="score-bad">11.92</td><td class="score-mid">29.8*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_left</td><td class="score-bad">3.85</td><td class="score-bad">3.52</td><td class="score-bad">8.66</td><td class="score-good">61.5*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_right</td><td class="score-bad">3.21</td><td class="score-mid">2.57</td><td class="score-mid">7.44</td><td class="score-good">58.0*</td></tr>
+<tr><td>Fast-FoundationStereo-4iter</td><td class="score-good">2.75</td><td class="score-good">2.39</td><td class="score-good">6.44</td><td class="score-bad">6.4</td></tr>
+<tr><td>Fast-FoundationStereo-8iter</td><td class="score-good">2.70</td><td class="score-good">2.29</td><td class="score-good">6.48</td><td class="score-bad">5.5</td></tr>
+<tr><td>FoundationStereo-ViT-L-32iter</td><td class="score-good">3.00</td><td class="score-mid">2.47</td><td class="score-good">6.82</td><td class="score-bad">0.7</td></tr>
+</table></div>
 
 <p class="small">* BodyPose3DNet是内部DeepStream单流完整应用测速，不能直接等同于完整双目SKT Pipeline；其精确SDK性能数字对外使用前仍需检查NVIDIA许可。</p>
 

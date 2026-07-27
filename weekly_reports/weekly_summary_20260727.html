@@ -67,6 +67,11 @@
   tr.baseline td { background: #f2f8ff; font-weight: 700; }
   .good { color: var(--green); font-weight: 700; }
   .bad { color: var(--red); font-weight: 700; }
+  .score-good { background: #dcfce7 !important; color: #166534; font-weight: 750; }
+  .score-mid { background: #fef3c7 !important; color: #92400e; font-weight: 700; }
+  .score-bad { background: #fee2e2 !important; color: #991b1b; font-weight: 750; }
+  .legend { display: flex; flex-wrap: wrap; gap: 12px; margin: 10px 0; font-size: 13px; color: var(--muted); }
+  .legend span { padding: 3px 8px; border-radius: 4px; }
   .small { color: var(--muted); font-size: 13px; }
   footer { margin-top: 45px; padding-top: 12px; border-top: 1px solid var(--line); color: var(--muted); font-size: 12px; }
   @media (max-width: 700px) {
@@ -83,7 +88,7 @@
 <div class="nav">
   <a href="#distance">1. Distance and model selection</a>
   <a href="#deployment">2. GPU deployment</a>
-  <a href="#nvidia">3. NVIDIA model matrix</a>
+  <a href="#nvidia">3. NVIDIA official model tests</a>
 </div>
 
 <div class="summary">
@@ -118,22 +123,24 @@
 
 <h2 id="deployment">2. Moving the offline pipeline to a cloud GPU</h2>
 
-<p>The original code processed recorded stereo videos offline on the local CPU. I rebuilt the environment on a RunPod NVIDIA RTX A6000 with 48 GB VRAM, CUDA-enabled PyTorch, TensorRT and DeepStream, and added a reproducible remote workflow.</p>
+<p>This week I deployed the offline stereo program on a RunPod NVIDIA RTX A6000 with 48 GB VRAM. One experiment—from reading the videos through triangulation, angles and RULA—runs entirely inside the remote Pod. Only the resulting NPZ files, tables, figures and reports are downloaded to the local computer for inspection.</p>
 
 <div class="flow">
   <span>Recorded left/right video</span><b>→</b>
-  <span>GPU video decode</span><b>→</b>
-  <span>GPU 2D pose inference</span><b>→</b>
-  <span>SKT geometry</span><b>→</b>
-  <span>Angles and RULA</span>
+  <span>Remote CPU reads video</span><b>→</b>
+  <span>GPU runs YOLO 2D pose inference</span><b>→</b>
+  <span>Remote CPU runs SKT triangulation</span><b>→</b>
+  <span>Remote CPU computes angles and RULA</span><b>→</b>
+  <span>Results downloaded locally</span>
 </div>
 
-<h3>Main code and deployment changes</h3>
+<h3>Necessary code and deployment changes</h3>
 <ul>
-  <li><strong>CUDA execution:</strong> the pose model and input tensors are moved to the GPU; inference runs without gradient tracking, and tensors are converted back to NumPy only when the geometry stage requires CPU data.</li>
-  <li><strong>Reliable timing:</strong> warm-up frames and repeated runs were added, with decode, pose inference, 3D geometry and complete-pipeline time measured separately. GPU synchronization is used when timing asynchronous CUDA work.</li>
-  <li><strong>Backend adapters and equivalence checks:</strong> PyTorch, TensorRT FP32 and TensorRT FP16 were connected to the same downstream output format. A candidate backend is rejected when its 2D/3D/angle output changes beyond the frozen tolerance, even if model-only inference is faster.</li>
-  <li><strong>Video and remote workflow:</strong> NVDEC/DeepStream-compatible inputs, environment bootstrap scripts, manifests, SHA256 records, SSH/rsync and automatic result download were added so that experiments can be reconstructed after a Pod migration.</li>
+  <li><strong>GPU environment:</strong> CUDA-enabled PyTorch, Ultralytics and the project dependencies were installed on the Pod. Ultralytics automatically sends the YOLO image computation to the GPU, so the original model did not need to be rewritten.</li>
+  <li><strong>Repeatable output:</strong> deterministic CUDA settings were added to reduce small changes caused by automatic GPU algorithm selection. Small 2D changes can be amplified by tracking and stereo triangulation into visible 3D and angle changes.</li>
+  <li><strong>Complete timing:</strong> warm-up and repeated tests now measure video reading, left/right YOLO inference, triangulation and the complete pipeline rather than only single-image model speed.</li>
+  <li><strong>Result equivalence:</strong> 2D, 3D, angle and RULA outputs are checked before accepting an accelerated backend. TensorRT cannot replace the PyTorch baseline if it changes the formal reconstruction.</li>
+  <li><strong>Remote reproducibility:</strong> GPU/software versions, project commit and file hashes are recorded, and SSH/rsync downloads the result package before a Pod expires.</li>
 </ul>
 
 <div class="table-wrap">
@@ -151,33 +158,63 @@
 
 <p class="small">Full evidence: <a href="../docs/gpu_deployment_note.html">A6000 deployment and model-admission note</a>.</p>
 
-<h2 id="nvidia">3. Robust per-dataset NVIDIA model comparison</h2>
+<h2 id="nvidia">3. NVIDIA official pose-estimation and related stereo models</h2>
 
-<p>I then compared representative NVIDIA monocular and dense-stereo routes on Fanbo3, Fanbo4 and Fanbo7. All three datasets use the FastSAM3D comparison trajectory with fixed offsets. Fanbo3 reports the mean of eight ergonomic joint-angle metrics; Fanbo4 and Fanbo7 report RightElbow. The table below shows median absolute angular disagreement.</p>
+<p>This section tests NVIDIA official pose-estimation and related stereo models. BodyPose3DNet estimates human pose from a single image. FoundationStereo is not a human-pose model: it first estimates dense stereo depth and then combines that depth with left-view YOLO joints. All three datasets use the FastSAM3D comparison trajectory with fixed offsets. Fanbo3 aggregates eight ergonomic joint angles; Fanbo4 and Fanbo7 evaluate RightElbow.</p>
 
-<div class="table-wrap">
-<table>
-  <tr>
-    <th>Representative route</th>
-    <th>Fanbo3<br>median</th>
-    <th>Fanbo4<br>median</th>
-    <th>Fanbo7<br>median</th>
-    <th>A6000 FPS</th>
-  </tr>
-  <tr class="baseline">
-    <td>YOLOv8m + SKT baseline</td><td>11.42°</td><td>10.88°</td><td>2.72°</td><td>33–35</td>
-  </tr>
-  <tr>
-    <td>BodyPose3DNet Accuracy — monocular left</td><td class="good">7.35°</td><td class="bad">29.61°</td><td class="good">1.85°</td><td>Internal only*</td>
-  </tr>
-  <tr>
-    <td>FoundationStereo ViT-L — 32 iterations</td><td>10.46°</td><td class="good">2.94°</td><td class="good">2.47°</td><td class="bad">0.73</td>
-  </tr>
-  <tr>
-    <td>Fast-FoundationStereo — 4 iterations</td><td>10.63°</td><td class="good">4.68°</td><td class="good">2.39°</td><td class="bad">6.42</td>
-  </tr>
-</table>
+<div class="legend">
+  <span class="score-good">Green: relatively better</span>
+  <span class="score-mid">Yellow: intermediate</span>
+  <span class="score-bad">Red: relatively worse</span>
 </div>
+
+<h3>Fanbo3</h3>
+<p><strong>Comparison reference:</strong> FastSAM3D comparison trajectory; <strong>evaluated angles:</strong> 8 joint angles</p>
+<div class="table-wrap"><table>
+<tr><th>Candidate</th><th>MAE °</th><th>Median °</th><th>p95 °</th><th>FPS</th></tr>
+<tr class="baseline"><td>YOLOv8m + SKT (baseline)</td><td class="score-mid">15.46</td><td class="score-bad">11.42</td><td class="score-mid">46.28</td><td class="score-good">35.3</td></tr>
+<tr><td>BodyPose3DNet-accuracy-stereo</td><td class="score-good">13.54</td><td class="score-good">9.30</td><td class="score-mid">40.88</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_left</td><td class="score-good">9.67</td><td class="score-good">7.35</td><td class="score-good">29.15</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_right</td><td class="score-good">11.45</td><td class="score-good">7.82</td><td class="score-good">36.54</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-performance-stereo</td><td class="score-bad">17.37</td><td class="score-bad">12.51</td><td class="score-bad">50.24</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_left</td><td class="score-good">11.71</td><td class="score-good">9.28</td><td class="score-good">31.07</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_right</td><td class="score-mid">13.60</td><td class="score-mid">9.97</td><td class="score-good">40.11</td><td>internal only*</td></tr>
+<tr><td>Fast-FoundationStereo-4iter</td><td class="score-bad">16.52</td><td class="score-bad">10.63</td><td class="score-bad">50.45</td><td class="score-good">6.4</td></tr>
+<tr><td>Fast-FoundationStereo-8iter</td><td class="score-bad">16.44</td><td class="score-mid">10.40</td><td class="score-bad">50.62</td><td class="score-bad">5.6</td></tr>
+<tr><td>FoundationStereo-ViT-L-32iter</td><td class="score-bad">16.35</td><td class="score-bad">10.46</td><td class="score-bad">49.90</td><td class="score-bad">0.7</td></tr>
+</table></div>
+
+<h3>Fanbo4</h3>
+<p><strong>Comparison reference:</strong> FastSAM3D comparison trajectory; <strong>evaluated angle:</strong> RightElbow</p>
+<div class="table-wrap"><table>
+<tr><th>Candidate</th><th>MAE °</th><th>Median °</th><th>p95 °</th><th>FPS</th></tr>
+<tr class="baseline"><td>YOLOv8m + SKT (baseline)</td><td class="score-mid">10.46</td><td class="score-mid">10.88</td><td class="score-mid">25.83</td><td class="score-good">34.9</td></tr>
+<tr><td>BodyPose3DNet-accuracy-stereo</td><td>—</td><td>—</td><td>—</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_left</td><td class="score-mid">25.28</td><td class="score-bad">29.61</td><td class="score-mid">46.10</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_right</td><td class="score-bad">32.62</td><td class="score-bad">25.25</td><td class="score-bad">76.98</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-performance-stereo</td><td>—</td><td>—</td><td>—</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_left</td><td class="score-bad">33.82</td><td class="score-bad">40.57</td><td class="score-bad">62.84</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_right</td><td class="score-bad">28.89</td><td class="score-mid">18.88</td><td class="score-bad">58.91</td><td>internal only*</td></tr>
+<tr><td>Fast-FoundationStereo-4iter</td><td class="score-good">4.70</td><td class="score-good">4.68</td><td class="score-good">10.27</td><td class="score-good">6.5</td></tr>
+<tr><td>Fast-FoundationStereo-8iter</td><td class="score-good">4.75</td><td class="score-good">5.23</td><td class="score-good">10.34</td><td class="score-bad">5.6</td></tr>
+<tr><td>FoundationStereo-ViT-L-32iter</td><td class="score-good">3.68</td><td class="score-good">2.94</td><td class="score-good">9.65</td><td class="score-bad">0.7</td></tr>
+</table></div>
+
+<h3>Fanbo7</h3>
+<p><strong>Comparison reference:</strong> FastSAM3D comparison trajectory; <strong>evaluated angle:</strong> RightElbow</p>
+<div class="table-wrap"><table>
+<tr><th>Candidate</th><th>MAE °</th><th>Median °</th><th>p95 °</th><th>FPS</th></tr>
+<tr class="baseline"><td>YOLOv8m + SKT (baseline)</td><td class="score-bad">3.35</td><td class="score-bad">2.72</td><td class="score-bad">8.33</td><td class="score-good">33.4</td></tr>
+<tr><td>BodyPose3DNet-accuracy-stereo</td><td class="score-mid">3.03</td><td class="score-bad">2.67</td><td class="score-mid">7.24</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_left</td><td class="score-mid">3.05</td><td class="score-good">1.85</td><td class="score-bad">10.10</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-accuracy_monocular_right</td><td class="score-good">2.73</td><td class="score-good">2.38</td><td class="score-good">6.15</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-performance-stereo</td><td class="score-bad">4.59</td><td class="score-bad">3.69</td><td class="score-bad">11.92</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_left</td><td class="score-bad">3.85</td><td class="score-bad">3.52</td><td class="score-bad">8.66</td><td>internal only*</td></tr>
+<tr><td>BodyPose3DNet-performance_monocular_right</td><td class="score-bad">3.21</td><td class="score-mid">2.57</td><td class="score-mid">7.44</td><td>internal only*</td></tr>
+<tr><td>Fast-FoundationStereo-4iter</td><td class="score-good">2.75</td><td class="score-good">2.39</td><td class="score-good">6.44</td><td class="score-good">6.4</td></tr>
+<tr><td>Fast-FoundationStereo-8iter</td><td class="score-good">2.70</td><td class="score-good">2.29</td><td class="score-good">6.48</td><td class="score-bad">5.5</td></tr>
+<tr><td>FoundationStereo-ViT-L-32iter</td><td class="score-good">3.00</td><td class="score-mid">2.47</td><td class="score-good">6.82</td><td class="score-bad">0.7</td></tr>
+</table></div>
 
 <p class="small">* BodyPose3DNet is an internal DeepStream single-stream application measurement and is not directly equivalent to the complete stereo SKT route. Exact outward-facing SDK benchmark use remains subject to NVIDIA licence review.</p>
 

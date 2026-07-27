@@ -565,6 +565,72 @@ def _boxplot_by_bins(
     _save_figure(fig, path)
 
 
+def plot_model_errors_by_distance(
+    windows: pd.DataFrame,
+    distance_labels: list[str],
+    path: Path,
+    chinese: bool,
+) -> None:
+    """Plot side-by-side YOLOv8m and YOLO11L errors in each distance bin."""
+    _configure_plot_style(chinese)
+    model_specs = (
+        ("error_yolov8m_deg", "YOLOv8m", "#2563EB", -0.18),
+        ("error_yolo11l_deg", "YOLO11L", "#DC2626", 0.18),
+    )
+    centres = np.arange(len(distance_labels), dtype=np.float64)
+    fig, axis = plt.subplots(figsize=(11.8, 5.8))
+    for column, label, color, offset in model_specs:
+        groups = [
+            windows.loc[
+                windows["distance_bin"].astype(object).map(str)
+                == distance_label,
+                column,
+            ].dropna()
+            for distance_label in distance_labels
+        ]
+        boxes = axis.boxplot(
+            groups,
+            positions=centres + offset,
+            widths=0.30,
+            patch_artist=True,
+            showfliers=True,
+            manage_ticks=False,
+            flierprops={
+                "marker": ".",
+                "markersize": 3,
+                "alpha": 0.22,
+                "markeredgecolor": color,
+            },
+            medianprops={"color": "#111827", "linewidth": 1.6},
+            whiskerprops={"color": color, "linewidth": 1.2},
+            capprops={"color": color, "linewidth": 1.2},
+        )
+        for box in boxes["boxes"]:
+            box.set_facecolor(color)
+            box.set_edgecolor(color)
+            box.set_alpha(0.56)
+        axis.plot([], [], color=color, linewidth=8, alpha=0.56, label=label)
+    axis.set_xticks(centres, distance_labels)
+    axis.set_xlabel(
+        "估计光轴深度（m）" if chinese else "Estimated optical depth (m)"
+    )
+    axis.set_ylabel(
+        "窗口内全身角度差中位数（°）"
+        if chinese
+        else "Window median body-wide angular disagreement (deg)"
+    )
+    axis.set_title(
+        "不同距离下 YOLOv8m 与 YOLO11L 的角度差分布"
+        if chinese
+        else "YOLOv8m and YOLO11L angular disagreement by distance",
+        fontweight="bold",
+    )
+    axis.legend(frameon=False, ncol=2, loc="upper left")
+    axis.grid(axis="x", visible=False)
+    fig.tight_layout()
+    _save_figure(fig, path)
+
+
 def prepare_plot_bins(
     windows: pd.DataFrame,
     pixel_bin_count: int,
@@ -906,7 +972,7 @@ def build_report(
         body = f"""
 <section id="summary"><h2>1. 结论</h2><div class="cards"><div class="card"><div class="metric">{oracle_gain:+.1f}%</div>Oracle理论改善</div><div class="card"><div class="metric">{pixel_gain:+.1f}%</div>像素阈值交叉验证改善</div><div class="card"><div class="metric">{distance_gain:+.1f}%</div>距离阈值交叉验证改善</div></div><div class="callout {'ok' if decision['supported'] else 'warning'}"><strong>{verdict}</strong> Oracle用于衡量理论上限，它在部署时不可用；真正需要关注的是按采集组留一后的像素和距离阈值结果。</div><p>{decision['reason_cn']}</p><figure><img src="{images['methods']}" alt="固定模型、Oracle与切换器比较"><figcaption>所有指标先在每个session内取窗口中位数，再对session等权平均，避免长视频支配结果。</figcaption></figure></section>
 <section id="pixel"><h2>2. 人物像素大小是否形成稳定pattern？</h2><figure><img src="{images['pixel_box']}" alt="像素大小分箱箱线图"><figcaption>纵轴为11L误差减去8m误差。若“近处11L、远处8m”成立，箱体应从大像素区的零线下方，稳定移动到小像素区的零线上方。图中只显示至少含5个窗口的分组。</figcaption></figure></section>
-<section id="distance"><h2>3. 距离是否形成稳定pattern？</h2><figure><img src="{images['distance_box']}" alt="距离分箱箱线图"><figcaption>不同距离箱体的符号和重叠程度比一条均值曲线更重要；大量跨越零线表示同一距离下两个模型的胜负并不稳定。图中只显示至少含5个窗口的距离区间。</figcaption></figure><figure><img src="{images['motion']}" alt="距离和运动等级热力图"><figcaption>热力图检查此前发现的混杂因素：如果同一距离在静止和快速运动中颜色相反，距离就不是足够的切换变量。少于3个窗口的格子不解读。</figcaption></figure></section>
+<section id="distance"><h2>3. 距离是否形成稳定pattern？</h2><figure><img src="{images['distance_model_errors']}" alt="按距离并排展示两个模型误差的箱线图"><figcaption>蓝色是YOLOv8m，红色是YOLO11L。每个箱体表示对应距离区间内，1秒窗口的全身角度差中位数分布；箱体越低代表与Xsens-derived reference的差异越小。图中只显示至少含5个窗口的距离区间。</figcaption></figure><figure><img src="{images['distance_box']}" alt="距离分箱模型差值箱线图"><figcaption>辅助差值图：纵轴为11L减去8m，低于零表示11L更好，高于零表示8m更好。大量跨越零线表示同一距离下两个模型的胜负并不稳定。</figcaption></figure><figure><img src="{images['motion']}" alt="距离和运动等级热力图"><figcaption>热力图检查此前发现的混杂因素：如果同一距离在静止和快速运动中颜色相反，距离就不是足够的切换变量。少于3个窗口的格子不解读。</figcaption></figure></section>
 <section id="validation"><h2>4. 按采集组留一验证</h2><figure><img src="{images['folds']}" alt="阈值稳定性和留出集收益"><figcaption>上图显示每次留出一整组数据后学到的阈值；下图小于零才表示切换器优于固定8m。Fanbo9两台相机始终一起留出，避免同一动作泄漏到训练集。</figcaption></figure>{fold_table}</section>
 <section id="method"><h2>5. 测试方法与限制</h2><ul><li>每个1秒窗口使用所有可用的人体工学角度的中位绝对差，不挑选特定身体部位；每帧至少需要4个共同角度。</li><li>像素特征是YOLOv8m左图2D骨架的稳健高度，只用于探索“像素信息量”假设；真正部署时应由上一帧或统一轻量跟踪器提供。</li><li>运动等级来自Xsens-derived角速度，只用于检查混杂，不参与模型切换。</li><li>距离仍主要与session绑定，因此本分析只能筛查pattern，不能代替相同动作、相同视角的受控距离实验。</li><li>Oracle直接查看两个模型的比较误差后选较好者，只表示理论上限，不能用于部署。</li></ul></section>"""
         nav = ["结论", "像素pattern", "距离pattern", "交叉验证", "方法与限制"]
@@ -925,7 +991,7 @@ def build_report(
         body = f"""
 <section id="summary"><h2>1. Conclusion</h2><div class="cards"><div class="card"><div class="metric">{oracle_gain:+.1f}%</div>Oracle potential gain</div><div class="card"><div class="metric">{pixel_gain:+.1f}%</div>Cross-validated pixel-switch gain</div><div class="card"><div class="metric">{distance_gain:+.1f}%</div>Cross-validated distance-switch gain</div></div><div class="callout {'ok' if decision['supported'] else 'warning'}"><strong>{verdict}</strong> The oracle measures only the theoretical ceiling and is unavailable at deployment; the leave-capture-group-out pixel and distance results are the relevant tests.</div><p>{decision['reason_en']}</p><figure><img src="{images['methods']}" alt="Fixed models, oracle, and learned switches"><figcaption>Metrics first take the window median within each session and then weight sessions equally, preventing long videos from dominating the result.</figcaption></figure></section>
 <section id="pixel"><h2>2. Does person pixel scale form a stable pattern?</h2><figure><img src="{images['pixel_box']}" alt="Pixel-scale binned box plots"><figcaption>The vertical axis is YOLO11L error minus YOLOv8m error. Under the proposed near-11L/far-8m hypothesis, boxes should move consistently from below zero at large pixel scales to above zero at small scales. Only groups containing at least five windows are plotted.</figcaption></figure></section>
-<section id="distance"><h2>3. Does distance form a stable pattern?</h2><figure><img src="{images['distance_box']}" alt="Distance-binned box plots"><figcaption>The sign and overlap of the distributions matter more than a mean curve. Boxes spanning zero show that model preference is unstable at the same distance. Only distance bins containing at least five windows are plotted.</figcaption></figure><figure><img src="{images['motion']}" alt="Distance and motion heatmap"><figcaption>The heatmap checks the previously identified confounder: if static and fast motion have opposite colours at the same distance, distance is not a sufficient routing variable. Cells with fewer than three windows are not interpreted.</figcaption></figure></section>
+<section id="distance"><h2>3. Does distance form a stable pattern?</h2><figure><img src="{images['distance_model_errors']}" alt="Side-by-side model-error box plots by distance"><figcaption>Blue represents YOLOv8m and red represents YOLO11L. Each box shows the distribution of one-second window median body-wide angular disagreement in that distance interval; lower boxes indicate closer agreement with the Xsens-derived reference. Only bins containing at least five windows are plotted.</figcaption></figure><figure><img src="{images['distance_box']}" alt="Distance-binned model-difference box plots"><figcaption>Auxiliary difference plot: the vertical axis is YOLO11L minus YOLOv8m. Values below zero favour YOLO11L and values above zero favour YOLOv8m. Boxes spanning zero show that model preference is unstable at the same distance.</figcaption></figure><figure><img src="{images['motion']}" alt="Distance and motion heatmap"><figcaption>The heatmap checks the previously identified confounder: if static and fast motion have opposite colours at the same distance, distance is not a sufficient routing variable. Cells with fewer than three windows are not interpreted.</figcaption></figure></section>
 <section id="validation"><h2>4. Leave-capture-group-out validation</h2><figure><img src="{images['folds']}" alt="Threshold stability and held-out gain"><figcaption>The upper panel shows thresholds learned after holding out an entire capture group; only negative bars in the lower panel mean that switching beats always using YOLOv8m. Both Fanbo9 cameras are held out together to prevent action leakage.</figcaption></figure>{fold_table}</section>
 <section id="method"><h2>5. Method and limitations</h2><ul><li>Each one-second window uses the median absolute disagreement across all available ergonomic angles, without selecting a body part; each frame requires at least four common angles.</li><li>Pixel scale is the robust height of the YOLOv8m left-view 2D skeleton and is used only to test the information-content hypothesis. Deployment should obtain it from the preceding frame or a shared lightweight tracker.</li><li>Xsens-derived angular speed is used only to inspect motion confounding and never as a switching input.</li><li>Distance remains largely tied to session, so this analysis screens for a pattern but cannot replace a controlled same-action, same-viewpoint distance experiment.</li><li>The oracle directly observes both comparison errors before selecting a model; it is a theoretical ceiling, not a deployable method.</li></ul></section>"""
         nav = ["Conclusion", "Pixel pattern", "Distance pattern", "Cross-validation", "Method"]
@@ -1075,6 +1141,8 @@ def write_outputs(config_path: Path) -> Path:
 
     figure_paths = {
         "pixel_box": figures_dir / "01_pixel_scale_advantage_boxplot.png",
+        "distance_model_errors": figures_dir
+        / "02_model_errors_by_distance_boxplot.png",
         "distance_box": figures_dir / "02_distance_advantage_boxplot.png",
         "motion": figures_dir / "03_distance_motion_heatmap.png",
         "methods": figures_dir / "04_method_comparison.png",
@@ -1110,6 +1178,14 @@ def write_outputs(config_path: Path) -> Path:
             "估计光轴深度（m）"
             if chinese
             else "Estimated optical depth (m)",
+        )
+        plot_model_errors_by_distance(
+            windows,
+            distance_labels,
+            figure_paths["distance_model_errors"].with_name(
+                f"02_model_errors_by_distance_boxplot{suffix}.png"
+            ),
+            chinese,
         )
         plot_motion_heatmap(
             windows,

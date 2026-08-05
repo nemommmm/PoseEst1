@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import platform
 from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
+import torch
 
 from common.config import load_config, resolve_path
 from common.metrics import jsonable
@@ -35,6 +37,10 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-frames", type=int, default=200)
     parser.add_argument("--warmup-frames", type=int, default=10)
+    parser.add_argument(
+        "--device",
+        help="Force the inference device, for example cpu, mps, or 0.",
+    )
     parser.add_argument(
         "--repeats",
         type=int,
@@ -92,6 +98,8 @@ def main() -> None:
     skt["use_existing_npz"] = False
     skt["max_frames"] = args.max_frames
     skt["deterministic_cuda"] = not args.allow_nondeterministic_cuda
+    if args.device:
+        skt["device"] = args.device
     if args.model:
         model_path = resolve_path(args.model, must_exist=True)
         assert model_path is not None
@@ -120,6 +128,15 @@ def main() -> None:
                     "frame_time_ms",
                 )
             }
+            payload["model_init_ms"] = np.asarray(
+                data["model_init_ms"]
+            )
+            payload["requested_device"] = np.asarray(
+                data["requested_device"]
+            )
+            payload["runtime_device"] = np.asarray(
+                data["runtime_device"]
+            )
             if repeat_index == 0:
                 primary_data = {
                     key: np.asarray(data[key])
@@ -151,6 +168,20 @@ def main() -> None:
         ),
     }
     online_mean_ms = stages["end_to_end_online"]["mean_ms"]
+    startup = {
+        "model_constructor_ms": [
+            float(np.asarray(payload["model_init_ms"]).item())
+            for payload in repeat_payloads
+        ],
+        "first_stereo_pose_ms": [
+            float(payload["yolo_time_ms"][0])
+            for payload in repeat_payloads
+        ],
+        "first_end_to_end_frame_ms": [
+            float(payload["frame_time_ms"][0])
+            for payload in repeat_payloads
+        ],
+    }
     summary = {
         "config": str(Path(args.config)),
         "left_video": str(dataset.get("left_video")),
@@ -159,6 +190,24 @@ def main() -> None:
         "frames": int(len(primary_data["timestamps"])),
         "warmup_frames": int(warmup),
         "repeats": int(args.repeats),
+        "requested_device": str(
+            np.asarray(primary_data["requested_device"]).item()
+        ),
+        "runtime_device": str(
+            np.asarray(primary_data["runtime_device"]).item()
+        ),
+        "environment": {
+            "platform": platform.platform(),
+            "processor": platform.processor(),
+            "python": platform.python_version(),
+            "torch": torch.__version__,
+            "cuda_available": bool(torch.cuda.is_available()),
+            "mps_available": bool(
+                hasattr(torch.backends, "mps")
+                and torch.backends.mps.is_available()
+            ),
+        },
+        "startup": startup,
         "deterministic_cuda": bool(
             np.asarray(primary_data["deterministic_cuda"]).item()
         ),

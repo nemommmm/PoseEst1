@@ -228,7 +228,14 @@ def select_candidate(
     return best_candidate, float(best_score)
 
 
-def infer_tracked_pose(model, frame: np.ndarray, track_state: TrackState, frame_idx: int, cfg: TrackingConfig) -> tuple[DetectionCandidate | None, TrackState]:
+def infer_tracked_pose(
+    model,
+    frame: np.ndarray,
+    track_state: TrackState,
+    frame_idx: int,
+    cfg: TrackingConfig,
+    device: str | None = None,
+) -> tuple[DetectionCandidate | None, TrackState]:
     """Infer a tracked single-person pose using crop-first fallback."""
     frame_shape = frame.shape
     attempts: list[tuple[str, np.ndarray, tuple[float, float], float]] = []
@@ -248,7 +255,10 @@ def infer_tracked_pose(model, frame: np.ndarray, track_state: TrackState, frame_
     chosen_score = -np.inf
     chosen_source = "none"
     for source, image, offset_xy, conf_th in attempts:
-        result = model(image, verbose=False, conf=conf_th)[0]
+        inference_kwargs = {"verbose": False, "conf": conf_th}
+        if device is not None:
+            inference_kwargs["device"] = device
+        result = model(image, **inference_kwargs)[0]
         candidates = extract_candidates(result, offset_xy=offset_xy, source=source)
         candidate, candidate_score = select_candidate(candidates, track_state.bbox, frame_shape, cfg)
         if candidate is None:

@@ -148,7 +148,15 @@ def run_skt(config: dict, run_dir: Path) -> Path:
     )
     if deterministic_cuda:
         print("[skt] deterministic CUDA inference enabled")
+    requested_device_raw = skt.get("device")
+    requested_device = (
+        str(requested_device_raw)
+        if requested_device_raw is not None
+        else None
+    )
+    model_init_t0 = time.perf_counter()
     model = YOLO(str(model_path))
+    model_init_ms = (time.perf_counter() - model_init_t0) * 1000.0
     track_l = TrackState()
     track_r = TrackState()
 
@@ -183,12 +191,26 @@ def run_skt(config: dict, run_dir: Path) -> Path:
 
         yolo_t0 = time.perf_counter()
         yolo_left_t0 = time.perf_counter()
-        cand_l, track_l = infer_tracked_pose(model, frame_l, track_l, idx, tracking_cfg)
+        cand_l, track_l = infer_tracked_pose(
+            model,
+            frame_l,
+            track_l,
+            idx,
+            tracking_cfg,
+            device=requested_device,
+        )
         yolo_left_time_ms_all.append(
             (time.perf_counter() - yolo_left_t0) * 1000.0
         )
         yolo_right_t0 = time.perf_counter()
-        cand_r, track_r = infer_tracked_pose(model, frame_r, track_r, idx, tracking_cfg)
+        cand_r, track_r = infer_tracked_pose(
+            model,
+            frame_r,
+            track_r,
+            idx,
+            tracking_cfg,
+            device=requested_device,
+        )
         yolo_right_time_ms_all.append(
             (time.perf_counter() - yolo_right_t0) * 1000.0
         )
@@ -226,6 +248,9 @@ def run_skt(config: dict, run_dir: Path) -> Path:
     n_frames = len(left_rect)
     if n_frames == 0:
         raise RuntimeError("SKT inference produced no frames.")
+
+    predictor = getattr(model, "predictor", None)
+    runtime_device = str(getattr(predictor, "device", "unknown"))
 
     timestamps = time_s[:n_frames]
     left_rect_arr = np.asarray(left_rect, dtype=np.float64)
@@ -316,6 +341,11 @@ def run_skt(config: dict, run_dir: Path) -> Path:
         stereo_quality_pass1=final.get("stereo_quality_pass1", pass1["stereo_quality"]),
         pair_confidence_pass1=final.get("pair_confidence_pass1", pass1["pair_confidence"]),
         model_name=np.asarray(str(model_path.name)),
+        requested_device=np.asarray(
+            requested_device if requested_device is not None else "auto"
+        ),
+        runtime_device=np.asarray(runtime_device),
+        model_init_ms=np.asarray(model_init_ms, dtype=np.float64),
         deterministic_cuda=np.asarray(deterministic_cuda, dtype=bool),
         postprocess_variant=np.asarray(_variant_name(tri_cfg, tw_cfg, tracking_cfg)),
         reprojection_threshold_px=np.asarray(tri_cfg.reprojection_max_px, dtype=np.float64),

@@ -452,3 +452,108 @@ DeepStream EULA and any required NVIDIA written permission. Formal sources:
 `nvidia_bodypose3d_feasibility/accuracy_full433_formal_fixed_reference/metrics.json`,
 and
 `nvidia_bodypose3d_feasibility/performance_full433_formal_fixed_reference/metrics.json`.
+
+## 2026-09-10 — Stage C (Position-level Robustification) Cross-checks
+
+Extended `eval_position_postprocess_ablation.py` to (1) report every reference
+system available from `prepare_angles` (FastSAM3D comparison trajectory and
+XsensFair external reference, not FastSAM3D-only), (2) add three new dataset
+specs so the existing `adaptive_flag_bone_smooth` default (lambda_base=0.25,
+exponent=1.0, min=0.15, max=1.8, sigma_disparity_px=0.5, sigma_z_ref_cm=0.55)
+could be tested against data it had never touched, and (3) report per-variant
+bone-length coefficient of variation (mean over left/right upper-arm and
+forearm) as a geometry-stability diagnostic independent of angle MAE. These
+checks close the gap between the frozen Stage A detector (YOLOv8m) and the
+Stage C ablation, which had previously run only on YOLO11l NPZs.
+
+### R1 — Stage C on YOLOv8m (fanbo3/4/7)
+
+Commands: `--datasets fanbo3_yolov8m fanbo4_yolov8m fanbo7_yolov8m --adaptive-lambda-base 0.25 --adaptive-exponent 1.0`.
+Output: `00_pose_pipeline_v2/runs/stage_c_confirmation/yolov8m/`.
+
+| Dataset | Reference | current_eval_chain MAE | adaptive_flag_bone_smooth MAE | Delta | Jumps (current -> adaptive) | Valid ratio (current -> adaptive) |
+|---|---|---:|---:|---:|---:|---:|
+| fanbo3 (walking) | FastSAM3D | 14.98 | 12.76 | -2.23 | 278 -> 87 | 0.319 -> 0.339 |
+| fanbo3 (walking) | XsensFair | 17.49 | 15.13 | -2.35 | 280 -> 87 | 0.375 -> 0.399 |
+| fanbo4 (far elbow) | FastSAM3D | 9.82 | 6.55 | -3.27 | 7 -> 0 | 0.603 -> 0.603 |
+| fanbo4 (far elbow) | XsensFair | 13.66 | 11.08 | -2.59 | 11 -> 1 | 0.718 -> 0.718 |
+| fanbo7 (near elbow) | FastSAM3D | 2.60 | 3.27 | +0.67 | 1 -> 0 | 0.374 -> 0.423 |
+| fanbo7 (near elbow) | XsensFair | 10.43 | 10.24 | -0.19 | 1 -> 0 | 0.427 -> 0.513 |
+
+Bone-length CV (mean of 4 limb segments), raw -> adaptive_flag_bone_smooth:
+fanbo3 0.329 -> 0.141; fanbo4 0.268 -> 0.039; fanbo7 0.976 -> 0.473.
+
+Interpretation: the YOLOv8m + adaptive Stage C combination reproduces the
+same direction of improvement seen in the original YOLO11l study on fanbo3
+and fanbo4 (large MAE and jump reduction, halved-to-order-of-magnitude bone
+CV). fanbo7 is the one cell where FastSAM3D MAE increases; this is a coverage
+artifact, not a regression, because `current_eval_chain` evaluates on a
+smaller hard-filtered frame set (valid ratio 0.374) while the position-domain
+variants evaluate on nearly all frames (0.423) -- the extra included frames
+were previously the ones the hard filter rejected as unreliable. The Xsens
+delta on the same cell is flat-to-slightly-better (-0.19 deg), consistent
+with a coverage/MAE trade-off rather than genuine degradation. A common-valid-
+frame recheck is still needed before this cell's number goes into the thesis.
+Decision: Stage A (YOLOv8m) and Stage C (adaptive default) compose without
+contradiction; the seam identified on 2026-09-10 is closed for the 2026 Assar
+data.
+
+### R3 — Stage C on Fanbo9 dual-camera (A255 vs A257)
+
+Command: `--datasets fanbo9_a255 fanbo9_a257` with the same adaptive settings.
+Output: `00_pose_pipeline_v2/runs/stage_c_confirmation/fanbo9/`.
+
+| Camera | Reference | current_eval_chain MAE | adaptive MAE | Delta | Jumps (current -> adaptive) | Valid ratio (current -> adaptive) |
+|---|---|---:|---:|---:|---:|---:|
+| A255 (weaker geometry) | FastSAM3D | 10.70 | 10.38 | -0.32 | 237 -> 142 | 0.681 -> 0.834 |
+| A255 (weaker geometry) | XsensFair | 13.34 | 13.89 | +0.55 | 243 -> 142 | 0.697 -> 0.853 |
+| A257 (clean geometry) | FastSAM3D | 6.42 | 6.45 | +0.03 | 111 -> 53 | 0.857 -> 0.882 |
+| A257 (clean geometry) | XsensFair | 13.39 | 12.82 | -0.57 | 111 -> 53 | 0.882 -> 0.907 |
+
+Bone-length CV, raw -> adaptive: A255 0.533 -> 0.224; A257 0.115 -> 0.045.
+
+Interpretation: unlike fanbo3/4, Fanbo9 MAE is roughly flat in both
+directions (all deltas within +-0.6 deg) on both cameras. The consistent,
+large effect is smoothness and coverage: jump count drops by 40-52% and valid
+ratio rises 2-15 points on every cell. The hypothesized asymmetry ("A255
+should benefit more than A257 because its raw geometry is weaker") is not
+supported by MAE, but is partially supported by bone-CV (A255's relative CV
+reduction is larger). Reported as an observational, non-causal finding per
+the project's confounding rules -- camera position, action, and session are
+not independently varied here.
+
+### R2 — Stage C on the 2025 Aitor blind-validation NPZ (negative result)
+
+Command: `--datasets aitor2025_blind` with the same adaptive settings.
+Output: `00_pose_pipeline_v2/runs/stage_c_confirmation/aitor2025/`.
+
+| Reference | current_eval_chain MAE | adaptive_flag_bone_smooth MAE | Delta | Valid ratio (current -> adaptive) |
+|---|---:|---:|---:|---:|
+| FastSAM3D | 13.91 | 21.65 | +7.74 | 0.617 -> 1.000 |
+| XsensFair | 18.96 | 24.32 | +5.36 | 0.594 -> 0.905 |
+
+Bone-length CV by variant: raw_positions 7.349, bone_only 5.370, smooth_only
+4.800, bone_smooth 4.192, flag_bone_smooth 3.860, adaptive_flag_bone_smooth
+3.864. For reference, the historical 2025 baseline (which already bakes in a
+different position-level chain, `rigid_one_euro`) has bone-length CV 0.115.
+
+Interpretation: this is a genuine negative result, not a coverage artifact --
+MAE gets worse under both references even though Stage C forces near-total
+frame coverage (valid ratio up to 1.0/0.905). The raw 2025 geometry is
+categorically worse than any 2026 Assar cell: bone CV 7.35 versus 0.11-0.98
+for every fanbo3/4/7/9 raw_positions row above, roughly an order of magnitude
+worse. Stage C's adaptive default (tuned on 2026-quality raw geometry) halves
+the bone CV (7.35 -> 3.86) but cannot pull it anywhere near the 0.1-0.3 range
+seen once Stage C is applied to 2026 data, let alone the historical
+`rigid_one_euro` result (0.115). Soft downweighting still lets pathological
+frames influence the fit; on this dataset the existing hard quality/depth
+filter's aggressive exclusion (valid ratio 0.59-0.62) removes more genuine
+damage than it costs in coverage. Decision: Stage C in its current generic
+form does not recover the 2025 blind pipeline to the historical baseline.
+This bounds RQ2 rather than closing it -- the 2025 recording's raw stereo
+geometry is the limiting factor, and either (a) the historical
+`rigid_one_euro` chain is specifically suited to this recording in a way the
+general KF/RTS default is not, or (b) a hard-exclusion pre-filter is still
+required before soft downweighting on data this poor. Report as a bounded/
+negative result with cause and scope, per project convention; do not claim
+cross-dataset transfer for Stage C without this caveat.

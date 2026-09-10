@@ -60,6 +60,39 @@ DEFAULT_DATASETS = {
         config_path=Path("00_pose_pipeline_v2/configs/assar2026_fanbo7_a257.yaml"),
         run_dir=Path("00_pose_pipeline_v2/runs/assar2026_fanbo7_a257_stage1_geometry"),
     ),
+    # Stage A/Stage C cross-check: the original three cells above ran on YOLO11l
+    # NPZs, while the frozen Stage A detector is YOLOv8m. These point at the
+    # existing YOLOv8m ablation_pipeline_model NPZs to confirm the adaptive
+    # bone/KF-RTS default still helps once the detector is fixed.
+    "fanbo3_yolov8m": DatasetSpec(
+        name="fanbo3_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo3_v2_yolov8m.yaml"),
+    ),
+    "fanbo4_yolov8m": DatasetSpec(
+        name="fanbo4_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo4_v2_yolov8m.yaml"),
+    ),
+    "fanbo7_yolov8m": DatasetSpec(
+        name="fanbo7_yolov8m",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo7_v2_yolov8m.yaml"),
+    ),
+    # Dual-camera check: does the Stage C gain differ between the weaker A255
+    # geometry and the cleaner A257 geometry for the same Fanbo9 session.
+    "fanbo9_a255": DatasetSpec(
+        name="fanbo9_a255",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a255_v2_yolov8m.yaml"),
+    ),
+    "fanbo9_a257": DatasetSpec(
+        name="fanbo9_a257",
+        config_path=Path("00_pose_pipeline_v2/configs/ablation_pipeline_model/fanbo9_a257_v2_yolov8m.yaml"),
+    ),
+    # 2025 blind cross-dataset check: the frozen V2+YOLOv8m geometry without any
+    # position-level stage, run through Stage C to see whether it can recover
+    # the historical (already position-smoothed) 2025 baseline.
+    "aitor2025_blind": DatasetSpec(
+        name="aitor2025_blind",
+        config_path=Path("00_pose_pipeline_v2/configs/core_pipeline_validation/aitor2025_v2_yolov8m.yaml"),
+    ),
 }
 
 
@@ -136,6 +169,7 @@ def camera_geometry_from_config(config: dict) -> tuple[float, float]:
 def metric_rows_for_variant(
     dataset_name: str,
     variant: str,
+    reference_name: str,
     time_s: np.ndarray,
     target_angles: dict[str, np.ndarray],
     reference_angles: dict[str, np.ndarray],
@@ -143,7 +177,7 @@ def metric_rows_for_variant(
     jump_threshold: float,
     variant_meta: dict[str, object],
 ) -> list[dict[str, object]]:
-    """Build metric rows for one position-postprocess variant."""
+    """Build metric rows for one position-postprocess variant against one reference system."""
     rows: list[dict[str, object]] = []
     for angle_name in angle_names:
         target = target_angles.get(angle_name)
@@ -165,6 +199,7 @@ def metric_rows_for_variant(
         row = {
             "dataset": dataset_name,
             "variant": variant,
+            "reference": reference_name,
             "angle": angle_name,
             "valid_pair_count": int(np.sum(valid)),
             "valid_ratio": float(np.mean(valid)) if len(valid) else 0.0,
@@ -181,6 +216,32 @@ def metric_rows_for_variant(
         row.update(variant_meta)
         rows.append(row)
     return rows
+
+
+# COCO-17 limb joint-index pairs used for the bone-length stability diagnostic.
+BONE_PAIRS: dict[str, tuple[int, int]] = {
+    "left_upper_arm": (5, 7),
+    "left_forearm": (7, 9),
+    "right_upper_arm": (6, 8),
+    "right_forearm": (8, 10),
+}
+
+
+def bone_length_cv(keypoints: np.ndarray) -> dict[str, float]:
+    """Return coefficient-of-variation of limb bone length as a geometric-stability diagnostic.
+
+    A collapsed pipeline (broken stereo matching, unfiltered outlier frames) shows up
+    as bone lengths that swing wildly frame to frame; this is independent of angle MAE
+    and catches failures that a joint-angle metric alone can mask.
+    """
+    cvs: dict[str, float] = {}
+    for name, (a, b) in BONE_PAIRS.items():
+        dist = np.linalg.norm(keypoints[:, a] - keypoints[:, b], axis=-1)
+        dist = dist[np.isfinite(dist) & (dist > 0)]
+        cvs[f"{name}_cv"] = float(np.std(dist) / np.mean(dist)) if len(dist) > 10 else float("nan")
+    finite_cvs = [v for v in cvs.values() if np.isfinite(v)]
+    cvs["mean_cv"] = float(np.mean(finite_cvs)) if finite_cvs else float("nan")
+    return cvs
 
 
 def build_variants(
@@ -338,6 +399,12 @@ def summarize_dataset(
     if "FastSAM3D" not in all_angles:
         raise RuntimeError(f"{spec.name}: FastSAM3D comparison trajectory is not available.")
 
+    # Report against every comparison/reference system prepare_angles has on hand.
+    # XsensFair is the primary ergonomic-accuracy metric used elsewhere in the thesis
+    # (e.g. angle_eval); FastSAM3D is the comparison trajectory this ablation was
+    # originally built around. Neither is absolute ground truth.
+    reference_systems = [name for name in ("FastSAM3D", "XsensFair") if name in all_angles]
+
     _, raw_keypoints, payload = load_skt_keypoints(config, run_dir)
     raw_keypoints = raw_keypoints[: len(time_s)]
     eval_angle_names = [
@@ -347,23 +414,25 @@ def summarize_dataset(
     ]
 
     rows: list[dict[str, object]] = []
-    rows.extend(
-        metric_rows_for_variant(
-            dataset_name=spec.name,
-            variant="current_eval_chain",
-            time_s=time_s,
-            target_angles=all_angles["SKT"],
-            reference_angles=all_angles["FastSAM3D"],
-            angle_names=eval_angle_names,
-            jump_threshold=jump_threshold,
-            variant_meta={
-                "velocity_flag": False,
-                "bone_correct": False,
-                "kf_rts_smooth": False,
-                "uses_existing_hard_filters": True,
-            },
+    for reference_name in reference_systems:
+        rows.extend(
+            metric_rows_for_variant(
+                dataset_name=spec.name,
+                variant="current_eval_chain",
+                reference_name=reference_name,
+                time_s=time_s,
+                target_angles=all_angles["SKT"],
+                reference_angles=all_angles[reference_name],
+                angle_names=eval_angle_names,
+                jump_threshold=jump_threshold,
+                variant_meta={
+                    "velocity_flag": False,
+                    "bone_correct": False,
+                    "kf_rts_smooth": False,
+                    "uses_existing_hard_filters": True,
+                },
+            )
         )
-    )
 
     variants, meta = build_variants(
         raw_keypoints,
@@ -381,20 +450,25 @@ def summarize_dataset(
         adaptive_min_lambda=adaptive_min_lambda,
         adaptive_max_lambda=adaptive_max_lambda,
     )
+    bone_cv_by_variant = {"raw_positions": bone_length_cv(raw_keypoints)}
     for variant_name, positions in variants.items():
+        if variant_name != "raw_positions":
+            bone_cv_by_variant[variant_name] = bone_length_cv(positions)
         angles = process_angles(positions, time_s, config, eval_angle_names)
-        rows.extend(
-            metric_rows_for_variant(
-                dataset_name=spec.name,
-                variant=variant_name,
-                time_s=time_s,
-                target_angles=angles,
-                reference_angles=all_angles["FastSAM3D"],
-                angle_names=eval_angle_names,
-                jump_threshold=jump_threshold,
-                variant_meta={**meta[variant_name], "uses_existing_hard_filters": False},
+        for reference_name in reference_systems:
+            rows.extend(
+                metric_rows_for_variant(
+                    dataset_name=spec.name,
+                    variant=variant_name,
+                    reference_name=reference_name,
+                    time_s=time_s,
+                    target_angles=angles,
+                    reference_angles=all_angles[reference_name],
+                    angle_names=eval_angle_names,
+                    jump_threshold=jump_threshold,
+                    variant_meta={**meta[variant_name], "uses_existing_hard_filters": False},
+                )
             )
-        )
 
     details = {
         "dataset": spec.name,
@@ -402,6 +476,8 @@ def summarize_dataset(
         "run_dir": str(run_dir),
         "selected_offset_seconds": offset_s,
         "angle_names": eval_angle_names,
+        "reference_systems": reference_systems,
+        "bone_length_cv_by_variant": bone_cv_by_variant,
         "trc_summaries": info.get("trc_summaries", {}),
     }
     return rows, details
@@ -422,15 +498,17 @@ def write_csv(path: Path, rows: list[dict[str, object]]) -> None:
 
 
 def write_compact_summary(path: Path, rows: list[dict[str, object]]) -> None:
-    """Write dataset/variant compact averages to CSV."""
-    groups: dict[tuple[str, str], list[dict[str, object]]] = {}
+    """Write dataset/variant/reference compact averages to CSV."""
+    groups: dict[tuple[str, str, str], list[dict[str, object]]] = {}
     for row in rows:
-        groups.setdefault((str(row["dataset"]), str(row["variant"])), []).append(row)
+        key = (str(row["dataset"]), str(row["variant"]), str(row.get("reference", "FastSAM3D")))
+        groups.setdefault(key, []).append(row)
     compact = []
-    for (dataset, variant), group_rows in sorted(groups.items()):
+    for (dataset, variant, reference), group_rows in sorted(groups.items()):
         compact.append({
             "dataset": dataset,
             "variant": variant,
+            "reference": reference,
             "mean_mae_deg": float(np.nanmean([float(row["mae_deg"]) for row in group_rows])),
             "mean_rmse_deg": float(np.nanmean([float(row["rmse_deg"]) for row in group_rows])),
             "mean_acc_rms_deg_s2": float(np.nanmean([float(row["target_angular_acc_rms_deg_s2"]) for row in group_rows])),

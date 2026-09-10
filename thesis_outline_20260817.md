@@ -13,7 +13,16 @@
 - Explain the value of camera-based analysis of posture, joint angles, and critical hazardous moments.
 - Present the practical aim: rather than medical- or laboratory-grade precision, the system should provide stable and understandable results that are sufficient for ergonomic decisions.
 - Introduce occlusion, camera distance, viewpoint, and computational speed as the main challenges.
-- Define the research questions, scope, and contributions; activity recognition is not evaluated as a separate task.
+
+### Research Questions
+
+- **RQ1 — Accuracy:** *How closely do stereo-based SKT and monocular FastSAM3D agree with an Xsens-derived reference in estimating ergonomically relevant human posture?*
+- **RQ2 — Robustness:** *How does the performance of the two approaches vary across different distances, viewpoints, and occlusion conditions?*
+- **RQ3 — Deployment feasibility:** *How feasible is the real-time deployment of the selected SKT pipeline for industrial ergonomic assessment?*
+
+In RQ1, accuracy refers to agreement with an Xsens-derived reference rather than physical accuracy established using absolute ground truth.
+
+- Conclude the chapter by defining the scope and contributions; activity recognition is not evaluated as a separate task.
 
 ## Chapter 2: Background and Related Work
 

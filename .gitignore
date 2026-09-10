@@ -282,6 +282,8 @@ shared/recovered_methods/
 results/
 src/*.png
 *.html
+!weekly_reports/weekly_summary_20260511.html
+!weekly_reports/weekly_summary_20260511_CN.html
 archive_intermediate_*/
 
 # Ignore local output folders (generated parameters/results)

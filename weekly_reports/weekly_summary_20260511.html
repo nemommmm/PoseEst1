@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Weekly Update 2026-05-11 · Elbow Motion Agreement Evaluation</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: #f5f7fa;
+    color: #1a1a2e;
+    line-height: 1.75;
+    font-size: 15px;
+  }
+  .page {
+    max-width: 1100px;
+    margin: 0 auto;
+    padding: 40px 32px 80px;
+  }
+  header {
+    border-left: 4px solid #1565C0;
+    padding-left: 16px;
+    margin-bottom: 36px;
+  }
+  header h1 {
+    font-size: 22px;
+    font-weight: 700;
+    color: #1565C0;
+    margin-bottom: 6px;
+  }
+  header .meta { color: #666; font-size: 13px; }
+  nav {
+    background: #fff;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin-bottom: 32px;
+    box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+    font-size: 13px;
+  }
+  nav a { color: #1565C0; text-decoration: none; margin-right: 20px; }
+  nav a:hover { text-decoration: underline; }
+  .card {
+    background: #fff;
+    border-radius: 10px;
+    padding: 28px 32px 24px;
+    margin-bottom: 24px;
+    box-shadow: 0 1px 6px rgba(0,0,0,0.07);
+  }
+  .card h2 {
+    font-size: 17px;
+    font-weight: 700;
+    color: #1a1a2e;
+    margin-bottom: 14px;
+  }
+  .card p { margin-bottom: 10px; color: #333; }
+  .card p:last-child { margin-bottom: 0; }
+  .highlight-box {
+    background: #e8f0fe;
+    border-left: 3px solid #1565C0;
+    border-radius: 0 6px 6px 0;
+    padding: 12px 16px;
+    margin: 14px 0;
+    font-size: 14px;
+    color: #1a3a6e;
+  }
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 14px;
+    margin-top: 16px;
+  }
+  thead tr { background: #1565C0; color: #fff; }
+  thead th { padding: 10px 12px; text-align: left; font-weight: 600; }
+  tbody tr:nth-child(even) { background: #f8f9ff; }
+  tbody tr:hover { background: #e8f0fe; }
+  tbody td { padding: 9px 12px; border-bottom: 1px solid #eee; }
+  tr.anchor-row td {
+    background: #e3f2fd;
+    color: #0d47a1;
+    font-style: italic;
+  }
+  tr.anchor-row:hover td { background: #bbdefb; }
+  .num-good { color: #2e7d32; font-weight: 600; }
+  .num-mid  { color: #e65100; font-weight: 600; }
+  .num-bad  { color: #c62828; font-weight: 600; }
+  .img-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .img-block {
+    background: #f8f9ff;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid #e0e6f8;
+  }
+  .img-block img { width: 100%; display: block; }
+  .img-caption {
+    font-size: 12.5px;
+    color: #555;
+    padding: 8px 12px;
+    background: #f0f4ff;
+    border-top: 1px solid #e0e6f8;
+    text-align: center;
+  }
+  .insight-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin-top: 16px;
+  }
+  @media (max-width: 700px) {
+    .insight-grid, .img-grid { grid-template-columns: 1fr; }
+  }
+  .insight-item {
+    background: #f8f9ff;
+    border-radius: 8px;
+    padding: 16px 18px;
+    border-top: 3px solid #1565C0;
+  }
+  .insight-item h3 {
+    font-size: 14px;
+    font-weight: 700;
+    color: #1565C0;
+    margin-bottom: 8px;
+  }
+  .insight-item p {
+    font-size: 13px;
+    color: #444;
+    line-height: 1.6;
+    margin: 0;
+  }
+  .note {
+    font-size: 12.5px;
+    color: #777;
+    margin-top: 14px;
+    border-top: 1px dashed #ddd;
+    padding-top: 10px;
+  }
+  .section-label {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    color: #888;
+    margin: 20px 0 12px;
+  }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <header>
+    <h1>Elbow Motion Agreement Evaluation &middot; Weekly Update</h1>
+    <div class="meta">Master Thesis &nbsp;&middot;&nbsp; Fanbo Meng &nbsp;&middot;&nbsp; 2026-05-11</div>
+  </header>
+
+  <nav>
+    <a href="#background">Background</a>
+    <a href="#method">Method</a>
+    <a href="#results">Results</a>
+    <a href="#plots">Delta Curves</a>
+    <a href="#findings">Four Findings</a>
+    <a href="#rula">RULA Supplement</a>
+  </nav>
+
+  <!-- 1. Background -->
+  <div class="card" id="background">
+    <h2>📌 Background: Why We Moved Away from Absolute Angle Error</h2>
+    <p>Two weeks ago we confirmed in the meeting that Xsens sensors can be worn in any orientation and rely on a calibration procedure to establish their reference frame. This calibration introduces a systematic angular offset into the output. As a result, directly comparing absolute values — "Xsens reads 80°, the vision system reads 90°, so the error is 10°" — is not meaningful, because the two systems do not share the same absolute reference.</p>
+    <p>However, Aitor pointed out a key property: although the absolute values are offset, <strong>the angular change</strong> from one frame to the next is not affected by this offset. This week we therefore shifted the evaluation focus from "how far apart are the absolute angles" to "do the systems track the same motion".</p>
+    <div class="highlight-box">
+      The core question becomes: when Xsens detects that the elbow flexes by 15° over 0.5 seconds, does the vision system detect a change of similar direction and magnitude?
+    </div>
+  </div>
+
+  <!-- 2. Method -->
+  <div class="card" id="method">
+    <h2>🔧 Method: MAE@K=6</h2>
+    <p>Instead of comparing the absolute angle at each frame, we compare the angular change over <strong>0.48 seconds</strong> (6 frames at 12.5 fps). MAE (mean absolute error) is then computed between the change sequences of two systems.</p>
+    <p>The 0.48-second window was chosen deliberately: at the single-frame level (80 ms), sub-pixel keypoint noise is geometrically amplified into 4–6° of apparent motion per frame, making the signal-to-noise ratio too low to be useful. At 2 seconds, fine temporal detail is lost. At 0.48 seconds, the window corresponds roughly to the duration of a single natural sub-action such as one grasp or one elbow extension.</p>
+    <div class="highlight-box">
+      <strong>Method validation:</strong> Applying the same comparison between Xsens native joint angles and geometrically re-derived angles yields MAE of only <strong>0.7°–0.9°</strong> and Pearson r of <strong>0.99</strong>. This confirms Aitor's observation in data: the Xsens calibration offset is a DC bias that does not affect motion-level comparison — and this is the fundamental justification for the motion-based approach.
+    </div>
+  </div>
+
+  <!-- 3. Results -->
+  <div class="card" id="results">
+    <h2>📊 Main Results (MAE@K=6)</h2>
+    <p>Results below cover the full recording (~248 s). <em style="color:#0d47a1;">Blue italic rows</em> show the Xsens self-comparison baseline (physical lower bound).</p>
+    <table>
+      <thead>
+        <tr>
+          <th>System</th><th>Elbow</th><th>MAE@K=6</th><th>Pearson r</th><th>Stable Window MAE *</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="anchor-row">
+          <td>Xsens self-comparison (baseline)</td><td>Left</td><td>0.9°</td><td>0.988</td><td>0.3°</td>
+        </tr>
+        <tr class="anchor-row">
+          <td>Xsens self-comparison (baseline)</td><td>Right</td><td>0.7°</td><td>0.996</td><td>0.7°</td>
+        </tr>
+        <tr>
+          <td>SKT (stereo triangulation)</td><td>Left</td>
+          <td class="num-mid">10.6°</td><td>0.503</td><td class="num-mid">6.8°</td>
+        </tr>
+        <tr>
+          <td>SKT (stereo triangulation)</td><td>Right</td>
+          <td class="num-bad">12.4°</td><td>0.422</td><td class="num-bad">12.6°</td>
+        </tr>
+        <tr>
+          <td>FastSAM3D (hybrid system)</td><td>Left</td>
+          <td class="num-mid">8.9°</td><td>0.300</td><td class="num-good">5.0°</td>
+        </tr>
+        <tr>
+          <td>FastSAM3D (hybrid system)</td><td>Right</td>
+          <td class="num-mid">9.8°</td><td>0.287</td><td class="num-good">6.5°</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">* Stable window (22.5–43.8 s): a segment with higher keypoint detection quality and lower jitter. SKT left elbow and both FastSAM3D sides improve substantially, but SKT right elbow barely changes (12.4° → 12.6°), suggesting a persistent error source beyond keypoint quality for that side.</p>
+  </div>
+
+  <!-- 4. Delta curve plots -->
+  <div class="card" id="plots">
+    <h2>📈 K=6 Delta Curves</h2>
+    <p>Each plot shows the 0.48-second angular change (Δangle) at every time step. The closer the four curves track each other, the better the systems agree on the same motion event.</p>
+
+    <p class="section-label">Full recording (248 s)</p>
+    <div class="img-grid">
+      <div class="img-block">
+        <img src="figures/weekly_summary_20260511_leftelbow_full.png" alt="Full recording K=6 left elbow delta">
+        <div class="img-caption">Left elbow &middot; Full recording &middot; MAE: SKT 10.6°, FastSAM3D 8.9°</div>
+      </div>
+      <div class="img-block">
+        <img src="figures/weekly_summary_20260511_rightelbow_full.png" alt="Full recording K=6 right elbow delta">
+        <div class="img-caption">Right elbow &middot; Full recording &middot; MAE: SKT 12.4°, FastSAM3D 9.8°</div>
+      </div>
+    </div>
+    </div>
+
+    <p class="section-label">Stable window (22.5–43.8 s, higher keypoint quality)</p>
+    <div class="img-grid">
+      <div class="img-block">
+        <img src="figures/weekly_summary_20260511_leftelbow_stable.png" alt="Stable window K=6 left elbow delta">
+        <div class="img-caption">Left elbow &middot; Stable window &middot; MAE: SKT 6.8°, FastSAM3D 5.0° (Pearson 0.73)</div>
+      </div>
+      <div class="img-block">
+        <img src="figures/weekly_summary_20260511_rightelbow_stable.png" alt="Stable window K=6 right elbow delta">
+        <div class="img-caption">Right elbow &middot; Stable window &middot; MAE: SKT 12.6°, FastSAM3D 6.5° (Pearson 0.87)</div>
+      </div>
+    </div>
+    <p class="note">FastSAM3D curves tighten noticeably in the stable window, as does SKT left elbow. SKT right elbow shows almost no improvement, pointing to an additional error source beyond keypoint detection quality.</p>
+  </div>
+
+  <!-- 5. Four findings -->
+  <div class="card" id="findings">
+    <h2>💡 Four Findings That Absolute MAE Cannot Reveal</h2>
+    <p>Absolute angle error only tells you "how many degrees apart." Motion-level evaluation can answer finer questions:</p>
+    <div class="insight-grid">
+
+      <div class="insight-item">
+        <h3>① The two systems fail in opposite ways</h3>
+        <p>SKT's error is dominated by <strong>excess motion</strong> — keypoint noise artificially amplifies total elbow movement by roughly 1.57×, adding approximately 57% spurious motion on top of the true signal (visible as high-frequency spikes in the full-recording curves). FastSAM3D goes in the opposite direction: its total movement nearly matches Xsens (0.97×), but peak amplitudes tend to be suppressed. These two failure modes point to entirely different improvement strategies, which absolute error alone cannot distinguish.</p>
+      </div>
+
+      <div class="insight-item">
+        <h3>② Keypoint quality sets the performance ceiling</h3>
+        <p>In the stable window, SKT left elbow MAE drops from 10.6° to <strong>6.8°</strong>, and FastSAM3D left to <strong>5.0°</strong> (Pearson 0.73). This indicates that the primary error source in the full recording is keypoint localisation quality in low-quality frames, not a fundamental flaw in the skeletal geometry or angle computation.</p>
+      </div>
+
+      <div class="insight-item">
+        <h3>③ The Xsens offset exists only at the absolute level</h3>
+        <p>Xsens native joint angles vs. geometrically re-derived angles differ by roughly 10° in absolute terms, yet their motion-level MAE is only <strong>0.7°–0.9°</strong> with Pearson r = 0.99. This quantitatively confirms Aitor's observation: the Xsens calibration offset is a static DC bias that does not affect dynamic motion comparison.</p>
+      </div>
+
+      <div class="insight-item">
+        <h3>④ Better motion agreement does not guarantee better ergonomic classification</h3>
+        <p>FastSAM3D achieves a lower overall MAE than SKT, yet its RULA risk-bin agreement rate is lower (see below). The reason is that its <strong>peak angles are systematically suppressed</strong>, which causes activity segments to fall into the wrong risk category. Motion error and classification agreement must be reported separately — neither alone is sufficient.</p>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- 6. RULA supplement -->
+  <div class="card" id="rula">
+    <h2>🏭 Application-Layer Supplement: RULA Risk-Bin Agreement</h2>
+    <p>RULA classifies elbow flexion into three risk levels (&lt;60°, 60°–100°, &gt;100°). From the full recording, <strong>12 left-elbow activity segments and 15–16 right-elbow segments</strong> were automatically detected; the peak angle in each segment was classified and compared against the Xsens-derived reference.</p>
+    <table>
+      <thead>
+        <tr>
+          <th>System</th><th>Left agreement</th><th>Right agreement</th><th>SKT within one bin</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr class="anchor-row">
+          <td>Xsens self-comparison (baseline)</td><td>91.7%</td><td>100%</td><td>—</td>
+        </tr>
+        <tr>
+          <td>SKT</td>
+          <td class="num-mid">58.3%</td><td class="num-mid">53.3%</td><td class="num-good">100%</td>
+        </tr>
+        <tr>
+          <td>FastSAM3D</td>
+          <td class="num-bad">41.7%</td><td class="num-bad">33.3%</td><td>—</td>
+        </tr>
+      </tbody>
+    </table>
+    <p style="margin-top:14px;">SKT reaches 100% agreement when a one-bin tolerance is allowed, meaning classification errors never skip a risk level — a high-risk segment is never misclassified as low-risk. FastSAM3D's lower agreement rate is consistent with Finding ④: suppressed peak angles shift segments into the wrong bin.</p>
+    <p class="note">RULA classification is based on peak angles within each activity segment and is independent of the MAE@K=6 metric. Reporting both provides a more complete picture of system performance.</p>
+  </div>
+
+</div>
+</body>
+</html>
+

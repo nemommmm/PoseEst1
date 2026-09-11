@@ -112,7 +112,37 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--adaptive-exponent", type=float, default=1.3)
     parser.add_argument("--adaptive-min-lambda", type=float, default=0.15)
     parser.add_argument("--adaptive-max-lambda", type=float, default=1.8)
+    parser.add_argument(
+        "--physical-gate-max-depth-cm",
+        type=float,
+        default=None,
+        help=(
+            "Optional physical validity gate applied to raw positions before every "
+            "position-level variant. Joints whose triangulated depth exceeds this bound "
+            "are set to NaN. Near-degenerate disparity makes depth diverge (Z = f*B/d), "
+            "producing observations that are not merely noisy but physically impossible; "
+            "soft down-weighting cannot neutralise those, so they must be excluded."
+        ),
+    )
     return parser.parse_args()
+
+
+def apply_physical_depth_gate(keypoints: np.ndarray, max_depth_cm: float) -> tuple[np.ndarray, dict[str, float]]:
+    """Drop joint observations whose triangulated depth is physically impossible."""
+    gated = np.asarray(keypoints, dtype=np.float64).copy()
+    depth = np.abs(gated[:, :, 2])
+    bad = np.isfinite(depth) & (depth > max_depth_cm)
+    gated[bad, :] = np.nan
+    finite_before = np.isfinite(keypoints).all(axis=2)
+    finite_after = np.isfinite(gated).all(axis=2)
+    stats = {
+        "gate_max_depth_cm": float(max_depth_cm),
+        "gate_dropped_observations": int(np.sum(bad)),
+        "gate_dropped_fraction": float(np.sum(bad) / max(bad.size, 1)),
+        "gate_finite_ratio_before": float(np.mean(finite_before)),
+        "gate_finite_ratio_after": float(np.mean(finite_after)),
+    }
+    return gated, stats
 
 
 def resolve_project_path(path: Path) -> Path:
@@ -388,6 +418,7 @@ def summarize_dataset(
     adaptive_exponent: float,
     adaptive_min_lambda: float,
     adaptive_max_lambda: float,
+    physical_gate_max_depth_cm: float | None = None,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Run the position-level ablation for one dataset."""
     config = load_config(resolve_project_path(spec.config_path))
@@ -407,6 +438,9 @@ def summarize_dataset(
 
     _, raw_keypoints, payload = load_skt_keypoints(config, run_dir)
     raw_keypoints = raw_keypoints[: len(time_s)]
+    gate_stats: dict[str, float] = {}
+    if physical_gate_max_depth_cm is not None:
+        raw_keypoints, gate_stats = apply_physical_depth_gate(raw_keypoints, physical_gate_max_depth_cm)
     eval_angle_names = [
         name
         for name in section(config, "evaluation").get("angle_names", list(all_angles["FastSAM3D"]))
@@ -478,6 +512,7 @@ def summarize_dataset(
         "angle_names": eval_angle_names,
         "reference_systems": reference_systems,
         "bone_length_cv_by_variant": bone_cv_by_variant,
+        "physical_depth_gate": gate_stats or None,
         "trc_summaries": info.get("trc_summaries", {}),
     }
     return rows, details
@@ -540,6 +575,11 @@ def main() -> None:
             adaptive_exponent=float(args.adaptive_exponent),
             adaptive_min_lambda=float(args.adaptive_min_lambda),
             adaptive_max_lambda=float(args.adaptive_max_lambda),
+            physical_gate_max_depth_cm=(
+                float(args.physical_gate_max_depth_cm)
+                if args.physical_gate_max_depth_cm is not None
+                else None
+            ),
         )
         all_rows.extend(rows)
         details.append(info)
@@ -561,6 +601,7 @@ def main() -> None:
             "adaptive_exponent": args.adaptive_exponent,
             "adaptive_min_lambda": args.adaptive_min_lambda,
             "adaptive_max_lambda": args.adaptive_max_lambda,
+            "physical_gate_max_depth_cm": args.physical_gate_max_depth_cm,
             "reference": "FastSAM3D comparison trajectory; not absolute ground truth.",
         },
         "details": details,

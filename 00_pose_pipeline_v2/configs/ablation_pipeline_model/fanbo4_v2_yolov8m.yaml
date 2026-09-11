@@ -27,14 +27,21 @@ skt:
     enforce_epipolar_constraint: true
     epipolar_soft_threshold_px: 10.0
     epipolar_soft_max_strength: 0.80
-    epipolar_correction_decay_px: 3.0
+    epipolar_correction_decay_px: 0.0  # 2026-09-11: frozen at 0 (disabled) -- fixed a diagnostic bug where
+                                       # the shift-based confidence decay was silently a no-op; keeping it
+                                       # explicitly disabled preserves the already-validated triangulation
+                                       # behavior instead of silently activating an unvalidated effect.
     epipolar_base_px: 6.0
     epipolar_conf_gain_px: 18.0
     reprojection_base_px: 18.0
     reprojection_conf_gain_px: 42.0
     reprojection_max_px: 80.0
     min_pair_conf: 0.25
-    min_disparity_px: 1.5
+    min_disparity_px: 45.0  # 2026-09-11: raised from 1.5 (implied max depth 311 m, physically meaningless)
+                            # to 45.0 (implied max depth ~10 m across all three calibrations), matching the
+                            # already-validated physical depth gate. Zero effect on 2026 Assar data (all
+                            # observed disparities are >=91px); removes the ~1% physically-impossible
+                            # far-range triangulations responsible for the 2025 bone-length blowup.
   temporal_window:
     enabled: true
     radius: 3
@@ -55,9 +62,14 @@ skt:
     target_x_fraction: 0.42
   stereo_sanity:
     enabled: true
-    max_bbox_top_y_diff_px: 30.0
+    # max_bbox_top_y_diff_px and max_bbox_center_y_diff_ratio removed 2026-09-11:
+    # both only apply on the fallback path taken when fewer than 4 rectified joints
+    # are finite, which never occurred in any of the 6 canonical datasets audited
+    # (confirmed via stereo_sanity_reason -- only bbox_height_ratio/rectified_joint_y/
+    # ok_rectified/missing_candidate were ever observed). Removing them falls back to
+    # the StereoSanityConfig defaults (30.0px / 0.2), so this is a no-op today; it only
+    # documents that the active fallback path was never exercised.
     bbox_height_ratio_range: [0.6, 1.67]
-    max_bbox_center_y_diff_ratio: 0.2
     max_rectified_joint_y_median_px: 30.0
 
 references:

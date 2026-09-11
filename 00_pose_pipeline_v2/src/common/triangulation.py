@@ -127,13 +127,18 @@ def enforce_epipolar_constraint(
 
         wl = max(float(eff_conf_l[joint_idx]) if np.isfinite(eff_conf_l[joint_idx]) else 0.01, 0.01)
         wr = max(float(eff_conf_r[joint_idx]) if np.isfinite(eff_conf_r[joint_idx]) else 0.01, 0.01)
+        old_left_y = float(left_pt[1])
+        old_right_y = float(right_pt[1])
         merged_y = (wl * left_pt[1] + wr * right_pt[1]) / (wl + wr)
         correction_ratio = 1.0 - (pre_error[joint_idx] / max(cfg.epipolar_soft_threshold_px, 1e-6))
         alpha = cfg.epipolar_soft_max_strength * max(correction_ratio, 0.0)
         corrected_l[joint_idx, 1] = left_pt[1] + alpha * (merged_y - left_pt[1])
         corrected_r[joint_idx, 1] = right_pt[1] + alpha * (merged_y - right_pt[1])
-        shift_l[joint_idx] = abs(float(corrected_l[joint_idx, 1] - left_pt[1]))
-        shift_r[joint_idx] = abs(float(corrected_r[joint_idx, 1] - right_pt[1]))
+        # left_pt/right_pt are views into corrected_l/corrected_r, so they already
+        # reflect the update above; the shift must be computed against the values
+        # captured before the assignment, not against left_pt/right_pt post-assignment.
+        shift_l[joint_idx] = abs(float(corrected_l[joint_idx, 1]) - old_left_y)
+        shift_r[joint_idx] = abs(float(corrected_r[joint_idx, 1]) - old_right_y)
         post_error[joint_idx] = abs(float(corrected_l[joint_idx, 1] - corrected_r[joint_idx, 1]))
 
         if cfg.epipolar_correction_decay_px > 0.0:

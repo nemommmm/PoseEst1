@@ -24,7 +24,7 @@ if str(SCRIPT_DIR) not in sys.path:
 
 from common.angles import compute_angle_sequence, fill_short_gaps, moving_average, odd_window_from_ms
 from common.config import load_config, resolve_path, section
-from common.dataset import load_skt_keypoints
+from common.dataset import apply_depth_consistency_filter, apply_skt_quality_filter, load_skt_keypoints
 from common.metrics import jsonable, mae, median_abs_error, rmse
 from common.position_postprocess import (
     depth_adaptive_lambda,
@@ -112,6 +112,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--adaptive-exponent", type=float, default=1.3)
     parser.add_argument("--adaptive-min-lambda", type=float, default=0.15)
     parser.add_argument("--adaptive-max-lambda", type=float, default=1.8)
+    parser.add_argument(
+        "--hard-filter-before-stage-c",
+        action="store_true",
+        help=(
+            "Apply the existing Stage D quality/depth-consistency filters to the raw "
+            "keypoints before running the Stage C position-level variants, instead of "
+            "running Stage C on fully raw keypoints. Tests whether hard-excluding "
+            "poor-quality-but-geometrically-plausible frames first, then softly "
+            "smoothing what remains, outperforms either stage alone."
+        ),
+    )
     parser.add_argument(
         "--physical-gate-max-depth-cm",
         type=float,
@@ -419,6 +430,7 @@ def summarize_dataset(
     adaptive_min_lambda: float,
     adaptive_max_lambda: float,
     physical_gate_max_depth_cm: float | None = None,
+    hard_filter_before_stage_c: bool = False,
 ) -> tuple[list[dict[str, object]], dict[str, object]]:
     """Run the position-level ablation for one dataset."""
     config = load_config(resolve_project_path(spec.config_path))
@@ -438,6 +450,14 @@ def summarize_dataset(
 
     _, raw_keypoints, payload = load_skt_keypoints(config, run_dir)
     raw_keypoints = raw_keypoints[: len(time_s)]
+    hard_filter_stats: dict[str, int] = {}
+    if hard_filter_before_stage_c:
+        # Apply the same Stage D quality/depth-consistency exclusion used by
+        # current_eval_chain to the raw positions before Stage C ever sees them,
+        # instead of letting Stage C's soft down-weighting see every raw frame.
+        raw_keypoints, quality_stats = apply_skt_quality_filter(raw_keypoints, payload, config)
+        raw_keypoints, depth_stats = apply_depth_consistency_filter(raw_keypoints, config)
+        hard_filter_stats = {**quality_stats, **depth_stats}
     gate_stats: dict[str, float] = {}
     if physical_gate_max_depth_cm is not None:
         raw_keypoints, gate_stats = apply_physical_depth_gate(raw_keypoints, physical_gate_max_depth_cm)
@@ -513,6 +533,8 @@ def summarize_dataset(
         "reference_systems": reference_systems,
         "bone_length_cv_by_variant": bone_cv_by_variant,
         "physical_depth_gate": gate_stats or None,
+        "hard_filter_before_stage_c": hard_filter_before_stage_c,
+        "hard_filter_stats": hard_filter_stats or None,
         "trc_summaries": info.get("trc_summaries", {}),
     }
     return rows, details
@@ -580,6 +602,7 @@ def main() -> None:
                 if args.physical_gate_max_depth_cm is not None
                 else None
             ),
+            hard_filter_before_stage_c=bool(args.hard_filter_before_stage_c),
         )
         all_rows.extend(rows)
         details.append(info)
@@ -602,6 +625,7 @@ def main() -> None:
             "adaptive_min_lambda": args.adaptive_min_lambda,
             "adaptive_max_lambda": args.adaptive_max_lambda,
             "physical_gate_max_depth_cm": args.physical_gate_max_depth_cm,
+            "hard_filter_before_stage_c": bool(args.hard_filter_before_stage_c),
             "reference": "FastSAM3D comparison trajectory; not absolute ground truth.",
         },
         "details": details,

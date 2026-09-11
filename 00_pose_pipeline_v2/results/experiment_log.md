@@ -557,3 +557,144 @@ general KF/RTS default is not, or (b) a hard-exclusion pre-filter is still
 required before soft downweighting on data this poor. Report as a bounded/
 negative result with cause and scope, per project convention; do not claim
 cross-dataset transfer for Stage C without this caveat.
+
+## 2026-09-11 — Stage B Firing-Rate Audit, Triangulation Bug Fix, and the
+`min_disparity_px` / Hard-Filter-Then-Stage-C Follow-ups
+
+Audited every Stage B (V2 stereo geometry) sub-mechanism's actual activation
+rate across the six canonical V2+YOLOv8m NPZs (fanbo3/4/7, fanbo9 A255/A257,
+aitor2025 blind) by reading the per-frame diagnostic arrays already stored in
+each `skt_pose_optimized.npz`, rather than assuming a mechanism matters
+because it exists in the config. This was prompted by a hypothesis that
+`stereo_sanity`'s multi-person-disambiguation logic was added for one
+scenario and rarely used elsewhere.
+
+### Firing-rate findings
+
+| Mechanism | Verdict | Evidence |
+|---|---|---|
+| Crop tracking | Active, primary path | 94.7-96.7% of frames on every dataset |
+| Temporal-window rescue | Active | Touches 0.5-23% of observations; 77-100% of touched cases reduce reprojection error |
+| Soft epipolar correction | Active | Reduces median epipolar error by ~0.4-1.4px on every dataset |
+| `bbox_height_ratio_range` | Active, dataset-dependent | Fires on fanbo7 (14.5%), fanbo4 (2.1%), aitor2025 (14.1%); 0% on fanbo3/fanbo9 |
+| `max_rectified_joint_y_median_px` | Active | Fires as `rectified_joint_y` reason, 3.8% on aitor2025 |
+| `reprojection_max_px=80` (triangulation ceiling) | Active but invisible from output alone | Caps `min(80, base + gain*(1-conf) + 0.35*epipolar)`; rejected points never appear in the saved `reprojection_error` array, so auditing only the NPZ output undercounts its effect. Initially misclassified as dead; corrected after reading `triangulate_pose`. |
+| `max_misses=8` (tracking fallback) | Active on 2025 only | Right-camera track loss reached a 26-frame consecutive streak on aitor2025 (>max_misses); 0 frames on every 2026 Assar dataset |
+| `max_bbox_top_y_diff_px`, `max_bbox_center_y_diff_ratio` | Genuinely dead | Code path only reached when fewer than 4 rectified joints are finite, which never occurred in any of the 6 datasets |
+| `min_crop_accept_score=0.62` | Not dead, but neutered | `center_person_weight=5.0` inflates every candidate's score to ~5.7 median (confirmed via `track_score_left`), so the 0.62 accept threshold is trivially satisfied regardless of detection quality; the mechanism still discriminates *between* multiple candidates in a frame (needed on the two A257 sessions, see below), it just no longer gates accept/reject meaningfully |
+
+Multi-person check: a 40-frame evenly-sampled YOLO scan of fanbo4 (A257 far),
+fanbo7 (A257 near), and fanbo3 (A255 walking) found multi-person frames on
+both A257 recordings (fanbo7 7.5%, fanbo4 2.5%, max 2 people) and none on the
+A255 recording. This does not support "fanbo4 specifically needed
+person-selection logic"; it is better described as an A257-site effect
+(background foot traffic) rather than a single-recording anomaly. Decision:
+keep `center_person_weight` as-is; do not treat it as removable.
+
+### Diagnostic bug fixed: `epipolar_shift_left_px` / `epipolar_shift_right_px`
+
+`enforce_epipolar_constraint` in `common/triangulation.py` computed the shift
+as `corrected_l[joint_idx,1] - left_pt[1]` where `left_pt` is a numpy *view*
+into `corrected_l`, so by the time the subtraction ran both operands already
+held the post-correction value and the shift was identically zero on every
+dataset. The correction itself was applied correctly (verified: epipolar
+error pre/post differs by up to 1.9px per observation); only the shift
+diagnostic and the resulting confidence-decay term were silently broken.
+Fixed by capturing the pre-assignment value before mutating the array.
+Because fixing the bug would, for the first time, make
+`epipolar_correction_decay_px > 0` actually decay confidence during
+triangulation -- an unvalidated behavior change -- `epipolar_correction_decay_px`
+was explicitly set to `0.0` in all six canonical configs to freeze current
+triangulation output while still fixing the diagnostic. Confirmed post-fix:
+`epipolar_shift_left_px` is non-zero on 89.8% of corrected observations.
+
+### Config simplification (six canonical V2+YOLOv8m configs)
+
+Removed `max_bbox_top_y_diff_px` and `max_bbox_center_y_diff_ratio` (falls
+back to identical code defaults; genuinely unreachable given >=4 finite
+rectified joints in all 6 datasets). Left `max_misses`, `bbox_height_ratio_range`,
+`max_rectified_joint_y_median_px`, `reprojection_max_px`, and
+`min_crop_accept_score` untouched -- each is either active or a documented,
+not-silently-fixed design interaction (`min_crop_accept_score`).
+
+### `min_disparity_px`: 1.5 -> 45.0 (source-level fix for the 2025 physical-depth bug)
+
+`min_disparity_px=1.5` implies a maximum triangulated depth of `f*B/1.5` =
+311 m across the three calibrations (f*B = 46263-46619). Raised to 45.0
+(implied max depth ~10.3 m, matching the physical-depth-gate value already
+validated on 2026-09-10). Verified zero effect on all five 2026 Assar
+datasets (disparity <45px occurs in 0.000-0.130% of core-joint observations,
+already below the old 1.5px threshold's own reach) and a real, targeted
+effect on aitor2025 (1.400% of observations, exactly matching the fraction
+gated post-hoc yesterday).
+
+Re-ran SKT triangulation for aitor2025 with the new threshold (source-level
+fix, not a post-hoc position gate):
+
+| Metric | Before (min_disp=1.5) | After (min_disp=45) |
+|---|---:|---:|
+| Bone-length CV (mean) | 7.349 | **0.691** |
+| Max triangulated depth | 28,083 cm | 945 cm |
+| Core-joint finite ratio | 80.77% | 79.78% |
+| Hard-filter-chain angle MAE vs Xsens (8-joint) | 18.96 deg | 18.70 deg |
+
+The bone-length CV fix is dramatic and brings 2025's raw geometry into the
+same 0.1-1.0 range as every 2026 dataset. The angle-MAE effect is small,
+because Stage D's existing quality/reprojection filter was already excluding
+most of the same catastrophic frames at evaluation time; the gain shows up
+mainly in Stage C (which operates on raw, unfiltered positions and therefore
+directly benefits from geometry that no longer contains 280 m "bones").
+`min_disparity_px=45.0` is adopted as part of the canonical Stage B
+definition going forward regardless of its modest angle-MAE effect, because
+it is a source-level correctness fix (not merely a downstream patch) with
+zero cost on 2026-quality data.
+
+### Stage C on the source-fixed geometry: still short of the hard-filter baseline
+
+| Variant (aitor2025, vs XsensFair) | MAE | Bone CV |
+|---|---:|---:|
+| Hard-filter baseline (Stage D only, source-fixed) | **18.70 deg** | -- |
+| Stage C, no hard filter (source-fixed raw input) | 22.68 deg | 0.775 |
+| Stage C + post-hoc depth gate (2026-09-10, pre-source-fix) | 22.87 deg | 0.764 |
+
+Fixing `min_disparity_px` at the source gives essentially the same Stage C
+result as yesterday's post-hoc depth gate (22.68 vs 22.87, a 0.19 deg
+difference) -- confirming the earlier hypothesis was wrong: the gap was never
+about *where* the depth gate was applied. Stage C's adaptive default still
+cannot match the hard-filter baseline even once every physically-impossible
+observation is removed at the source.
+
+### New experiment: hard-filter-then-Stage-C ordering (the previously untested combination)
+
+Added `--hard-filter-before-stage-c` to `eval_position_postprocess_ablation.py`:
+applies the same `apply_skt_quality_filter` + `apply_depth_consistency_filter`
+functions Stage D already uses to the raw keypoints before Stage C's
+`build_variants` ever sees them, instead of Stage C always operating on
+fully raw positions.
+
+| Variant (aitor2025, vs XsensFair) | MAE | Bone CV |
+|---|---:|---:|
+| Hard-filter baseline (Stage D only) | 18.70 deg | -- |
+| Stage C alone (no hard filter) | 22.68 deg | 0.775 |
+| **Hard filter -> Stage C (this experiment)** | **23.27 deg** | **1.279** |
+
+Result: the combination is worse than either stage alone, on both MAE and
+bone-length CV. Root cause, confirmed directly: `apply_skt_quality_filter`
+leaves gaps up to 74-93 consecutive frames (5.9-7.4 s at 12.5 fps) on the
+elbow/wrist joints, and 83.4% of all frames are missing at least one core
+joint after hard filtering. Stage C's KF/RTS smoother assumes locally
+continuous, noisy-but-present observations (a constant-velocity model
+correctable by nearby measurements); asked to bridge a 6-7 second gap in real
+arm motion, it produces a smooth but largely unconstrained interpolation
+that fits neither the true motion nor even its own bone-length prior well
+(worse CV than Stage C on raw, unfiltered input). Decision: hard exclusion
+and Stage C's soft down-weighting are not simply composable in sequence on
+data this degraded; a properly integrated design would fold quality
+information into Stage C's existing soft weighting (`flag_positions`
+already computes a `measurement_weight`) rather than pre-deleting frames
+outright. Building and validating that integrated version is future work.
+**Final position on 2025**: report the hard-filter-only baseline (18.70 deg,
+vs the historical dataset-tuned baseline's 16.74 deg) as the honest transfer
+result, and report the hard-filter-then-Stage-C ordering as a scoped
+negative result with a confirmed mechanism (gap length exceeds what the
+smoother's continuity assumption can support), not an unexplained failure.

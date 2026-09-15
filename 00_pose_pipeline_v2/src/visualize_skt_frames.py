@@ -60,6 +60,7 @@ def draw_skeleton(
     reproj: np.ndarray,            # (17,) reprojection errors
     kp3d: np.ndarray,              # (17, 3) 3D coords in cm
     title: str,
+    crop_bbox: np.ndarray | None = None,
     draw_epi_line: bool = False,   # draw horizontal epipolar mismatch lines on right elbow
 ) -> None:
     ax.imshow(img)
@@ -67,6 +68,17 @@ def draw_skeleton(
     ax.axis("off")
 
     h, w = img.shape[:2]
+
+    # Keep enough scene context to show that this is an image observation,
+    # while making the subject and diagnostic text legible in a thesis figure.
+    if crop_bbox is not None and np.asarray(crop_bbox).shape == (4,):
+        x1, y1, x2, y2 = np.asarray(crop_bbox, dtype=float)
+        if np.isfinite([x1, y1, x2, y2]).all() and x2 > x1 and y2 > y1:
+            pad_x = max(0.28 * (x2 - x1), 80.0)
+            pad_y = max(0.18 * (y2 - y1), 55.0)
+            ax.set_xlim(max(0.0, x1 - pad_x), min(float(w), x2 + pad_x))
+            # Image coordinates increase downwards, hence the reversed limits.
+            ax.set_ylim(min(float(h), y2 + pad_y), max(0.0, y1 - pad_y))
 
     # Draw skeleton connections
     for j1, j2 in SKELETON_PAIRS:
@@ -194,12 +206,15 @@ def visualize_frames(config_path: str, frame_indices: list[int]) -> None:
     epi_all = np.asarray(d["epipolar_error"])    # (N, 17)
     reproj_all = np.asarray(d["reprojection_error"])  # (N, 17)
     ts_all = np.asarray(d["timestamps"])
+    bbox_l_all = np.asarray(d["bbox_left"]) if "bbox_left" in d else None
+    bbox_r_all = np.asarray(d["bbox_right"]) if "bbox_right" in d else None
 
     n_frames = len(frame_indices)
-    fig, axes = plt.subplots(n_frames, 2, figsize=(14, 5 * n_frames))
+    fig, axes = plt.subplots(n_frames, 2, figsize=(12, 5 * n_frames))
     if n_frames == 1:
         axes = axes[np.newaxis, :]
-    fig.suptitle("SKT Frame Diagnostics — Fanbo7 A257", fontsize=12, y=0.995)
+    dataset_name = str(dataset.get("name", "recording")).replace("_", " ")
+    fig.suptitle(f"SKT frame diagnostics — {dataset_name}", fontsize=12, y=0.995)
 
     cap_l = cv2.VideoCapture(str(left_video))
     cap_r = cv2.VideoCapture(str(right_video))
@@ -222,6 +237,8 @@ def visualize_frames(config_path: str, frame_indices: list[int]) -> None:
         kp3d = kp3d_all[fr]
         epi = epi_all[fr]
         reproj = reproj_all[fr]
+        bbox_l = bbox_l_all[fr] if bbox_l_all is not None else None
+        bbox_r = bbox_r_all[fr] if bbox_r_all is not None else None
 
         # Determine label for this frame
         e8 = epi[8]
@@ -252,8 +269,10 @@ def visualize_frames(config_path: str, frame_indices: list[int]) -> None:
         # For failing frames: draw epipolar mismatch lines on LEFT image;
         # right image shows the other-camera detected position for reference.
         draw_skeleton(axes[row, 0], img_l, kp2d_l, kp2d_r, epi, reproj, kp3d, title_l,
+                      crop_bbox=bbox_l,
                       draw_epi_line=is_fail)
         draw_skeleton(axes[row, 1], img_r, kp2d_r, kp2d_l, epi, reproj, kp3d, title_r,
+                      crop_bbox=bbox_r,
                       draw_epi_line=is_fail)
 
     cap_l.release()
